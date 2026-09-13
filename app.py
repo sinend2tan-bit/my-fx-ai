@@ -31,17 +31,14 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ==========================================
-# 2. LINE通知ヘルパー関数
+# 2. 通知ヘルパー関数 (Discord / Telegram)
 # ==========================================
-def send_line_notification(token, message):
-    if not token:
+def send_discord_notification(webhook_url, message):
+    if not webhook_url:
         return False
-    url = "https://notify-api.line.me/api/notify"
-    headers = {"Authorization": f"Bearer {token}"}
-    data = {"message": message}
     try:
-        res = requests.post(url, headers=headers, data=data, timeout=5)
-        return res.status_code == 200
+        res = requests.post(webhook_url, json={"content": message}, timeout=5)
+        return res.status_code == 204
     except:
         return False
 
@@ -78,10 +75,10 @@ st.sidebar.subheader("🎯 ターゲット設定 (リスクリワード)")
 tp_atr_mult = st.sidebar.slider("利確目標 (ATR倍率)", min_value=0.5, max_value=3.0, value=1.2, step=0.1)
 sl_atr_mult = st.sidebar.slider("損切り目安 (ATR倍率)", min_value=0.3, max_value=2.0, value=0.6, step=0.1)
 
-# LINE通知設定
-st.sidebar.subheader("📱 LINE通知設定 (オプション)")
-line_token = st.sidebar.text_input("LINE Notify トークン", type="password", help="発行したLINE Notifyトークンを入力すると、売買サインをLINEに送信できます。")
-enable_line = st.sidebar.checkbox("売買サイン確定時にLINE通知", value=False)
+# Discord通知設定
+st.sidebar.subheader("📱 Discord通知設定 (オプション)")
+discord_url = st.sidebar.text_input("Discord Webhook URL", type="password", help="DiscordのチャンネルWebhook URLを入力すると、売買サインを通知できます。")
+enable_notify = st.sidebar.checkbox("売買サイン確定時に通知", value=False)
 
 # 通貨ペアと時間軸
 PAIRS = {
@@ -108,119 +105,87 @@ ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
 
 # ==========================================
-# 4. データ取得 & 指算処理（ADX等の高度指標含む）
+# 4. データ取得 & 指算処理（安定化版）
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval):
-    df = yf.download(symbol, period=period, interval=interval)
-    if df.empty:
-        return None
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    # 外部市場指標（米10年債利回り）
     try:
-        tnx = yf.download("^TNX", period=period, interval=interval)['Close']
-        if isinstance(tnx, pd.DataFrame): tnx = tnx.iloc[:, 0]
-        df['US_10Y_Yield'] = tnx
-    except:
-        df['US_10Y_Yield'] = np.nan
+        df = yf.download(symbol, period=period, interval=interval, progress=False)
+        if df.empty:
+            return None
 
-    # 1. リターンと移動平均乖離
-    df['Return'] = df['Close'].pct_change()
-    df['SMA_20'] = df['Close'].rolling(window=20).mean()
-    df['Dev_SMA20'] = (df['Close'] - df['SMA_20']) / df['SMA_20']
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
-    # 2. RSI (14)
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / (loss + 1e-10)
-    df['RSI'] = 100 - (100 / (1 + rs))
+        # 外部市場指標（米10年債利回り）
+        try:
+            tnx = yf.download("^TNX", period=period, interval=interval, progress=False)['Close']
+            if isinstance(tnx, pd.DataFrame): tnx = tnx.iloc[:, 0]
+            df['US_10Y_Yield'] = tnx
+        except:
+            df['US_10Y_Yield'] = np.nan
 
-    # 3. MACD
-    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = ema12 - ema26
-    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+        # 1. リターンと移動平均乖離
+        df['Return'] = df['Close'].pct_change()
+        df['SMA_20'] = df['Close'].rolling(window=20).mean()
+        df['Dev_SMA20'] = (df['Close'] - df['SMA_20']) / df['SMA_20']
 
-    # 4. ボリンジャーバンド (%B)
-    std20 = df['Close'].rolling(window=20).std()
-    upper_band = df['SMA_20'] + (std20 * 2)
-    lower_band = df['SMA_20'] - (std20 * 2)
-    df['BB_PctB'] = (df['Close'] - lower_band) / (upper_band - lower_band + 1e-10)
+        # 2. RSI (14)
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / (loss + 1e-10)
+        df['RSI'] = 100 - (100 / (1 + rs))
 
-    # 5. ATR
-    high_low = df['High'] - df['Low']
-    df['ATR'] = high_low.rolling(window=14).mean()
+        # 3. MACD
+        ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+        ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = ema12 - ema26
+        df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
 
-    # 6. ADX (トレンドの強さ)
-    up_move = df['High'].diff()
-    down_move = -df['Low'].diff()
-    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+        # 4. ボリンジャーバンド (%B)
+        std20 = df['Close'].rolling(window=20).std()
+        upper_band = df['SMA_20'] + (std20 * 2)
+        lower_band = df['SMA_20'] - (std20 * 2)
+        df['BB_PctB'] = (df['Close'] - lower_band) / (upper_band - lower_band + 1e-10)
 
-    tr = np.maximum(high_low, np.maximum(abs(df['High'] - df['Close'].shift(1)), abs(df['Low'] - df['Close'].shift(1))))
-    atr14 = pd.Series(tr).rolling(14).mean()
+        # 5. ATR
+        high_low = df['High'] - df['Low']
+        df['ATR'] = high_low.rolling(window=14).mean()
 
-    plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / (atr14 + 1e-10))
-    minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / (atr14 + 1e-10))
-    dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
-    df['ADX'] = dx.rolling(14).mean()
+        # 6. ADX (トレンドの強さ)
+        up_move = df['High'].diff()
+        down_move = -df['Low'].diff()
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
 
-    # 目的変数
-    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+        tr = np.maximum(high_low, np.maximum(abs(df['High'] - df['Close'].shift(1)), abs(df['Low'] - df['Close'].shift(1))))
+        atr14 = pd.Series(tr).rolling(14).mean()
 
-    df = df.ffill().dropna()
-    return df
+        plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / (atr14 + 1e-10))
+        minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / (atr14 + 1e-10))
+        dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
+        df['ADX'] = dx.rolling(14).mean()
+
+        # 目的変数
+        df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
+
+        df = df.ffill().dropna()
+        return df
+    except Exception as e:
+        return None
 
 data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'])
 
-# ==========================================
-# 5. 主要通貨強弱 (Currency Strength) ダッシュボード
-# ==========================================
-with st.expander("🌐 リアルタイム主要通貨強弱 (Currency Strength)", expanded=False):
-    st.caption("直近の価格変動率をベースに、今どの通貨が強く買われているか/売られているかを可視化しています。")
-    try:
-        major_tickers = ["USDJPY=X", "EURUSD=X", "GBPJPY=X", "AUDJPY=X", "EURJPY=X"]
-        rates = yf.download(major_tickers, period="5d", interval="1h")['Close']
-        if isinstance(rates.columns, pd.MultiIndex):
-            rates.columns = rates.columns.get_level_values(0)
-        
-        pct = rates.pct_change().iloc[-1] * 100
-        
-        # 簡易強弱スコアの算出
-        usd_score = -pct.get("USDJPY=X", 0) - pct.get("EURUSD=X", 0)
-        jpy_score = pct.get("USDJPY=X", 0) + pct.get("GBPJPY=X", 0) + pct.get("AUDJPY=X", 0)
-        eur_score = pct.get("EURUSD=X", 0) + pct.get("EURJPY=X", 0)
-        gbp_score = pct.get("GBPJPY=X", 0)
-        aud_score = pct.get("AUDJPY=X", 0)
-
-        scores = pd.Series({
-            "USD (米ドル)": usd_score,
-            "JPY (日本円)": -jpy_score,
-            "EUR (ユーロ)": eur_score,
-            "GBP (英ポンド)": gbp_score,
-            "AUD (豪ドル)": aud_score
-        }).sort_values(ascending=False)
-
-        c_cols = st.columns(5)
-        for idx, (curr, val) in enumerate(scores.items()):
-            color_str = "🟢 最強" if idx == 0 else ("🔴 最弱" if idx == 4 else "")
-            c_cols[idx].metric(curr, f"{val:+.2f}", color_str)
-    except Exception as e:
-        st.write("通貨強弱データの読み込み中...")
-
-# 注意喚起アラート（市場注意フラグ）
+# 注意喚起アラート
 st.info("💡 **トレード前のチェック**: 雇用統計やFOMCなど主要経済指標の発表前後はテクニカル分析が不向きになります。重要指標発表直前のエントリーは控えましょう。")
 
 # ==========================================
-# 6. AI学習 & 予測エンジン
+# 5. AI学習 & 予測エンジン
 # ==========================================
 if data is None or len(data) < 60:
-    st.error("データの取得に失敗したか、指定時間軸のデータ数が不足しています。しばらく待ってから再試行してください。")
+    st.error("データの取得に失敗したか、指定時間軸のデータ数が不足しています。しばらく待ってから『今すぐ最新データに更新』ボタンを押してください。")
 else:
     features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
     if 'US_10Y_Yield' in data.columns and not data['US_10Y_Yield'].isna().all():
@@ -271,7 +236,7 @@ else:
     m_col5.metric("データ日時", latest_time)
 
     # ==========================================
-    # 7. AI判定結果 & 松井証券向け注文パラメータ UI
+    # 6. AI判定結果 & 松井証券向け注文パラメータ UI
     # ==========================================
     st.subheader("🤖 AI判定結果 & エントリーパラメータ (松井証券連携用)")
 
@@ -301,10 +266,10 @@ else:
 
         st.caption("※グレーの枠内の数値をタップすると簡単にコピーできます。松井証券のOCO注文時などにご活用ください。")
 
-        # LINE通知実行
-        if enable_line and line_token:
-            msg = f"\n[AI FXアナライザー]\n【🟢 買いサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
-            send_line_notification(line_token, msg)
+        # 通知実行
+        if enable_notify and discord_url:
+            msg = f"【🟢 買いサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
+            send_discord_notification(discord_url, msg)
 
     elif pred == 0 and confidence >= 60 and latest_adx >= 18:
         entry_price = latest_price
@@ -329,10 +294,10 @@ else:
 
         st.caption("※グレーの枠内の数値をタップすると簡単にコピーできます。松井証券のOCO注文時などにご活用ください。")
 
-        # LINE通知実行
-        if enable_line and line_token:
-            msg = f"\n[AI FXアナライザー]\n【🔴 売りサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
-            send_line_notification(line_token, msg)
+        # 通知実行
+        if enable_notify and discord_url:
+            msg = f"【🔴 売りサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
+            send_discord_notification(discord_url, msg)
 
     else:
         st.warning(f"🟡 **様子見 (HOLD)** （AI信頼度: {confidence:.1f}%）")
