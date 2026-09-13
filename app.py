@@ -3,11 +3,30 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
+import time
 
 st.set_page_config(page_title="プロ版 AI FXデイトレアナライザー", layout="wide")
 
 st.title("⚡ AI FXデイトレアナライザー (マルチタイムフレーム & 勝率検証)")
 st.write("15分足/1時間足/日足の切り替え、テクニカル＋外部市場のAI学習、過去勝率の検証機能を搭載したデイトレモデルです。")
+
+# --- サイドバー：更新コントロール ---
+st.sidebar.header("⚙️ システム設定 & 更新")
+
+# 手動更新ボタン
+if st.sidebar.button("🔄 今すぐ最新データに更新"):
+    st.cache_data.clear()
+    st.rerun()
+
+# 自動更新の設定
+st.sidebar.subheader("⏱️ 自動更新 (オートリロード)")
+auto_refresh = st.sidebar.checkbox("自動更新を有効にする", value=False)
+refresh_interval = st.sidebar.selectbox(
+    "更新間隔を選択",
+    options=[60, 180, 300],
+    format_func=lambda x: f"{x // 60}分ごと",
+    index=1
+)
 
 # 選択オプション
 PAIRS = {
@@ -33,7 +52,7 @@ with col_s2:
 ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval):
     df = yf.download(symbol, period=period, interval=interval)
     if df.empty:
@@ -176,3 +195,9 @@ else:
     st.divider()
     with st.expander("📊 テクニカル指標・学習データの詳細"):
         st.dataframe(data[features + ['ATR']].tail(10))
+
+# --- 自動更新ループ処理 ---
+if auto_refresh:
+    time.sleep(refresh_interval)
+    st.cache_data.clear()
+    st.rerun()
