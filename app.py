@@ -11,7 +11,7 @@ st.set_page_config(page_title="プロ版 AI FXデイトレアナライザー Ult
 # ==========================================
 # 1. 簡易パスワード認証機能
 # ==========================================
-PASSWORD = "fx2026"  # 👈 お好みのパスワードに変更してください
+PASSWORD = "aMV3#nRDfhZUa5"  # 👈 お好みのパスワードに変更してください
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
