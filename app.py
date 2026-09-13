@@ -11,7 +11,7 @@ st.set_page_config(page_title="プロ版 AI FXデイトレアナライザー Ult
 # ==========================================
 # 1. 簡易パスワード認証機能
 # ==========================================
-PASSWORD = "aMV3#nRDfhZUa5"  # 👈 お好みのパスワードに変更してください
+PASSWORD = "fx2026"  # 👈 お好みのパスワードに変更してください
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -31,7 +31,7 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ==========================================
-# 2. 通知ヘルパー関数 (Discord / Telegram)
+# 2. 通知ヘルパー関数 (Discord)
 # ==========================================
 def send_discord_notification(webhook_url, message):
     if not webhook_url:
@@ -50,7 +50,7 @@ st.title("⚡ Pro AI FX デイトレアナライザー (Ultimate Edition)")
 # サイドバー設定
 st.sidebar.header("⚙️ システム設定 & カスタマイズ")
 
-# ログアウト
+# ログアウトボタン
 if st.sidebar.button("🔒 ログアウト"):
     st.session_state.authenticated = False
     st.rerun()
@@ -105,7 +105,7 @@ ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
 
 # ==========================================
-# 4. データ取得 & 指算処理（安定化版）
+# 4. データ取得 & 指算処理
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval):
