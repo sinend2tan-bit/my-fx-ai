@@ -3,23 +3,68 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
+import requests
 import time
 
-st.set_page_config(page_title="プロ版 AI FXデイトレアナライザー", layout="wide")
+st.set_page_config(page_title="プロ版 AI FXデイトレアナライザー Ultimate", layout="wide")
 
-st.title("⚡ AI FXデイトレアナライザー (マルチタイムフレーム & 勝率検証)")
-st.write("15分足/1時間足/日足の切り替え、テクニカル＋外部市場のAI学習、過去勝率の検証機能を搭載したデイトレモデルです。")
+# ==========================================
+# 1. 簡易パスワード認証機能
+# ==========================================
+PASSWORD = "fx2026"  # 👈 お好みのパスワードに変更してください
 
-# --- サイドバー：更新コントロール ---
-st.sidebar.header("⚙️ システム設定 & 更新")
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 
-# 手動更新ボタン
+def check_password():
+    if st.session_state.get("password_input") == PASSWORD:
+        st.session_state.authenticated = True
+        del st.session_state["password_input"]
+    else:
+        st.error("🔒 パスワードが正しくありません。")
+
+if not st.session_state.authenticated:
+    st.title("🔒 ログイン")
+    st.write("このアプリを利用するにはパスワードを入力してください。")
+    st.text_input("パスワードを入力", type="password", key="password_input", on_change=check_password)
+    st.button("ログイン", on_click=check_password)
+    st.stop()
+
+# ==========================================
+# 2. LINE通知ヘルパー関数
+# ==========================================
+def send_line_notification(token, message):
+    if not token:
+        return False
+    url = "https://notify-api.line.me/api/notify"
+    headers = {"Authorization": f"Bearer {token}"}
+    data = {"message": message}
+    try:
+        res = requests.post(url, headers=headers, data=data, timeout=5)
+        return res.status_code == 200
+    except:
+        return False
+
+# ==========================================
+# 3. メイン画面 & サイドバー設定
+# ==========================================
+st.title("⚡ Pro AI FX デイトレアナライザー (Ultimate Edition)")
+
+# サイドバー設定
+st.sidebar.header("⚙️ システム設定 & カスタマイズ")
+
+# ログアウト
+if st.sidebar.button("🔒 ログアウト"):
+    st.session_state.authenticated = False
+    st.rerun()
+
+# 手動更新
 if st.sidebar.button("🔄 今すぐ最新データに更新"):
     st.cache_data.clear()
     st.rerun()
 
-# 自動更新の設定
-st.sidebar.subheader("⏱️ 自動更新 (オートリロード)")
+# 自動更新
+st.sidebar.subheader("⏱️ 自動更新")
 auto_refresh = st.sidebar.checkbox("自動更新を有効にする", value=False)
 refresh_interval = st.sidebar.selectbox(
     "更新間隔を選択",
@@ -28,7 +73,17 @@ refresh_interval = st.sidebar.selectbox(
     index=1
 )
 
-# 選択オプション
+# 利確・損切り（ATR倍率）カスタマイズ
+st.sidebar.subheader("🎯 ターゲット設定 (リスクリワード)")
+tp_atr_mult = st.sidebar.slider("利確目標 (ATR倍率)", min_value=0.5, max_value=3.0, value=1.2, step=0.1)
+sl_atr_mult = st.sidebar.slider("損切り目安 (ATR倍率)", min_value=0.3, max_value=2.0, value=0.6, step=0.1)
+
+# LINE通知設定
+st.sidebar.subheader("📱 LINE通知設定 (オプション)")
+line_token = st.sidebar.text_input("LINE Notify トークン", type="password", help="発行したLINE Notifyトークンを入力すると、売買サインをLINEに送信できます。")
+enable_line = st.sidebar.checkbox("売買サイン確定時にLINE通知", value=False)
+
+# 通貨ペアと時間軸
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
     "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
@@ -52,6 +107,9 @@ with col_s2:
 ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
 
+# ==========================================
+# 4. データ取得 & 指算処理（ADX等の高度指標含む）
+# ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval):
     df = yf.download(symbol, period=period, interval=interval)
@@ -61,7 +119,7 @@ def load_and_process_data(symbol, period, interval):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # 外部市場指標（米10年債利回り）の取得・結合
+    # 外部市場指標（米10年債利回り）
     try:
         tnx = yf.download("^TNX", period=period, interval=interval)['Close']
         if isinstance(tnx, pd.DataFrame): tnx = tnx.iloc[:, 0]
@@ -69,7 +127,7 @@ def load_and_process_data(symbol, period, interval):
     except:
         df['US_10Y_Yield'] = np.nan
 
-    # 1. 基礎指標
+    # 1. リターンと移動平均乖離
     df['Return'] = df['Close'].pct_change()
     df['SMA_20'] = df['Close'].rolling(window=20).mean()
     df['Dev_SMA20'] = (df['Close'] - df['SMA_20']) / df['SMA_20']
@@ -94,11 +152,25 @@ def load_and_process_data(symbol, period, interval):
     lower_band = df['SMA_20'] - (std20 * 2)
     df['BB_PctB'] = (df['Close'] - lower_band) / (upper_band - lower_band + 1e-10)
 
-    # 5. ATR (値幅)
+    # 5. ATR
     high_low = df['High'] - df['Low']
     df['ATR'] = high_low.rolling(window=14).mean()
 
-    # 目的変数: 翌足の価格上昇（1）/ 下落（0）
+    # 6. ADX (トレンドの強さ)
+    up_move = df['High'].diff()
+    down_move = -df['Low'].diff()
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+
+    tr = np.maximum(high_low, np.maximum(abs(df['High'] - df['Close'].shift(1)), abs(df['Low'] - df['Close'].shift(1))))
+    atr14 = pd.Series(tr).rolling(14).mean()
+
+    plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / (atr14 + 1e-10))
+    minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / (atr14 + 1e-10))
+    dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
+    df['ADX'] = dx.rolling(14).mean()
+
+    # 目的変数
     df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
 
     df = df.ffill().dropna()
@@ -106,10 +178,51 @@ def load_and_process_data(symbol, period, interval):
 
 data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'])
 
+# ==========================================
+# 5. 主要通貨強弱 (Currency Strength) ダッシュボード
+# ==========================================
+with st.expander("🌐 リアルタイム主要通貨強弱 (Currency Strength)", expanded=False):
+    st.caption("直近の価格変動率をベースに、今どの通貨が強く買われているか/売られているかを可視化しています。")
+    try:
+        major_tickers = ["USDJPY=X", "EURUSD=X", "GBPJPY=X", "AUDJPY=X", "EURJPY=X"]
+        rates = yf.download(major_tickers, period="5d", interval="1h")['Close']
+        if isinstance(rates.columns, pd.MultiIndex):
+            rates.columns = rates.columns.get_level_values(0)
+        
+        pct = rates.pct_change().iloc[-1] * 100
+        
+        # 簡易強弱スコアの算出
+        usd_score = -pct.get("USDJPY=X", 0) - pct.get("EURUSD=X", 0)
+        jpy_score = pct.get("USDJPY=X", 0) + pct.get("GBPJPY=X", 0) + pct.get("AUDJPY=X", 0)
+        eur_score = pct.get("EURUSD=X", 0) + pct.get("EURJPY=X", 0)
+        gbp_score = pct.get("GBPJPY=X", 0)
+        aud_score = pct.get("AUDJPY=X", 0)
+
+        scores = pd.Series({
+            "USD (米ドル)": usd_score,
+            "JPY (日本円)": -jpy_score,
+            "EUR (ユーロ)": eur_score,
+            "GBP (英ポンド)": gbp_score,
+            "AUD (豪ドル)": aud_score
+        }).sort_values(ascending=False)
+
+        c_cols = st.columns(5)
+        for idx, (curr, val) in enumerate(scores.items()):
+            color_str = "🟢 最強" if idx == 0 else ("🔴 最弱" if idx == 4 else "")
+            c_cols[idx].metric(curr, f"{val:+.2f}", color_str)
+    except Exception as e:
+        st.write("通貨強弱データの読み込み中...")
+
+# 注意喚起アラート（市場注意フラグ）
+st.info("💡 **トレード前のチェック**: 雇用統計やFOMCなど主要経済指標の発表前後はテクニカル分析が不向きになります。重要指標発表直前のエントリーは控えましょう。")
+
+# ==========================================
+# 6. AI学習 & 予測エンジン
+# ==========================================
 if data is None or len(data) < 60:
     st.error("データの取得に失敗したか、指定時間軸のデータ数が不足しています。しばらく待ってから再試行してください。")
 else:
-    features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB']
+    features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
     if 'US_10Y_Yield' in data.columns and not data['US_10Y_Yield'].isna().all():
         data['TNX_Return'] = data['US_10Y_Yield'].pct_change()
         features.append('TNX_Return')
@@ -118,14 +231,13 @@ else:
     X = data[features]
     y = data['Target']
 
-    # 最新足を除く過去データで学習
     X_train, y_train = X.iloc[:-1], y.iloc[:-1]
     X_latest = X.iloc[[-1]]
 
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
 
-    # --- 過去勝率のバックテスト検証（直近50足分） ---
+    # バックテスト検証
     test_len = min(50, len(X_train) - 50)
     if test_len > 10:
         X_test_hist = X_train.iloc[-test_len:]
@@ -138,7 +250,7 @@ else:
         correct_count = 0
         test_len = 0
 
-    # 最新足の予測
+    # 最新足予測
     pred = model.predict(X_latest)[0]
     prob = model.predict_proba(X_latest)[0]
     confidence = max(prob) * 100
@@ -146,51 +258,88 @@ else:
     latest_price = data['Close'].iloc[-1]
     latest_rsi = data['RSI'].iloc[-1]
     latest_atr = data['ATR'].iloc[-1]
+    latest_adx = data['ADX'].iloc[-1]
     latest_time = data.index[-1].strftime('%Y-%m-%d %H:%M')
 
-    # 表示セクション
+    # メトリクス表示
     st.divider()
-    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+    m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
     m_col1.metric("現在レート", f"{latest_price:.3f}")
     m_col2.metric("RSI (14)", f"{latest_rsi:.1f}")
-    m_col3.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回的中")
-    m_col4.metric("データ日時", latest_time)
+    m_col3.metric("ADX (トレンド強度)", f"{latest_adx:.1f}", "強トレンド" if latest_adx > 25 else "レンジ傾向")
+    m_col4.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回的中")
+    m_col5.metric("データ日時", latest_time)
 
-    st.subheader("🤖 AI判定結果 & デイトレターゲット")
+    # ==========================================
+    # 7. AI判定結果 & 松井証券向け注文パラメータ UI
+    # ==========================================
+    st.subheader("🤖 AI判定結果 & エントリーパラメータ (松井証券連携用)")
 
     fmt = ".5f" if "USD" in selected_label and not "USD/JPY" in selected_label else ".3f"
+    pip_unit = 0.0001 if "USD" in selected_label and not "USD/JPY" in selected_label else 0.01
 
-    if pred == 1 and confidence >= 60:
+    if pred == 1 and confidence >= 60 and latest_adx >= 18:
         entry_price = latest_price
-        tp_price = entry_price + (latest_atr * 1.0)
-        sl_price = entry_price - (latest_atr * 0.5)
+        tp_price = entry_price + (latest_atr * tp_atr_mult)
+        sl_price = entry_price - (latest_atr * sl_atr_mult)
 
-        st.success(f"🟢 **買い (BUY)** （AI信頼度: {confidence:.1f}%）")
-        
-        t_col1, t_col2, t_col3 = st.columns(3)
-        t_col1.metric("新規買い目安 (Entry)", f"{entry_price:{fmt}}")
-        t_col2.metric("利確目標 (Take Profit)", f"{tp_price:{fmt}}", f"+{latest_atr*1.0:{fmt}}")
-        t_col3.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"-{latest_atr*0.5:{fmt}}")
-        
-        st.write(f"💡 **デイトレアドバイス**: 選択された【{tf_label}】で上昇サイン点灯。押し目買いの指値・逆指値を設定してエントリーを検討できます。")
+        tp_pips = (tp_price - entry_price) / pip_unit
+        sl_pips = (entry_price - sl_price) / pip_unit
 
-    elif pred == 0 and confidence >= 60:
-        entry_price = latest_price
-        tp_price = entry_price - (latest_atr * 1.0)
-        sl_price = entry_price + (latest_atr * 0.5)
-
-        st.error(f"🔴 **売り (SELL)** （AI信頼度: {confidence:.1f}%）")
+        st.success(f"🟢 **買い (BUY)** （AI信頼度: {confidence:.1f}% / トレンド確認済）")
 
         t_col1, t_col2, t_col3 = st.columns(3)
-        t_col1.metric("新規売り目安 (Entry)", f"{entry_price:{fmt}}")
-        t_col2.metric("利確目標 (Take Profit)", f"{tp_price:{fmt}}", f"-{latest_atr*1.0:{fmt}}")
-        t_col3.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"+{latest_atr*0.5:{fmt}}")
+        with t_col1:
+            st.metric("新規買い目安 (Entry)", f"{entry_price:{fmt}}")
+            st.code(f"{entry_price:{fmt}}", language="text")
+        with t_col2:
+            st.metric("利確目標 (Take Profit)", f"{tp_price:{fmt}}", f"+{tp_pips:.1f} pips")
+            st.code(f"{tp_price:{fmt}}", language="text")
+        with t_col3:
+            st.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"-{sl_pips:.1f} pips")
+            st.code(f"{sl_price:{fmt}}", language="text")
 
-        st.write(f"💡 **デイトレアドバイス**: 選択された【{tf_label}】で下落サイン点灯。戻り売りの指値・逆指値を設定してエントリーを検討できます。")
+        st.caption("※グレーの枠内の数値をタップすると簡単にコピーできます。松井証券のOCO注文時などにご活用ください。")
+
+        # LINE通知実行
+        if enable_line and line_token:
+            msg = f"\n[AI FXアナライザー]\n【🟢 買いサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
+            send_line_notification(line_token, msg)
+
+    elif pred == 0 and confidence >= 60 and latest_adx >= 18:
+        entry_price = latest_price
+        tp_price = entry_price - (latest_atr * tp_atr_mult)
+        sl_price = entry_price + (latest_atr * sl_atr_mult)
+
+        tp_pips = (entry_price - tp_price) / pip_unit
+        sl_pips = (sl_price - entry_price) / pip_unit
+
+        st.error(f"🔴 **売り (SELL)** （AI信頼度: {confidence:.1f}% / トレンド確認済）")
+
+        t_col1, t_col2, t_col3 = st.columns(3)
+        with t_col1:
+            st.metric("新規売り目安 (Entry)", f"{entry_price:{fmt}}")
+            st.code(f"{entry_price:{fmt}}", language="text")
+        with t_col2:
+            st.metric("利確目標 (Take Profit)", f"{tp_price:{fmt}}", f"-{tp_pips:.1f} pips")
+            st.code(f"{tp_price:{fmt}}", language="text")
+        with t_col3:
+            st.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"+{sl_pips:.1f} pips")
+            st.code(f"{sl_price:{fmt}}", language="text")
+
+        st.caption("※グレーの枠内の数値をタップすると簡単にコピーできます。松井証券のOCO注文時などにご活用ください。")
+
+        # LINE通知実行
+        if enable_line and line_token:
+            msg = f"\n[AI FXアナライザー]\n【🔴 売りサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
+            send_line_notification(line_token, msg)
 
     else:
         st.warning(f"🟡 **様子見 (HOLD)** （AI信頼度: {confidence:.1f}%）")
-        st.write("AI判定: 方向性が不明確、または確率が不十分です。ポジションの保有は見送り（静観）を推奨します。")
+        if latest_adx < 18:
+            st.write("判定理由: ADXが低くレンジ相場（もみ合い）の傾向が強いため、騙しを避けるため静観を推奨します。")
+        else:
+            st.write("判定理由: 方向性が不鮮明、または信頼度が基準値（60%）に達していません。")
 
     st.divider()
     with st.expander("📊 テクニカル指標・学習データの詳細"):
