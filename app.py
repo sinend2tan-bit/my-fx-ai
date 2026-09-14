@@ -9,29 +9,7 @@ import time
 st.set_page_config(page_title="プロ版 AI FXデイトレアナライザー Ultimate", layout="wide")
 
 # ==========================================
-# 1. 簡易パスワード認証機能
-# ==========================================
-PASSWORD = "fx2026"  # 👈 お好みのパスワードに変更してください
-
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-def check_password():
-    if st.session_state.get("password_input") == PASSWORD:
-        st.session_state.authenticated = True
-        del st.session_state["password_input"]
-    else:
-        st.error("🔒 パスワードが正しくありません。")
-
-if not st.session_state.authenticated:
-    st.title("🔒 ログイン")
-    st.write("このアプリを利用するにはパスワードを入力してください。")
-    st.text_input("パスワードを入力", type="password", key="password_input", on_change=check_password)
-    st.button("ログイン", on_click=check_password)
-    st.stop()
-
-# ==========================================
-# 2. 通知ヘルパー関数 (Discord)
+# 1. 通知ヘルパー関数 (Discord)
 # ==========================================
 def send_discord_notification(webhook_url, message):
     if not webhook_url:
@@ -43,17 +21,12 @@ def send_discord_notification(webhook_url, message):
         return False
 
 # ==========================================
-# 3. メイン画面 & サイドバー設定
+# 2. メイン画面 & サイドバー設定
 # ==========================================
 st.title("⚡ Pro AI FX デイトレアナライザー (Ultimate Edition)")
 
 # サイドバー設定
 st.sidebar.header("⚙️ システム設定 & カスタマイズ")
-
-# ログアウトボタン
-if st.sidebar.button("🔒 ログアウト"):
-    st.session_state.authenticated = False
-    st.rerun()
 
 # 手動更新
 if st.sidebar.button("🔄 今すぐ最新データに更新"):
@@ -75,7 +48,7 @@ st.sidebar.subheader("🎯 ターゲット設定 (リスクリワード)")
 tp_atr_mult = st.sidebar.slider("利確目標 (ATR倍率)", min_value=0.5, max_value=3.0, value=1.2, step=0.1)
 sl_atr_mult = st.sidebar.slider("損切り目安 (ATR倍率)", min_value=0.3, max_value=2.0, value=0.6, step=0.1)
 
-# ★【追加】松井証券リピート注文用パラメータ設定
+# 松井証券リピート注文用パラメータ設定
 st.sidebar.subheader("📋 松井証券リピート注文設定")
 custom_order_width = st.sidebar.number_input("注文値幅 (pips)", min_value=5, max_value=200, value=30, step=5)
 custom_profit_width = st.sidebar.number_input("益出し幅 (pips)", min_value=5, max_value=200, value=30, step=5)
@@ -111,7 +84,7 @@ ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
 
 # ==========================================
-# 4. データ取得 & 指標処理（堅牢化・リトライ機能付き）
+# 3. データ取得 & 指標処理（堅牢化・リトライ機能付き）
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval):
@@ -197,7 +170,7 @@ if is_fallback:
 st.info("💡 **トレード前のチェック**: 雇用統計やFOMCなど主要経済指標の発表前後はテクニカル分析が不向きになります。重要指標発表直前のエントリーは控えましょう。")
 
 # ==========================================
-# 5. AI学習 & 予測エンジン
+# 4. AI学習 & 予測エンジン
 # ==========================================
 if data is None or len(data) < 30:
     st.error("データの取得に失敗したか、データ数が不足しています。しばらく待ってから『今すぐ最新データに更新』ボタンを押してください。")
@@ -248,7 +221,7 @@ else:
     m_col5.metric("データ日時", latest_time)
 
     # ==========================================
-    # 6. AI判定結果 & 松井証券向け注文パラメータ UI
+    # 5. AI判定結果 & 松井証券向け注文パラメータ UI
     # ==========================================
     st.subheader("🤖 AI判定結果 & エントリーパラメータ (松井証券連携用)")
 
@@ -277,7 +250,6 @@ else:
             st.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"-{sl_pips:.1f} pips")
             st.code(f"{sl_price:{fmt}}", language="text")
 
-        # 松井証券リピート自動売買用パラメータのまとめ（サイドバーの数値を連動）
         st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
         st.code(
             f"通貨ペア　　: {selected_label}\n"
@@ -318,7 +290,6 @@ else:
             st.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"+{sl_pips:.1f} pips")
             st.code(f"{sl_price:{fmt}}", language="text")
 
-        # 松井証券リピート自動売買用パラメータのまとめ（サイドバーの数値を連動）
         st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
         st.code(
             f"通貨ペア　　: {selected_label}\n"
