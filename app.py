@@ -25,16 +25,12 @@ def send_discord_notification(webhook_url, message):
 # ==========================================
 st.title("⚡ Pro AI FX デイトレアナライザー (Ultimate Edition)")
 
-# サイドバー設定
 st.sidebar.header("⚙️ システム設定 & カスタマイズ")
 
-# 手動更新
 if st.sidebar.button("🔄 今すぐ最新データに更新"):
     st.cache_data.clear()
     st.rerun()
 
-# 自動更新
-st.sidebar.subheader("⏱️ 自動更新")
 auto_refresh = st.sidebar.checkbox("自動更新を有効にする", value=False)
 refresh_interval = st.sidebar.selectbox(
     "更新間隔を選択",
@@ -43,23 +39,19 @@ refresh_interval = st.sidebar.selectbox(
     index=1
 )
 
-# 利確・損切り（ATR倍率）カスタマイズ
 st.sidebar.subheader("🎯 ターゲット設定 (リスクリワード)")
 tp_atr_mult = st.sidebar.slider("利確目標 (ATR倍率)", min_value=0.5, max_value=3.0, value=1.2, step=0.1)
 sl_atr_mult = st.sidebar.slider("損切り目安 (ATR倍率)", min_value=0.3, max_value=2.0, value=0.6, step=0.1)
 
-# 松井証券リピート注文用パラメータ設定
 st.sidebar.subheader("📋 松井証券リピート注文設定")
 custom_order_width = st.sidebar.number_input("注文値幅 (pips)", min_value=5, max_value=200, value=30, step=5)
 custom_profit_width = st.sidebar.number_input("益出し幅 (pips)", min_value=5, max_value=200, value=30, step=5)
 custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100)
 
-# Discord通知設定
 st.sidebar.subheader("📱 Discord通知設定 (オプション)")
-discord_url = st.sidebar.text_input("Discord Webhook URL", type="password", help="DiscordのチャンネルWebhook URLを入力すると、売買サインを通知できます。")
+discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
 enable_notify = st.sidebar.checkbox("売買サイン確定時に通知", value=False)
 
-# 通貨ペアと時間軸
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
     "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
@@ -69,9 +61,9 @@ PAIRS = {
 }
 
 TIMEFRAMES = {
-    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m", "fallback_tf": "1h"},
-    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h", "fallback_tf": "1d"},
-    "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d", "fallback_tf": "1d"},
+    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
+    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
+    "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
 
 col_s1, col_s2 = st.columns(2)
@@ -84,104 +76,109 @@ ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
 
 # ==========================================
-# 3. データ取得 & 指標処理（堅牢化・リトライ機能付き）
+# 3. データ取得 & 指標処理（堅牢化バージョン）
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval):
     df = pd.DataFrame()
+    
+    # 複数回リトライしてデータを取得
     for attempt in range(3):
         try:
             df = yf.download(symbol, period=period, interval=interval, progress=False)
-            if not df.empty and len(df) >= 30:
+            if not df.empty and len(df) >= 20:
                 break
         except Exception:
             time.sleep(1)
 
-    used_fallback = False
-    if df.empty or len(df) < 30:
-        used_fallback = True
+    # 取得失敗時は日足へフォールバック
+    if df.empty or len(df) < 20:
         try:
-            df = yf.download(symbol, period="2y", interval="1d", progress=False)
+            df = yf.download(symbol, period="1y", interval="1d", progress=False)
         except Exception:
-            return None, False
+            return None
 
-    if df.empty or len(df) < 30:
-        return None, False
+    if df.empty or len(df) < 20:
+        return None
 
     try:
+        # マルチインデックスの解除（yfinanceの仕様変更対策）
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        try:
-            tnx = yf.download("^TNX", period=period, interval=interval, progress=False)['Close']
-            if isinstance(tnx, pd.DataFrame): tnx = tnx.iloc[:, 0]
-            df['US_10Y_Yield'] = tnx
-        except:
-            df['US_10Y_Yield'] = np.nan
+        # 必要なカラムの存在確認
+        required_cols = ['Open', 'High', 'Low', 'Close']
+        if not all(col in df.columns for col in required_cols):
+            return None
 
+        # 1. リターンと移動平均乖離
         df['Return'] = df['Close'].pct_change()
         df['SMA_20'] = df['Close'].rolling(window=20).mean()
-        df['Dev_SMA20'] = (df['Close'] - df['SMA_20']) / df['SMA_20']
+        df['Dev_SMA20'] = (df['Close'] - df['SMA_20']) / (df['SMA_20'] + 1e-10)
 
+        # 2. RSI (14)
         delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain = delta.where(delta > 0, 0.0).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0.0)).rolling(window=14).mean()
         rs = gain / (loss + 1e-10)
-        df['RSI'] = 100 - (100 / (1 + rs))
+        df['RSI'] = 100.0 - (100.0 / (1.0 + rs))
 
+        # 3. MACD
         ema12 = df['Close'].ewm(span=12, adjust=False).mean()
         ema26 = df['Close'].ewm(span=26, adjust=False).mean()
         df['MACD'] = ema12 - ema26
         df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
         df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
 
+        # 4. ボリンジャーバンド (%B)
         std20 = df['Close'].rolling(window=20).std()
         upper_band = df['SMA_20'] + (std20 * 2)
         lower_band = df['SMA_20'] - (std20 * 2)
-        df['BB_PctB'] = (df['Close'] - lower_band) / (upper_band - lower_band + 1e-10)
+        df['BB_PctB'] = (df['Close'] - lower_band) / ((upper_band - lower_band) + 1e-10)
 
+        # 5. ATR
         high_low = df['High'] - df['Low']
         df['ATR'] = high_low.rolling(window=14).mean()
 
+        # 6. ADX (トレンドの強さ)
         up_move = df['High'].diff()
         down_move = -df['Low'].diff()
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
 
-        tr = np.maximum(high_low, np.maximum(abs(df['High'] - df['Close'].shift(1)), abs(df['Low'] - df['Close'].shift(1))))
+        tr = np.maximum(high_low, np.maximum((df['High'] - df['Close'].shift(1)).abs(), (df['Low'] - df['Close'].shift(1)).abs()))
         atr14 = pd.Series(tr).rolling(14).mean()
 
         plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / (atr14 + 1e-10))
         minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / (atr14 + 1e-10))
-        dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
+        dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di + 1e-10))
         df['ADX'] = dx.rolling(14).mean()
 
+        # 目的変数
         df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
-        df = df.ffill().dropna()
-        return df, used_fallback
+
+        # 欠損値の穴埋め（データが全消えするのを防ぐため ffill を優先）
+        df = df.ffill().bfill().dropna()
+        return df if not df.empty else None
     except Exception as e:
-        return None, False
+        return None
 
-data, is_fallback = load_and_process_data(ticker, tf_config['period'], tf_config['interval'])
-
-if is_fallback:
-    st.warning("⚠️ 選択された短時間足データの通信が一時的に混雑していたため、安全のため「日足」データで安定動作させています。")
+data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'])
 
 st.info("💡 **トレード前のチェック**: 雇用統計やFOMCなど主要経済指標の発表前後はテクニカル分析が不向きになります。重要指標発表直前のエントリーは控えましょう。")
 
 # ==========================================
 # 4. AI学習 & 予測エンジン
 # ==========================================
-if data is None or len(data) < 30:
-    st.error("データの取得に失敗したか、データ数が不足しています。しばらく待ってから『今すぐ最新データに更新』ボタンを押してください。")
+if data is None or len(data) < 20:
+    st.error("データの取得に失敗したか、データ数が不足しています。しばらく待ってからサイドバーの『今すぐ最新データに更新』ボタンを押してください。")
 else:
     features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
-    if 'US_10Y_Yield' in data.columns and not data['US_10Y_Yield'].isna().all():
-        data['TNX_Return'] = data['US_10Y_Yield'].pct_change()
-        features.append('TNX_Return')
+    
+    # 確実に存在する特徴量だけに絞る
+    available_features = [f for f in features if f in data.columns]
 
-    data = data.dropna()
-    X = data[features]
+    X = data[available_features]
     y = data['Target']
 
     X_train, y_train = X.iloc[:-1], y.iloc[:-1]
@@ -190,8 +187,8 @@ else:
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
 
-    test_len = min(50, len(X_train) - 50)
-    if test_len > 10:
+    test_len = min(30, len(X_train) - 10)
+    if test_len > 5:
         X_test_hist = X_train.iloc[-test_len:]
         y_test_hist = y_train.iloc[-test_len:]
         preds_hist = model.predict(X_test_hist)
@@ -209,7 +206,7 @@ else:
     latest_price = data['Close'].iloc[-1]
     latest_rsi = data['RSI'].iloc[-1]
     latest_atr = data['ATR'].iloc[-1]
-    latest_adx = data['ADX'].iloc[-1]
+    latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
     latest_time = data.index[-1].strftime('%Y-%m-%d %H:%M')
 
     st.divider()
@@ -228,7 +225,7 @@ else:
     fmt = ".5f" if "USD" in selected_label and not "USD/JPY" in selected_label else ".3f"
     pip_unit = 0.0001 if "USD" in selected_label and not "USD/JPY" in selected_label else 0.01
 
-    if pred == 1 and confidence >= 50 and latest_adx >= 10:
+    if pred == 1 and confidence >= 50:
         entry_price = latest_price
         tp_price = entry_price + (latest_atr * tp_atr_mult)
         sl_price = entry_price - (latest_atr * sl_atr_mult)
@@ -268,7 +265,7 @@ else:
             msg = f"【🟢 買いサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
             send_discord_notification(discord_url, msg)
 
-    elif pred == 0 and confidence >= 50 and latest_adx >= 10:
+    elif pred == 0 and confidence >= 50:
         entry_price = latest_price
         tp_price = entry_price - (latest_atr * tp_atr_mult)
         sl_price = entry_price + (latest_atr * sl_atr_mult)
@@ -310,14 +307,11 @@ else:
 
     else:
         st.warning(f"🟡 **様子見 (HOLD)** （AI信頼度: {confidence:.1f}%）")
-        if latest_adx < 10:
-            st.write("判定理由: ADXが極めて低く完全な保ち合い相場のため静観を推奨します。")
-        else:
-            st.write("判定理由: 方向性が不鮮明、または信頼度が基準値に達していません。")
+        st.write("判定理由: 方向性が不鮮明、または信頼度が基準値に達していません。")
 
     st.divider()
     with st.expander("📊 テクニカル指標・学習データの詳細"):
-        st.dataframe(data[features + ['ATR']].tail(10))
+        st.dataframe(data[available_features + ['ATR']].tail(10))
 
 if auto_refresh:
     time.sleep(refresh_interval)
