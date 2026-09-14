@@ -90,9 +90,9 @@ PAIRS = {
 }
 
 TIMEFRAMES = {
-    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
-    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
-    "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
+    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m", "fallback_tf": "1h"},
+    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h", "fallback_tf": "1d"},
+    "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d", "fallback_tf": "1d"},
 }
 
 col_s1, col_s2 = st.columns(2)
@@ -105,15 +105,35 @@ ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
 
 # ==========================================
-# 4. データ取得 & 指算処理
+# 4. データ取得 & 指標処理（堅牢化・リトライ機能付き）
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval):
-    try:
-        df = yf.download(symbol, period=period, interval=interval, progress=False)
-        if df.empty:
-            return None
+    df = pd.DataFrame()
+    
+    # リトライ処理 (最大3回)
+    for attempt in range(3):
+        try:
+            df = yf.download(symbol, period=period, interval=interval, progress=False)
+            if not df.empty and len(df) >= 30:
+                break
+        except Exception:
+            time.sleep(1)
 
+    # 取得失敗時は安全のため「1時間足」または「日足」へ自動フォールバック
+    used_fallback = False
+    if df.empty or len(df) < 30:
+        used_fallback = True
+        try:
+            # 日足データで安全に再取得
+            df = yf.download(symbol, period="2y", interval="1d", progress=False)
+        except Exception:
+            return None, False
+
+    if df.empty or len(df) < 30:
+        return None, False
+
+    try:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
@@ -172,11 +192,15 @@ def load_and_process_data(symbol, period, interval):
         df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
 
         df = df.ffill().dropna()
-        return df
+        return df, used_fallback
     except Exception as e:
-        return None
+        return None, False
 
-data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'])
+data, is_fallback = load_and_process_data(ticker, tf_config['period'], tf_config['interval'])
+
+# 自動切り替え（フォールバック）が起きている場合の注記表示
+if is_fallback:
+    st.warning("⚠️ 選択された短時間足データの通信が一時的に混雑していたため、安全のため「日足」データで安定動作させています。")
 
 # 注意喚起アラート
 st.info("💡 **トレード前のチェック**: 雇用統計やFOMCなど主要経済指標の発表前後はテクニカル分析が不向きになります。重要指標発表直前のエントリーは控えましょう。")
@@ -184,8 +208,8 @@ st.info("💡 **トレード前のチェック**: 雇用統計やFOMCなど主�
 # ==========================================
 # 5. AI学習 & 予測エンジン
 # ==========================================
-if data is None or len(data) < 60:
-    st.error("データの取得に失敗したか、指定時間軸のデータ数が不足しています。しばらく待ってから『今すぐ最新データに更新』ボタンを押してください。")
+if data is None or len(data) < 30:
+    st.error("データの取得に失敗したか、データ数が不足しています。しばらく待ってから『今すぐ最新データに更新』ボタンを押してください。")
 else:
     features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
     if 'US_10Y_Yield' in data.columns and not data['US_10Y_Yield'].isna().all():
@@ -250,6 +274,7 @@ else:
 
         tp_pips = (tp_price - entry_price) / pip_unit
         sl_pips = (entry_price - sl_price) / pip_unit
+        op_stop_line = sl_price - 0.400  # 運用停止ライン（損切りの40pips下）
 
         st.success(f"🟢 **買い (BUY)** （AI信頼度: {confidence:.1f}% / トレンド確認済）")
 
@@ -264,7 +289,20 @@ else:
             st.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"-{sl_pips:.1f} pips")
             st.code(f"{sl_price:{fmt}}", language="text")
 
-        st.caption("※グレーの枠内の数値をタップすると簡単にコピーできます。松井証券のOCO注文時などにご活用ください。")
+        # 松井証券リピート自動売買用パラメータのまとめ
+        st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
+        st.code(
+            f"通貨ペア　　: 米ドル/円 (USD/JPY)\n"
+            f"売買区分　　: 買\n"
+            f"レンジ下限　: {sl_price:{fmt}}\n"
+            f"レンジ上限　: {tp_price:{fmt}}\n"
+            f"注文値幅　　: 20 pips\n"
+            f"益出し幅　　: 20 pips\n"
+            f"運用停止ライン: {op_stop_line:{fmt}}\n"
+            f"注文数量　　: 0.01 (100通貨)",
+            language="text"
+        )
+        st.caption("※上のグレーの枠内をそのままコピーして松井証券アプリの入力にお使いいただけます。")
 
         # 通知実行
         if enable_notify and discord_url:
@@ -278,6 +316,7 @@ else:
 
         tp_pips = (entry_price - tp_price) / pip_unit
         sl_pips = (sl_price - entry_price) / pip_unit
+        op_stop_line = sl_price + 0.400  # 運用停止ライン（損切りの40pips上）
 
         st.error(f"🔴 **売り (SELL)** （AI信頼度: {confidence:.1f}% / トレンド確認済）")
 
@@ -292,7 +331,20 @@ else:
             st.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"+{sl_pips:.1f} pips")
             st.code(f"{sl_price:{fmt}}", language="text")
 
-        st.caption("※グレーの枠内の数値をタップすると簡単にコピーできます。松井証券のOCO注文時などにご活用ください。")
+        # 松井証券リピート自動売買用パラメータのまとめ
+        st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
+        st.code(
+            f"通貨ペア　　: 米ドル/円 (USD/JPY)\n"
+            f"売買区分　　: 売\n"
+            f"レンジ下限　: {tp_price:{fmt}}\n"
+            f"レンジ上限　: {sl_price:{fmt}}\n"
+            f"注文値幅　　: 20 pips\n"
+            f"益出し幅　　: 20 pips\n"
+            f"運用停止ライン: {op_stop_line:{fmt}}\n"
+            f"注文数量　　: 0.01 (100通貨)",
+            language="text"
+        )
+        st.caption("※上のグレーの枠内をそのままコピーして松井証券アプリの入力にお使いいただけます。")
 
         # 通知実行
         if enable_notify and discord_url:
