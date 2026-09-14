@@ -75,6 +75,12 @@ st.sidebar.subheader("🎯 ターゲット設定 (リスクリワード)")
 tp_atr_mult = st.sidebar.slider("利確目標 (ATR倍率)", min_value=0.5, max_value=3.0, value=1.2, step=0.1)
 sl_atr_mult = st.sidebar.slider("損切り目安 (ATR倍率)", min_value=0.3, max_value=2.0, value=0.6, step=0.1)
 
+# ★【追加】松井証券リピート注文用パラメータ設定
+st.sidebar.subheader("📋 松井証券リピート注文設定")
+custom_order_width = st.sidebar.number_input("注文値幅 (pips)", min_value=5, max_value=200, value=30, step=5)
+custom_profit_width = st.sidebar.number_input("益出し幅 (pips)", min_value=5, max_value=200, value=30, step=5)
+custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100)
+
 # Discord通知設定
 st.sidebar.subheader("📱 Discord通知設定 (オプション)")
 discord_url = st.sidebar.text_input("Discord Webhook URL", type="password", help="DiscordのチャンネルWebhook URLを入力すると、売買サインを通知できます。")
@@ -110,8 +116,6 @@ tf_config = TIMEFRAMES[tf_label]
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval):
     df = pd.DataFrame()
-    
-    # リトライ処理 (最大3回)
     for attempt in range(3):
         try:
             df = yf.download(symbol, period=period, interval=interval, progress=False)
@@ -120,7 +124,6 @@ def load_and_process_data(symbol, period, interval):
         except Exception:
             time.sleep(1)
 
-    # 取得失敗時は安全のため「日足」へ自動フォールバック
     used_fallback = False
     if df.empty or len(df) < 30:
         used_fallback = True
@@ -136,7 +139,6 @@ def load_and_process_data(symbol, period, interval):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # 外部市場指標（米10年債利回り）
         try:
             tnx = yf.download("^TNX", period=period, interval=interval, progress=False)['Close']
             if isinstance(tnx, pd.DataFrame): tnx = tnx.iloc[:, 0]
@@ -144,36 +146,30 @@ def load_and_process_data(symbol, period, interval):
         except:
             df['US_10Y_Yield'] = np.nan
 
-        # 1. リターンと移動平均乖離
         df['Return'] = df['Close'].pct_change()
         df['SMA_20'] = df['Close'].rolling(window=20).mean()
         df['Dev_SMA20'] = (df['Close'] - df['SMA_20']) / df['SMA_20']
 
-        # 2. RSI (14)
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / (loss + 1e-10)
         df['RSI'] = 100 - (100 / (1 + rs))
 
-        # 3. MACD
         ema12 = df['Close'].ewm(span=12, adjust=False).mean()
         ema26 = df['Close'].ewm(span=26, adjust=False).mean()
         df['MACD'] = ema12 - ema26
         df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
         df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
 
-        # 4. ボリンジャーバンド (%B)
         std20 = df['Close'].rolling(window=20).std()
         upper_band = df['SMA_20'] + (std20 * 2)
         lower_band = df['SMA_20'] - (std20 * 2)
         df['BB_PctB'] = (df['Close'] - lower_band) / (upper_band - lower_band + 1e-10)
 
-        # 5. ATR
         high_low = df['High'] - df['Low']
         df['ATR'] = high_low.rolling(window=14).mean()
 
-        # 6. ADX (トレンドの強さ)
         up_move = df['High'].diff()
         down_move = -df['Low'].diff()
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
@@ -187,9 +183,7 @@ def load_and_process_data(symbol, period, interval):
         dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
         df['ADX'] = dx.rolling(14).mean()
 
-        # 目的変数
         df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
-
         df = df.ffill().dropna()
         return df, used_fallback
     except Exception as e:
@@ -197,11 +191,9 @@ def load_and_process_data(symbol, period, interval):
 
 data, is_fallback = load_and_process_data(ticker, tf_config['period'], tf_config['interval'])
 
-# 自動切り替え（フォールバック）が起きている場合の注記表示
 if is_fallback:
     st.warning("⚠️ 選択された短時間足データの通信が一時的に混雑していたため、安全のため「日足」データで安定動作させています。")
 
-# 注意喚起アラート
 st.info("💡 **トレード前のチェック**: 雇用統計やFOMCなど主要経済指標の発表前後はテクニカル分析が不向きになります。重要指標発表直前のエントリーは控えましょう。")
 
 # ==========================================
@@ -225,7 +217,6 @@ else:
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
 
-    # バックテスト検証
     test_len = min(50, len(X_train) - 50)
     if test_len > 10:
         X_test_hist = X_train.iloc[-test_len:]
@@ -238,7 +229,6 @@ else:
         correct_count = 0
         test_len = 0
 
-    # 最新足予測
     pred = model.predict(X_latest)[0]
     prob = model.predict_proba(X_latest)[0]
     confidence = max(prob) * 100
@@ -249,7 +239,6 @@ else:
     latest_adx = data['ADX'].iloc[-1]
     latest_time = data.index[-1].strftime('%Y-%m-%d %H:%M')
 
-    # メトリクス表示
     st.divider()
     m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
     m_col1.metric("現在レート", f"{latest_price:.3f}")
@@ -266,7 +255,6 @@ else:
     fmt = ".5f" if "USD" in selected_label and not "USD/JPY" in selected_label else ".3f"
     pip_unit = 0.0001 if "USD" in selected_label and not "USD/JPY" in selected_label else 0.01
 
-    # 条件をADX >= 10、信頼度 >= 50 に緩和して確実にサマリーを出力させる
     if pred == 1 and confidence >= 50 and latest_adx >= 10:
         entry_price = latest_price
         tp_price = entry_price + (latest_atr * tp_atr_mult)
@@ -274,7 +262,7 @@ else:
 
         tp_pips = (tp_price - entry_price) / pip_unit
         sl_pips = (entry_price - sl_price) / pip_unit
-        op_stop_line = sl_price - 0.400  # 運用停止ライン（損切りの40pips下）
+        op_stop_line = sl_price - 0.400
 
         st.success(f"🟢 **買い (BUY)** （AI信頼度: {confidence:.1f}%）")
 
@@ -289,22 +277,21 @@ else:
             st.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"-{sl_pips:.1f} pips")
             st.code(f"{sl_price:{fmt}}", language="text")
 
-        # 松井証券リピート自動売買用パラメータのまとめ
+        # 松井証券リピート自動売買用パラメータのまとめ（サイドバーの数値を連動）
         st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
         st.code(
-            f"通貨ペア　　: 米ドル/円 (USD/JPY)\n"
+            f"通貨ペア　　: {selected_label}\n"
             f"売買区分　　: 買\n"
             f"レンジ下限　: {sl_price:{fmt}}\n"
             f"レンジ上限　: {tp_price:{fmt}}\n"
-            f"注文値幅　　: 20 pips\n"
-            f"益出し幅　　: 20 pips\n"
+            f"注文値幅　　: {custom_order_width} pips\n"
+            f"益出し幅　　: {custom_profit_width} pips\n"
             f"運用停止ライン: {op_stop_line:{fmt}}\n"
-            f"注文数量　　: 0.01 (100通貨)",
+            f"注文数量　　: {custom_quantity} 通貨",
             language="text"
         )
         st.caption("※上のグレーの枠内をそのままコピーして松井証券アプリの入力にお使いいただけます。")
 
-        # 通知実行
         if enable_notify and discord_url:
             msg = f"【🟢 買いサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
             send_discord_notification(discord_url, msg)
@@ -316,7 +303,7 @@ else:
 
         tp_pips = (entry_price - tp_price) / pip_unit
         sl_pips = (sl_price - entry_price) / pip_unit
-        op_stop_line = sl_price + 0.400  # 運用停止ライン（損切りの40pips上）
+        op_stop_line = sl_price + 0.400
 
         st.error(f"🔴 **売り (SELL)** （AI信頼度: {confidence:.1f}%）")
 
@@ -331,22 +318,21 @@ else:
             st.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"+{sl_pips:.1f} pips")
             st.code(f"{sl_price:{fmt}}", language="text")
 
-        # 松井証券リピート自動売買用パラメータのまとめ
+        # 松井証券リピート自動売買用パラメータのまとめ（サイドバーの数値を連動）
         st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
         st.code(
-            f"通貨ペア　　: 米ドル/円 (USD/JPY)\n"
+            f"通貨ペア　　: {selected_label}\n"
             f"売買区分　　: 売\n"
             f"レンジ下限　: {tp_price:{fmt}}\n"
             f"レンジ上限　: {sl_price:{fmt}}\n"
-            f"注文値幅　　: 20 pips\n"
-            f"益出し幅　　: 20 pips\n"
+            f"注文値幅　　: {custom_order_width} pips\n"
+            f"益出し幅　　: {custom_profit_width} pips\n"
             f"運用停止ライン: {op_stop_line:{fmt}}\n"
-            f"注文数量　　: 0.01 (100通貨)",
+            f"注文数量　　: {custom_quantity} 通貨",
             language="text"
         )
         st.caption("※上のグレーの枠内をそのままコピーして松井証券アプリの入力にお使いいただけます。")
 
-        # 通知実行
         if enable_notify and discord_url:
             msg = f"【🔴 売りサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
             send_discord_notification(discord_url, msg)
@@ -362,7 +348,6 @@ else:
     with st.expander("📊 テクニカル指標・学習データの詳細"):
         st.dataframe(data[features + ['ATR']].tail(10))
 
-# --- 自動更新ループ処理 ---
 if auto_refresh:
     time.sleep(refresh_interval)
     st.cache_data.clear()
