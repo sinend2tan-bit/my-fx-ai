@@ -120,12 +120,11 @@ def load_and_process_data(symbol, period, interval):
         except Exception:
             time.sleep(1)
 
-    # 取得失敗時は安全のため「1時間足」または「日足」へ自動フォールバック
+    # 取得失敗時は安全のため「日足」へ自動フォールバック
     used_fallback = False
     if df.empty or len(df) < 30:
         used_fallback = True
         try:
-            # 日足データで安全に再取得
             df = yf.download(symbol, period="2y", interval="1d", progress=False)
         except Exception:
             return None, False
@@ -267,7 +266,8 @@ else:
     fmt = ".5f" if "USD" in selected_label and not "USD/JPY" in selected_label else ".3f"
     pip_unit = 0.0001 if "USD" in selected_label and not "USD/JPY" in selected_label else 0.01
 
-    if pred == 1 and confidence >= 60 and latest_adx >= 18:
+    # 条件をADX >= 10、信頼度 >= 50 に緩和して確実にサマリーを出力させる
+    if pred == 1 and confidence >= 50 and latest_adx >= 10:
         entry_price = latest_price
         tp_price = entry_price + (latest_atr * tp_atr_mult)
         sl_price = entry_price - (latest_atr * sl_atr_mult)
@@ -276,7 +276,7 @@ else:
         sl_pips = (entry_price - sl_price) / pip_unit
         op_stop_line = sl_price - 0.400  # 運用停止ライン（損切りの40pips下）
 
-        st.success(f"🟢 **買い (BUY)** （AI信頼度: {confidence:.1f}% / トレンド確認済）")
+        st.success(f"🟢 **買い (BUY)** （AI信頼度: {confidence:.1f}%）")
 
         t_col1, t_col2, t_col3 = st.columns(3)
         with t_col1:
@@ -309,7 +309,7 @@ else:
             msg = f"【🟢 買いサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
             send_discord_notification(discord_url, msg)
 
-    elif pred == 0 and confidence >= 60 and latest_adx >= 18:
+    elif pred == 0 and confidence >= 50 and latest_adx >= 10:
         entry_price = latest_price
         tp_price = entry_price - (latest_atr * tp_atr_mult)
         sl_price = entry_price + (latest_atr * sl_atr_mult)
@@ -318,7 +318,7 @@ else:
         sl_pips = (sl_price - entry_price) / pip_unit
         op_stop_line = sl_price + 0.400  # 運用停止ライン（損切りの40pips上）
 
-        st.error(f"🔴 **売り (SELL)** （AI信頼度: {confidence:.1f}% / トレンド確認済）")
+        st.error(f"🔴 **売り (SELL)** （AI信頼度: {confidence:.1f}%）")
 
         t_col1, t_col2, t_col3 = st.columns(3)
         with t_col1:
@@ -353,10 +353,10 @@ else:
 
     else:
         st.warning(f"🟡 **様子見 (HOLD)** （AI信頼度: {confidence:.1f}%）")
-        if latest_adx < 18:
-            st.write("判定理由: ADXが低くレンジ相場（もみ合い）の傾向が強いため、騙しを避けるため静観を推奨します。")
+        if latest_adx < 10:
+            st.write("判定理由: ADXが極めて低く完全な保ち合い相場のため静観を推奨します。")
         else:
-            st.write("判定理由: 方向性が不鮮明、または信頼度が基準値（60%）に達していません。")
+            st.write("判定理由: 方向性が不鮮明、または信頼度が基準値に達していません。")
 
     st.divider()
     with st.expander("📊 テクニカル指標・学習データの詳細"):
