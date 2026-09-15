@@ -39,8 +39,9 @@ refresh_interval = st.sidebar.selectbox(
     index=1
 )
 
-# 松井証券リピート注文用（数量のみ設定）
+# 松井証券リピート注文設定（資金量・数量）
 st.sidebar.subheader("📋 松井証券リピート注文設定")
+account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=1000000, step=50000)
 custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100)
 
 st.sidebar.subheader("📱 Discord通知設定 (オプション)")
@@ -276,16 +277,23 @@ else:
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
         
-        # リピート注文専用のレンジと停止ラインの計算（単発SLとは分離）
-        grid_range_atr = 1.5  # レンジ幅の係数
-        stop_buffer_atr = 3.0 # 運用停止ラインまでのバッファ係数
-        stop_min_buffer = 1.5 if "JPY" in selected_label else 0.15 # 最低確保する絶対値の余裕
+        # 資金量と注文数量に基づく「資金リスク係数」の動的計算
+        # 資金に対する100通貨あたりの負担率を計算し、証拠金耐性に応じてバッファーを調整
+        # 証拠金が多いほど、または数量が少ないほど、より広い（安全な）停止ラインに自動調整されます
+        risk_per_unit = custom_quantity * latest_price * 0.04 # ざっくり必要証拠金の目安 (レバレッジ25倍想定)
+        fund_ratio = account_balance / max(risk_per_unit, 1.0)
+        
+        # 資金の余裕度に応じたATRバッファー倍率の動的調整 (2.0 〜 5.0倍)
+        dynamic_stop_multiplier = float(np.clip(2.0 + (fund_ratio / 500.0), 2.0, 5.0))
+
+        grid_range_atr = 1.5  
+        stop_min_buffer = 1.5 if "JPY" in selected_label else 0.15 
 
         if pred == 1 and confidence >= 40:
             rep_side = "買"
             rep_lower = latest_price - (latest_atr * grid_range_atr)
             rep_upper = latest_price + (latest_atr * grid_range_atr)
-            buffer_val = max(latest_atr * stop_buffer_atr, stop_min_buffer)
+            buffer_val = max(latest_atr * dynamic_stop_multiplier, stop_min_buffer)
             rep_op_stop_line = rep_lower - buffer_val
 
             st.success(f"🟢 **買いリピート推奨** （AI予測方向: 買いBUY ／ AI信頼度: {confidence:.1f}%）")
@@ -296,10 +304,11 @@ else:
                 f"AI判定　　　: 買い (信頼度 {confidence:.1f}%)\n"
                 f"レンジ下限　: {rep_lower:{fmt}} (現在値 - ATR×{grid_range_atr})\n"
                 f"レンジ上限　: {rep_upper:{fmt}} (現在値 + ATR×{grid_range_atr})\n"
-                f"注文値幅　　: {ai_recommended_width} pips (AI動적最適値)\n".replace("動적", "動的") +
+                f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
                 f"益出し幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-                f"運用停止ライン: {rep_op_stop_line:{fmt}} (レンジ下限から安全バッファ確保)\n"
-                f"注文数量　　: {custom_quantity} 通貨",
+                f"運用停止ライン: {rep_op_stop_line:{fmt}} (資金・数量連動セーフティ: ATR×{dynamic_stop_multiplier:.1f}適用)\n"
+                f"注文数量　　: {custom_quantity} 通貨\n"
+                f"考慮口座資金: ¥{account_balance:,}",
                 language="text"
             )
 
@@ -307,7 +316,7 @@ else:
             rep_side = "売"
             rep_lower = latest_price - (latest_atr * grid_range_atr)
             rep_upper = latest_price + (latest_atr * grid_range_atr)
-            buffer_val = max(latest_atr * stop_buffer_atr, stop_min_buffer)
+            buffer_val = max(latest_atr * dynamic_stop_multiplier, stop_min_buffer)
             rep_op_stop_line = rep_upper + buffer_val
 
             st.error(f"🔴 **売りリピート推奨** （AI予測方向: 売りSELL ／ AI信頼度: {confidence:.1f}%）")
@@ -320,8 +329,9 @@ else:
                 f"レンジ上限　: {rep_upper:{fmt}} (現在値 + ATR×{grid_range_atr})\n"
                 f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
                 f"益出し幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-                f"運用停止ライン: {rep_op_stop_line:{fmt}} (レンジ上限から安全バッファ確保)\n"
-                f"注文数量　　: {custom_quantity} 通貨",
+                f"運用停止ライン: {rep_op_stop_line:{fmt}} (資金・数量連動セーフティ: ATR×{dynamic_stop_multiplier:.1f}適用)\n"
+                f"注文数量　　: {custom_quantity} 通貨\n"
+                f"考慮口座資金: ¥{account_balance:,}",
                 language="text"
             )
         else:
