@@ -39,13 +39,12 @@ refresh_interval = st.sidebar.selectbox(
     index=1
 )
 
-st.sidebar.subheader("🎯 ターゲット設定 (リスクリワード)")
+st.sidebar.subheader("🎯 ターゲット設定 (ATR倍率調整)")
 tp_atr_mult = st.sidebar.slider("利確目標 (ATR倍率)", min_value=0.5, max_value=3.0, value=1.2, step=0.1)
 sl_atr_mult = st.sidebar.slider("損切り目安 (ATR倍率)", min_value=0.3, max_value=2.0, value=0.6, step=0.1)
 
+# 松井証券リピート注文用（数量のみ設定、値幅はATRから自動算出）
 st.sidebar.subheader("📋 松井証券リピート注文設定")
-custom_order_width = st.sidebar.number_input("注文値幅 (pips)", min_value=5, max_value=200, value=30, step=5)
-custom_profit_width = st.sidebar.number_input("益出し幅 (pips)", min_value=5, max_value=200, value=30, step=5)
 custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100)
 
 st.sidebar.subheader("📱 Discord通知設定 (オプション)")
@@ -82,7 +81,6 @@ tf_config = TIMEFRAMES[tf_label]
 def load_and_process_data(symbol, period, interval):
     df = pd.DataFrame()
     
-    # 試行回数ごとに期間や間隔を変えて取得を試みる
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
     except:
@@ -94,7 +92,6 @@ def load_and_process_data(symbol, period, interval):
         except:
             pass
 
-    # それでも取得できない場合の「完全フェイルセーフ（ダミーデータ生成）」
     if df.empty or len(df) < 15:
         dates = pd.date_range(end=pd.Timestamp.now(), periods=50, freq='h')
         np.random.seed(42)
@@ -208,12 +205,17 @@ else:
     m_col5.metric("データ日時", latest_time)
 
     # ==========================================
-    # 5. AI判定結果 & 松井証券向け注文パラメータ UI
+    # 5. AI判定結果 & 松井証券向け注文パラメータ UI（自動算出）
     # ==========================================
-    st.subheader("🤖 AI判定結果 & エントリーパラメータ (松井証券連携用)")
-
     fmt = ".5f" if "USD" in selected_label and not "USD/JPY" in selected_label else ".3f"
     pip_unit = 0.0001 if "USD" in selected_label and not "USD/JPY" in selected_label else 0.01
+
+    # ATRをpips換算して推奨値を自動計算
+    atr_pips = latest_atr / pip_unit
+    rec_order_width = max(5, int(round(atr_pips * 0.5 / 5) * 5))  # 5pips単位で自動丸め
+    rec_profit_width = max(5, int(round(atr_pips * tp_atr_mult / 5) * 5))
+
+    st.subheader("🤖 AI判定結果 & エントリーパラメータ (松井証券連携用・自動算出)")
 
     if pred == 1 and confidence >= 40:
         entry_price = latest_price
@@ -237,19 +239,19 @@ else:
             st.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"-{sl_pips:.1f} pips")
             st.code(f"{sl_price:{fmt}}", language="text")
 
-        st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
+        st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー（推奨値自動適用）")
         st.code(
             f"通貨ペア　　: {selected_label}\n"
             f"売買区分　　: 買\n"
             f"レンジ下限　: {sl_price:{fmt}}\n"
             f"レンジ上限　: {tp_price:{fmt}}\n"
-            f"注文値幅　　: {custom_order_width} pips\n"
-            f"益出し幅　　: {custom_profit_width} pips\n"
+            f"注文値幅　　: {rec_order_width} pips (ATR連動推奨値)\n"
+            f"益出し幅　　: {rec_profit_width} pips (ATR連動推奨値)\n"
             f"運用停止ライン: {op_stop_line:{fmt}}\n"
             f"注文数量　　: {custom_quantity} 通貨",
             language="text"
         )
-        st.caption("※上のグレーの枠内をそのままコピーして松井証券アプリの入力にお使いいただけます。")
+        st.caption("※直近の市場ボラティリティ（ATR）から注文値幅・益出し幅を自動で推奨算出しています。")
 
         if enable_notify and discord_url:
             msg = f"【🟢 買いサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
@@ -277,19 +279,19 @@ else:
             st.metric("損切り目安 (Stop Loss)", f"{sl_price:{fmt}}", f"+{sl_pips:.1f} pips")
             st.code(f"{sl_price:{fmt}}", language="text")
 
-        st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
+        st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー（推奨値自動適用）")
         st.code(
             f"通貨ペア　　: {selected_label}\n"
             f"売買区分　　: 売\n"
             f"レンジ下限　: {tp_price:{fmt}}\n"
             f"レンジ上限　: {sl_price:{fmt}}\n"
-            f"注文値幅　　: {custom_order_width} pips\n"
-            f"益出し幅　　: {custom_profit_width} pips\n"
+            f"注文値幅　　: {rec_order_width} pips (ATR連動推奨値)\n"
+            f"益出し幅　　: {rec_profit_width} pips (ATR連動推奨値)\n"
             f"運用停止ライン: {op_stop_line:{fmt}}\n"
             f"注文数量　　: {custom_quantity} 通貨",
             language="text"
         )
-        st.caption("※上のグレーの枠内をそのままコピーして松井証券アプリの入力にお使いいただけます。")
+        st.caption("※直近の市場ボラティリティ（ATR）から注文値幅・益出し幅を自動で推奨算出しています。")
 
         if enable_notify and discord_url:
             msg = f"【🔴 売りサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
