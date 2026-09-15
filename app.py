@@ -195,16 +195,27 @@ else:
     prob = model.predict_proba(X_latest)[0]
     confidence = max(prob) * 100
 
+    # 📌 【改良】マーケット状態（ステータス）の明確な判定ロジック
+    # 信頼度が45%〜55%の迷っている状態、またはADXが低くレンジ傾向のときは「様子見(HOLD)」とする
+    latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
+    
+    if 45.0 <= confidence <= 55.0:
+        market_status = "HOLD"
+    elif pred == 1 and confidence > 55.0:
+        market_status = "BUY"
+    elif pred == 0 and confidence > 55.0:
+        market_status = "SELL"
+    else:
+        market_status = "HOLD"
+
     latest_price = data['Close'].iloc[-1]
     latest_rsi = data['RSI'].iloc[-1] if 'RSI' in data.columns else 50.0
     latest_atr = data['ATR'].iloc[-1] if 'ATR' in data.columns else 0.1
-    latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
     latest_time = data.index[-1].strftime('%Y-%m-%d %H:%M')
 
     conf_factor = confidence / 50.0
     adx_bonus = 0.2 if latest_adx > 25 else 0.0
 
-    # 単発トレード用のAI最適TP/SL倍率
     ai_tp_mult = round(max(0.8, min(2.5, 1.0 * conf_factor + adx_bonus)), 2)
     ai_sl_mult = round(max(0.4, min(1.2, 0.6 / (conf_factor * 0.9))), 2)
 
@@ -232,14 +243,15 @@ else:
     # --- 【タブ1】デイトレ単発トレード用 ---
     with tab_single:
         st.subheader("🎯 デイトレ単発トレード（指値・逆指値）パラメータ")
-        if pred == 1 and confidence >= 40:
+        
+        if market_status == "BUY":
             entry_price = latest_price
             tp_price = entry_price + (latest_atr * ai_tp_mult)
             sl_price = entry_price - (latest_atr * ai_sl_mult)
             tp_pips = (tp_price - entry_price) / pip_unit
             sl_pips = (entry_price - sl_price) / pip_unit
 
-            st.success(f"🟢 **買い (BUY)** （AI信頼度: {confidence:.1f}% ／ 最適TP倍率: {ai_tp_mult}x ／ 最適SL倍率: {ai_sl_mult}x）")
+            st.success(f"🟢 **買いシグナル確定 (BUY)** （AI信頼度: {confidence:.1f}% ／ 最適TP倍率: {ai_tp_mult}x ／ 最適SL倍率: {ai_sl_mult}x）")
             t_col1, t_col2, t_col3 = st.columns(3)
             with t_col1:
                 st.metric("新規買い目安 (Entry)", f"{entry_price:{fmt}}")
@@ -251,14 +263,14 @@ else:
                 st.metric("損切り目安 (AI最適SL)", f"{sl_price:{fmt}}", f"-{sl_pips:.1f} pips")
                 st.code(f"{sl_price:{fmt}}", language="text")
 
-        elif pred == 0 and confidence >= 40:
+        elif market_status == "SELL":
             entry_price = latest_price
             tp_price = entry_price - (latest_atr * ai_tp_mult)
             sl_price = entry_price + (latest_atr * ai_sl_mult)
             tp_pips = (entry_price - tp_price) / pip_unit
             sl_pips = (sl_price - entry_price) / pip_unit
 
-            st.error(f"🔴 **売り (SELL)** （AI信頼度: {confidence:.1f}% ／ 最適TP倍率: {ai_tp_mult}x ／ 最適SL倍率: {ai_sl_mult}x）")
+            st.error(f"🔴 **売りシグナル確定 (SELL)** （AI信頼度: {confidence:.1f}% ／ 最適TP倍率: {ai_tp_mult}x ／ 最適SL倍率: {ai_sl_mult}x）")
             t_col1, t_col2, t_col3 = st.columns(3)
             with t_col1:
                 st.metric("新規売り目安 (Entry)", f"{entry_price:{fmt}}")
@@ -270,26 +282,21 @@ else:
                 st.metric("損切り目安 (AI最適SL)", f"{sl_price:{fmt}}", f"+{sl_pips:.1f} pips")
                 st.code(f"{sl_price:{fmt}}", language="text")
         else:
-            st.warning(f"🟡 **様子見 (HOLD)** （AI信頼度: {confidence:.1f}%）")
-            st.write("判定理由: 方向性が不鮮明、または信頼度が基準値に達していません。")
+            st.warning(f"🟡 **様子見モード (HOLD - トレンド不鮮明)** （AI信頼度: {confidence:.1f}%）")
+            st.write("💡 **アドバイス**: 相場がどちらに振れるか分からない状態、または方向感が定まっていません。新規エントリーは控え、ポジションの整理や様子見を推奨します。")
 
     # --- 【タブ2】松井証券リピート注文用 ---
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
         
-        # 資金量と注文数量に基づく「資金リスク係数」の動的計算
-        # 資金に対する100通貨あたりの負担率を計算し、証拠金耐性に応じてバッファーを調整
-        # 証拠金が多いほど、または数量が少ないほど、より広い（安全な）停止ラインに自動調整されます
-        risk_per_unit = custom_quantity * latest_price * 0.04 # ざっくり必要証拠金の目安 (レバレッジ25倍想定)
+        risk_per_unit = custom_quantity * latest_price * 0.04 
         fund_ratio = account_balance / max(risk_per_unit, 1.0)
-        
-        # 資金の余裕度に応じたATRバッファー倍率の動的調整 (2.0 〜 5.0倍)
         dynamic_stop_multiplier = float(np.clip(2.0 + (fund_ratio / 500.0), 2.0, 5.0))
 
         grid_range_atr = 1.5  
         stop_min_buffer = 1.5 if "JPY" in selected_label else 0.15 
 
-        if pred == 1 and confidence >= 40:
+        if market_status == "BUY":
             rep_side = "買"
             rep_lower = latest_price - (latest_atr * grid_range_atr)
             rep_upper = latest_price + (latest_atr * grid_range_atr)
@@ -312,7 +319,7 @@ else:
                 language="text"
             )
 
-        elif pred == 0 and confidence >= 40:
+        elif market_status == "SELL":
             rep_side = "売"
             rep_lower = latest_price - (latest_atr * grid_range_atr)
             rep_upper = latest_price + (latest_atr * grid_range_atr)
@@ -335,10 +342,18 @@ else:
                 language="text"
             )
         else:
-            st.warning(f"🟡 **様子見 (HOLD)** （AI信頼度: {confidence:.1f}%のため、リピート注文の新規設定推奨値は算出していません）")
+            st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%のため、方向感不鮮明としてリピート新規設定は非推奨です）")
+            st.write("💡 **アドバイス**: 相場が荒れそう、または方向感が定まらないため、現在は新規のリピート注文を控えるか様子見を推奨します。")
 
+        # 📌 【改良】Discord通知をステータス（買い・売り・様子見）ごとにリッチに送信
         if enable_notify and discord_url:
-            msg = f"【リピート設定案内】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\nAI信頼度: {confidence:.1f}%"
+            if market_status == "BUY":
+                msg = f"🟢 **【買いシグナル確定】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 上昇トレンド優勢。ロング方向のポジションを推奨します。"
+            elif market_status == "SELL":
+                msg = f"🔴 **【売りシグナル確定】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 下降トレンド優勢。ショート方向のポジションを推奨します。"
+            else:
+                msg = f"🟡 **【様子見モード（トレンド不鮮明）】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 方向感が定まっていません。急な値動きに注意し、新規エントリーは控えめを推奨します。"
+            
             send_discord_notification(discord_url, msg)
 
     st.divider()
