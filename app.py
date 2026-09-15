@@ -70,11 +70,12 @@ TIMEFRAMES = {
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
 
+# 📌 【修正】keyを追加して選択状態を保持するように変更
 col_s1, col_s2 = st.columns(2)
 with col_s1:
-    selected_label = st.selectbox("通貨ペアを選択", list(PAIRS.keys()))
+    selected_label = st.selectbox("通貨ペアを選択", list(PAIRS.keys()), key="selected_pair_label")
 with col_s2:
-    tf_label = st.selectbox("時間軸（タイムフレーム）を選択", list(TIMEFRAMES.keys()))
+    tf_label = st.selectbox("時間軸（タイムフレーム）を選択", list(TIMEFRAMES.keys()), key="selected_tf_label")
 
 ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
@@ -195,8 +196,6 @@ else:
     prob = model.predict_proba(X_latest)[0]
     confidence = max(prob) * 100
 
-    # 📌 【改良】マーケット状態（ステータス）の明確な判定ロジック
-    # 信頼度が45%〜55%の迷っている状態、またはADXが低くレンジ傾向のときは「様子見(HOLD)」とする
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
     
     if 45.0 <= confidence <= 55.0:
@@ -345,7 +344,6 @@ else:
             st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%のため、方向感不鮮明としてリピート新規設定は非推奨です）")
             st.write("💡 **アドバイス**: 相場が荒れそう、または方向感が定まらないため、現在は新規のリピート注文を控えるか様子見を推奨します。")
 
-        # 📌 【改良】Discord通知をステータス（買い・売り・様子見）ごとにリッチに送信
         if enable_notify and discord_url:
             if market_status == "BUY":
                 msg = f"🟢 **【買いシグナル確定】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 上昇トレンド優勢。ロング方向のポジションを推奨します。"
