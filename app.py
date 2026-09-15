@@ -70,7 +70,7 @@ SAFE_REPEAT_SETTINGS = {
 
 TIMEFRAMES = {
     "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
-    "1시간足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
+    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
 
