@@ -203,11 +203,9 @@ else:
     latest_time = data.index[-1].strftime('%Y-%m-%d %H:%M')
 
     # ==========================================
-    # ★ AIによる動的・最適パラメータの自動算出ロジック
-    # =comun=========================================
-    # 信頼度(confidence)やADX（トレンド強度）に応じてAIが利確・損切りの倍率を自動チューニング
-    # 例: 信頼度が高い & ADXが高い(トレンド中) ⇒ 利確倍率を大きく伸ばす、損切りは引き締める
-    conf_factor = confidence / 50.0  # 1.0を基準にしたスケール
+    # AIによる動的・最適パラメータの自動算出ロジック
+    # ==========================================
+    conf_factor = confidence / 50.0
     adx_bonus = 0.2 if latest_adx > 25 else 0.0
 
     ai_tp_mult = round(max(0.8, min(2.5, 1.0 * conf_factor + adx_bonus)), 2)
@@ -216,7 +214,6 @@ else:
     fmt = ".5f" if "USD" in selected_label and not "USD/JPY" in selected_label else ".3f"
     pip_unit = 0.0001 if "USD" in selected_label and not "USD/JPY" in selected_label else 0.01
 
-    # AI判定の確信度・ADXに連動したリピート注文値幅の動的調整 (±5〜10pips程度の微調整)
     dynamic_width_adjustment = int(round((confidence - 50) / 10)) * 2
     ai_recommended_width = max(10, base_safe_width + dynamic_width_adjustment)
 
@@ -262,7 +259,7 @@ else:
             f"レンジ下限　: {sl_price:{fmt}}\n"
             f"レンジ上限　: {tp_price:{fmt}}\n"
             f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-            f"益出し幅　　: {ai_recommended_width} pips (AI動적最適値)\n"
+            f"益出し幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
             f"運用停止ライン: {op_stop_line:{fmt}}\n"
             f"注文数量　　: {custom_quantity} 通貨",
             language="text"
