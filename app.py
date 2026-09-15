@@ -55,7 +55,6 @@ PAIRS = {
     "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
 }
 
-# 通貨ペアごとのベース安全値（pips基準）
 BASE_SAFE_WIDTHS = {
     "USDJPY=X": 20,
     "EURJPY=X": 25,
@@ -65,7 +64,7 @@ BASE_SAFE_WIDTHS = {
 }
 
 TIMEFRAMES = {
-    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
+    "15分足 (デイトレエントリー용)": {"period": "1mo", "interval": "15m"},
     "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
@@ -81,12 +80,11 @@ tf_config = TIMEFRAMES[tf_label]
 base_safe_width = BASE_SAFE_WIDTHS.get(ticker, 20)
 
 # ==========================================
-# 3. データ取得 & 指標処理（絶対落ちない安全ネット付き）
+# 3. データ取得 & 指標処理
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval):
     df = pd.DataFrame()
-    
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
     except:
@@ -202,12 +200,10 @@ else:
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
     latest_time = data.index[-1].strftime('%Y-%m-%d %H:%M')
 
-    # ==========================================
-    # AIによる動的・最適パラメータの自動算出ロジック
-    # ==========================================
     conf_factor = confidence / 50.0
     adx_bonus = 0.2 if latest_adx > 25 else 0.0
 
+    # 単発トレード用のAI最適TP/SL倍率
     ai_tp_mult = round(max(0.8, min(2.5, 1.0 * conf_factor + adx_bonus)), 2)
     ai_sl_mult = round(max(0.4, min(1.2, 0.6 / (conf_factor * 0.9))), 2)
 
@@ -225,94 +221,113 @@ else:
     m_col4.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回的中")
     m_col5.metric("データ日時", latest_time)
 
+    st.divider()
+
     # ==========================================
-    # 5. AI判定結果 & 松井証券向け注文パラメータ UI（完全AI自動最適化）
+    # 5. タブ分けによる表示（単発トレード用 vs 松井証券リピート注文用）
     # ==========================================
-    st.subheader("🤖 AI判定結果 & エントリーパラメータ (完全AI自動最適化)")
+    tab_single, tab_repeat = st.tabs(["🎯 デイトレ単発トレード用", "📋 松井証券リピート注文用"])
 
-    if pred == 1 and confidence >= 40:
-        entry_price = latest_price
-        tp_price = entry_price + (latest_atr * ai_tp_mult)
-        sl_price = entry_price - (latest_atr * ai_sl_mult)
+    # --- 【タブ1】デイトレ単発トレード用 ---
+    with tab_single:
+        st.subheader("🎯 デイトレ単発トレード（指値・逆指値）パラメータ")
+        if pred == 1 and confidence >= 40:
+            entry_price = latest_price
+            tp_price = entry_price + (latest_atr * ai_tp_mult)
+            sl_price = entry_price - (latest_atr * ai_sl_mult)
+            tp_pips = (tp_price - entry_price) / pip_unit
+            sl_pips = (entry_price - sl_price) / pip_unit
 
-        tp_pips = (tp_price - entry_price) / pip_unit
-        sl_pips = (entry_price - sl_price) / pip_unit
-        op_stop_line = sl_price - 0.400
+            st.success(f"🟢 **買い (BUY)** （AI信頼度: {confidence:.1f}% ／ 最適TP倍率: {ai_tp_mult}x ／ 最適SL倍率: {ai_sl_mult}x）")
+            t_col1, t_col2, t_col3 = st.columns(3)
+            with t_col1:
+                st.metric("新規買い目安 (Entry)", f"{entry_price:{fmt}}")
+                st.code(f"{entry_price:{fmt}}", language="text")
+            with t_col2:
+                st.metric("利確目標 (AI最適TP)", f"{tp_price:{fmt}}", f"+{tp_pips:.1f} pips")
+                st.code(f"{tp_price:{fmt}}", language="text")
+            with t_col3:
+                st.metric("損切り目安 (AI最適SL)", f"{sl_price:{fmt}}", f"-{sl_pips:.1f} pips")
+                st.code(f"{sl_price:{fmt}}", language="text")
 
-        st.success(f"🟢 **買い (BUY)** （AI信頼度: {confidence:.1f}% ／ 最適TP倍率: {ai_tp_mult}x ／ 最適SL倍率: {ai_sl_mult}x）")
+        elif pred == 0 and confidence >= 40:
+            entry_price = latest_price
+            tp_price = entry_price - (latest_atr * ai_tp_mult)
+            sl_price = entry_price + (latest_atr * ai_sl_mult)
+            tp_pips = (entry_price - tp_price) / pip_unit
+            sl_pips = (sl_price - entry_price) / pip_unit
 
-        t_col1, t_col2, t_col3 = st.columns(3)
-        with t_col1:
-            st.metric("新規買い目安 (Entry)", f"{entry_price:{fmt}}")
-            st.code(f"{entry_price:{fmt}}", language="text")
-        with t_col2:
-            st.metric("利確目標 (AI最適TP)", f"{tp_price:{fmt}}", f"+{tp_pips:.1f} pips")
-            st.code(f"{tp_price:{fmt}}", language="text")
-        with t_col3:
-            st.metric("損切り目安 (AI最適SL)", f"{sl_price:{fmt}}", f"-{sl_pips:.1f} pips")
-            st.code(f"{sl_price:{fmt}}", language="text")
+            st.error(f"🔴 **売り (SELL)** （AI信頼度: {confidence:.1f}% ／ 最適TP倍率: {ai_tp_mult}x ／ 最適SL倍率: {ai_sl_mult}x）")
+            t_col1, t_col2, t_col3 = st.columns(3)
+            with t_col1:
+                st.metric("新規売り目安 (Entry)", f"{entry_price:{fmt}}")
+                st.code(f"{entry_price:{fmt}}", language="text")
+            with t_col2:
+                st.metric("利確目標 (AI最適TP)", f"{tp_price:{fmt}}", f"-{tp_pips:.1f} pips")
+                st.code(f"{tp_price:{fmt}}", language="text")
+            with t_col3:
+                st.metric("損切り目安 (AI最適SL)", f"{sl_price:{fmt}}", f"+{sl_pips:.1f} pips")
+                st.code(f"{sl_price:{fmt}}", language="text")
+        else:
+            st.warning(f"🟡 **様子見 (HOLD)** （AI信頼度: {confidence:.1f}%）")
+            st.write("判定理由: 方向性が不鮮明、または信頼度が基準値に達していません。")
 
-        st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー（AI自動最適化値）")
-        st.code(
-            f"通貨ペア　　: {selected_label}\n"
-            f"売買区分　　: 買\n"
-            f"レンジ下限　: {sl_price:{fmt}}\n"
-            f"レンジ上限　: {tp_price:{fmt}}\n"
-            f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-            f"益出し幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-            f"運用停止ライン: {op_stop_line:{fmt}}\n"
-            f"注文数量　　: {custom_quantity} 通貨",
-            language="text"
-        )
-        st.caption(f"※AI信頼度（{confidence:.1f}%）およびトレンド強度（ADX: {latest_adx:.1f}）を解析し、自動で最適な値幅（{ai_recommended_width} pips）を算出して適用しています。")
+    # --- 【タブ2】松井証券リピート注文用 ---
+    with tab_repeat:
+        st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
+        
+        # リピート注文専用のレンジと停止ラインの計算（単発SLとは分離）
+        grid_range_atr = 1.5  # レンジ幅の係数
+        stop_buffer_atr = 3.0 # 運用停止ラインまでのバッファ係数
+        stop_min_buffer = 1.5 if "JPY" in selected_label else 0.15 # 最低確保する絶対値の余裕
+
+        if pred == 1 and confidence >= 40:
+            # 買いリピートの設定
+            rep_side = "買"
+            rep_lower = latest_price - (latest_atr * grid_range_atr)
+            rep_upper = latest_price + (latest_atr * grid_range_atr)
+            buffer_val = max(latest_atr * stop_buffer_atr, stop_min_buffer)
+            rep_op_stop_line = rep_lower - buffer_val
+
+            st.info("💡 **買いリピート戦略**: 現在値を中心に上下にグリッドを張り、下落時に買い・上昇時に利食いを繰り返します。")
+            st.code(
+                f"通貨ペア　　: {selected_label}\n"
+                f"売買区分　　: {rep_side}\n"
+                f"レンジ下限　: {rep_lower:{fmt}} (現在値 - ATR×{grid_range_atr})\n"
+                f"レンジ上限　: {rep_upper:{fmt}} (現在値 + ATR×{grid_range_atr})\n"
+                f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
+                f"益出し幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
+                f"運用停止ライン: {rep_op_stop_line:{fmt}} (レンジ下限から安全バッファ確保)\n"
+                f"注文数量　　: {custom_quantity} 通貨",
+                language="text"
+            )
+
+        elif pred == 0 and confidence >= 40:
+            # 売りリピートの設定
+            rep_side = "売"
+            rep_lower = latest_price - (latest_atr * grid_range_atr)
+            rep_upper = latest_price + (latest_atr * grid_range_atr)
+            buffer_val = max(latest_atr * stop_buffer_atr, stop_min_buffer)
+            rep_op_stop_line = rep_upper + buffer_val
+
+            st.info("💡 **売りリピート戦略**: 現在値を中心に上下にグリッドを張り、上昇時に売り・下落時に利食いを繰り返します。")
+            st.code(
+                f"通貨ペア　　: {selected_label}\n"
+                f"売買区分　　: {rep_side}\n"
+                f"レンジ下限　: {rep_lower:{fmt}} (現在値 - ATR×{grid_range_atr})\n"
+                f"レンジ上限　: {rep_upper:{fmt}} (現在値 + ATR×{grid_range_atr})\n"
+                f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
+                f"益出し幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
+                f"運用停止ライン: {rep_op_stop_line:{fmt}} (レンジ上限から安全バッファ確保)\n"
+                f"注文数量　　: {custom_quantity} 通貨",
+                language="text"
+            )
+        else:
+            st.warning("現在はシグナルが「様子見 (HOLD)」のため、リピート注文の新規設定推奨値は算出していません。")
 
         if enable_notify and discord_url:
-            msg = f"【🟢 買いサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
+            msg = f"【リピート設定案内】\n通貨ペア: {selected_label}\n時間軸: {tf_label}"
             send_discord_notification(discord_url, msg)
-
-    elif pred == 0 and confidence >= 40:
-        entry_price = latest_price
-        tp_price = entry_price - (latest_atr * ai_tp_mult)
-        sl_price = entry_price + (latest_atr * ai_sl_mult)
-
-        tp_pips = (entry_price - tp_price) / pip_unit
-        sl_pips = (sl_price - entry_price) / pip_unit
-        op_stop_line = sl_price + 0.400
-
-        st.error(f"🔴 **売り (SELL)** （AI信頼度: {confidence:.1f}% ／ 最適TP倍率: {ai_tp_mult}x ／ 最適SL倍率: {ai_sl_mult}x）")
-
-        t_col1, t_col2, t_col3 = st.columns(3)
-        with t_col1:
-            st.metric("新規売り目安 (Entry)", f"{entry_price:{fmt}}")
-            st.code(f"{entry_price:{fmt}}", language="text")
-        with t_col2:
-            st.metric("利確目標 (AI最適TP)", f"{tp_price:{fmt}}", f"-{tp_pips:.1f} pips")
-            st.code(f"{tp_price:{fmt}}", language="text")
-        with t_col3:
-            st.metric("損切り目安 (AI最適SL)", f"{sl_price:{fmt}}", f"+{sl_pips:.1f} pips")
-            st.code(f"{sl_price:{fmt}}", language="text")
-
-        st.markdown("### 📋 松井証券FX 自動売買（リピート注文）入力用サマリー（AI自動最適化値）")
-        st.code(
-            f"通貨ペア　　: {selected_label}\n"
-            f"売買区分　　: 売\n"
-            f"レンジ下限　: {tp_price:{fmt}}\n"
-            f"レンジ上限　: {sl_price:{fmt}}\n"
-            f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-            f"益出し幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-            f"運用停止ライン: {op_stop_line:{fmt}}\n"
-            f"注文数量　　: {custom_quantity} 通貨",
-            language="text"
-        )
-        st.caption(f"※AI信頼度（{confidence:.1f}%）およびトレンド強度（ADX: {latest_adx:.1f}）を解析し、自動で最適な値幅（{ai_recommended_width} pips）を算出して適用しています。")
-
-        if enable_notify and discord_url:
-            msg = f"【🔴 売りサイン点灯】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\n現在値: {entry_price:{fmt}}\n利確目安: {tp_price:{fmt}}\n損切目安: {sl_price:{fmt}}"
-            send_discord_notification(discord_url, msg)
-
-    else:
-        st.warning(f"🟡 **様子見 (HOLD)** （AI信頼度: {confidence:.1f}%）")
-        st.write("判定理由: 方向性が不鮮明、または信頼度が基準値に達していません。")
 
     st.divider()
     with st.expander("📊 テクニカル指標・学習データの詳細"):
