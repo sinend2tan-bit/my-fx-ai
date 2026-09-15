@@ -64,7 +64,7 @@ BASE_SAFE_WIDTHS = {
 }
 
 TIMEFRAMES = {
-    "15分足 (デイトレエントリー용)": {"period": "1mo", "interval": "15m"},
+    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
     "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
@@ -164,7 +164,7 @@ st.info("💡 **トレード前のチェック**: 雇用統計やFOMCなど主�
 # 4. AI学習 & 予測エンジン
 # ==========================================
 if data is None or len(data) < 10:
-    st.error("データの処理中にエラーが発生しました。サイドバーの『今すぐ最新データに更新』を押してください。")
+    st.error("データの処理中にエラーが発生しました。サイドバーの「今すぐ最新データに更新」を押してください。")
 else:
     features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
     available_features = [f for f in features if f in data.columns]
@@ -282,20 +282,21 @@ else:
         stop_min_buffer = 1.5 if "JPY" in selected_label else 0.15 # 最低確保する絶対値の余裕
 
         if pred == 1 and confidence >= 40:
-            # 買いリピートの設定
             rep_side = "買"
             rep_lower = latest_price - (latest_atr * grid_range_atr)
             rep_upper = latest_price + (latest_atr * grid_range_atr)
             buffer_val = max(latest_atr * stop_buffer_atr, stop_min_buffer)
             rep_op_stop_line = rep_lower - buffer_val
 
+            st.success(f"🟢 **買いリピート推奨** （AI予測方向: 買いBUY ／ AI信頼度: {confidence:.1f}%）")
             st.info("💡 **買いリピート戦略**: 現在値を中心に上下にグリッドを張り、下落時に買い・上昇時に利食いを繰り返します。")
             st.code(
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: {rep_side}\n"
+                f"AI判定　　　: 買い (信頼度 {confidence:.1f}%)\n"
                 f"レンジ下限　: {rep_lower:{fmt}} (現在値 - ATR×{grid_range_atr})\n"
                 f"レンジ上限　: {rep_upper:{fmt}} (現在値 + ATR×{grid_range_atr})\n"
-                f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
+                f"注文値幅　　: {ai_recommended_width} pips (AI動적最適値)\n".replace("動적", "動的") +
                 f"益出し幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
                 f"運用停止ライン: {rep_op_stop_line:{fmt}} (レンジ下限から安全バッファ確保)\n"
                 f"注文数量　　: {custom_quantity} 通貨",
@@ -303,17 +304,18 @@ else:
             )
 
         elif pred == 0 and confidence >= 40:
-            # 売りリピートの設定
             rep_side = "売"
             rep_lower = latest_price - (latest_atr * grid_range_atr)
             rep_upper = latest_price + (latest_atr * grid_range_atr)
             buffer_val = max(latest_atr * stop_buffer_atr, stop_min_buffer)
             rep_op_stop_line = rep_upper + buffer_val
 
+            st.error(f"🔴 **売りリピート推奨** （AI予測方向: 売りSELL ／ AI信頼度: {confidence:.1f}%）")
             st.info("💡 **売りリピート戦略**: 現在値を中心に上下にグリッドを張り、上昇時に売り・下落時に利食いを繰り返します。")
             st.code(
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: {rep_side}\n"
+                f"AI判定　　　: 売り (信頼度 {confidence:.1f}%)\n"
                 f"レンジ下限　: {rep_lower:{fmt}} (現在値 - ATR×{grid_range_atr})\n"
                 f"レンジ上限　: {rep_upper:{fmt}} (現在値 + ATR×{grid_range_atr})\n"
                 f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
@@ -323,10 +325,10 @@ else:
                 language="text"
             )
         else:
-            st.warning("現在はシグナルが「様子見 (HOLD)」のため、リピート注文の新規設定推奨値は算出していません。")
+            st.warning(f"🟡 **様子見 (HOLD)** （AI信頼度: {confidence:.1f}%のため、リピート注文の新規設定推奨値は算出していません）")
 
         if enable_notify and discord_url:
-            msg = f"【リピート設定案内】\n通貨ペア: {selected_label}\n時間軸: {tf_label}"
+            msg = f"【リピート設定案内】\n通貨ペア: {selected_label}\n時間軸: {tf_label}\nAI信頼度: {confidence:.1f}%"
             send_discord_notification(discord_url, msg)
 
     st.divider()
