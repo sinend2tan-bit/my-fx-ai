@@ -41,9 +41,12 @@ BASE_SAFE_WIDTHS = {
     "EURUSD=X": 20,
 }
 
+# 🛠️ 4時間足・12時間足を追加しました（yfinanceの制限により12hは1hや2h等で近似、あるいは4h足を使用します）
 TIMEFRAMES = {
     "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
     "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
+    "4時間足 (中期トレンド用)": {"period": "6mo", "interval": "1h"},  # 4h足に近い分析用として1hデータをベースにします
+    "12時間足 (長期トレンド用)": {"period": "1y", "interval": "1h"},  # 12hトレンド用
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
 
@@ -59,7 +62,6 @@ base_safe_width = BASE_SAFE_WIDTHS.get(ticker, 20)
 
 st.sidebar.header("⚙️ システム設定 & カスタマイズ")
 
-# 修正: 通貨ペアや設定が消えないようにキャッシュだけをクリアしてリフレッシュ
 if st.sidebar.button("🔄 今すぐ最新データに更新"):
     st.cache_data.clear()
     st.rerun()
@@ -72,7 +74,6 @@ refresh_interval = st.sidebar.selectbox(
     index=1
 )
 
-# 松井証券リピート注文設定（資金量・数量）
 st.sidebar.subheader("📋 松井証券リピート注文設定")
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=1000000, step=50000)
 custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100)
@@ -85,12 +86,26 @@ enable_notify = st.sidebar.checkbox("売買サイン確定時に通知", value=F
 # 3. データ取得 & 指標処理
 # ==========================================
 @st.cache_data(ttl=60)
-def load_and_process_data(symbol, period, interval):
+def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
     except:
         pass
+
+    # 4時間足・12時間足が選ばれた場合、1時間足データをリサンプリングして精度を高める処理
+    if not df.empty and ("4時間足" in tf_name or "12時間足" in tf_name) and interval == "1h":
+        try:
+            rule = '4h' if '4時間足' in tf_name else '12h'
+            df = df.resample(rule).agg({
+                'Open': 'first',
+                'High': 'max',
+                'Low': 'min',
+                'Close': 'last',
+                'Volume': 'sum'
+            }).dropna()
+        except:
+            pass
 
     if df.empty or len(df) < 15:
         try:
@@ -117,6 +132,8 @@ def load_and_process_data(symbol, period, interval):
 
         df['Return'] = df['Close'].pct_change()
         df['SMA_20'] = df['Close'].rolling(window=20).mean()
+        # 長期トレンド判定用のSMA_50を追加
+        df['SMA_50'] = df['Close'].rolling(window=50).mean()
         df['Dev_SMA20'] = (df['Close'] - df['SMA_20']) / (df['SMA_20'] + 1e-10)
 
         delta = df['Close'].diff()
@@ -159,7 +176,7 @@ def load_and_process_data(symbol, period, interval):
     except Exception:
         return None
 
-data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'])
+data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
 
 st.info("💡 **相場環境チェック**: 雇用統計・FOMC・CPI等の重要イベント前後は、ボリンジャーバンドのスクイーズ（収縮）から一気にトレンドが反転・急変しやすくなります。突発的な値動きに十分ご注意ください。")
 
@@ -200,6 +217,16 @@ else:
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
     latest_bb_width = data['BB_Width'].iloc[-1] if 'BB_Width' in data.columns else 0.05
 
+    # 📈 長期トレンド判定（日足または12時間足の長期移動平均線との位置関係を判定）
+    latest_close = data['Close'].iloc[-1]
+    sma_50_val = data['SMA_50'].iloc[-1] if 'SMA_50' in data.columns else latest_close
+    if latest_close > sma_50_val * 1.002:
+        long_term_trend = "📈 上昇トレンド (Bullish)"
+    elif latest_close < sma_50_val * 0.998:
+        long_term_trend = "📉 下降トレンド (Bearish)"
+    else:
+        long_term_trend = "➡️ レンジ・方向感なし (Neutral)"
+
     if 45.0 <= confidence <= 55.0:
         market_status = "HOLD"
     elif pred == 1 and confidence > 55.0:
@@ -227,12 +254,15 @@ else:
     ai_recommended_width = max(10, base_safe_width + dynamic_width_adjustment)
 
     st.divider()
-    m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
+    
+    # 📊 メトリクス表示の拡張（長期トレンドを追加）
+    m_col1, m_col2, m_col3, m_col4, m_col5, m_col6 = st.columns(6)
     m_col1.metric("現在レート", f"{latest_price:.3f}")
-    m_col2.metric("RSI (14)", f"{latest_rsi:.1f}")
-    m_col3.metric("ADX (トレンド強度)", f"{latest_adx:.1f}", "🔥強トレンド" if latest_adx > 25 else "💤レンジ・警戒")
-    m_col4.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回的中")
-    m_col5.metric("データ日時", latest_time)
+    m_col2.metric("長期トレンド判定", long_term_trend)
+    m_col3.metric("RSI (14)", f"{latest_rsi:.1f}")
+    m_col4.metric("ADX (トレンド強度)", f"{latest_adx:.1f}", "🔥強トレンド" if latest_adx > 25 else "💤レンジ・警戒")
+    m_col5.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回的中")
+    m_col6.metric("データ日時", latest_time)
 
     st.divider()
 
@@ -359,7 +389,7 @@ else:
 
     st.divider()
     with st.expander("📊 テクニカル指標・学習データの詳細"):
-        st.dataframe(data[available_features + ['ATR', 'BB_Width']].tail(10))
+        st.dataframe(data[available_features + ['ATR', 'BB_Width', 'SMA_50']].tail(10))
 
 if auto_refresh:
     time.sleep(refresh_interval)
