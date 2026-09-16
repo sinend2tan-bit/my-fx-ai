@@ -41,12 +41,11 @@ BASE_SAFE_WIDTHS = {
     "EURUSD=X": 20,
 }
 
-# 🛠️ 4時間足・12時間足を追加しました（yfinanceの制限により12hは1hや2h等で近似、あるいは4h足を使用します）
 TIMEFRAMES = {
     "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
     "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
-    "4時間足 (中期トレンド用)": {"period": "6mo", "interval": "1h"},  # 4h足に近い分析用として1hデータをベースにします
-    "12時間足 (長期トレンド用)": {"period": "1y", "interval": "1h"},  # 12hトレンド用
+    "4時間足 (中期トレンド用)": {"period": "6mo", "interval": "1h"},
+    "12時間足 (長期トレンド用)": {"period": "1y", "interval": "1h"},
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
 
@@ -93,7 +92,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except:
         pass
 
-    # 4時間足・12時間足が選ばれた場合、1時間足データをリサンプリングして精度を高める処理
     if not df.empty and ("4時間足" in tf_name or "12時間足" in tf_name) and interval == "1h":
         try:
             rule = '4h' if '4時間足' in tf_name else '12h'
@@ -132,7 +130,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
         df['Return'] = df['Close'].pct_change()
         df['SMA_20'] = df['Close'].rolling(window=20).mean()
-        # 長期トレンド判定用のSMA_50を追加
         df['SMA_50'] = df['Close'].rolling(window=50).mean()
         df['Dev_SMA20'] = (df['Close'] - df['SMA_20']) / (df['SMA_20'] + 1e-10)
 
@@ -217,15 +214,14 @@ else:
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
     latest_bb_width = data['BB_Width'].iloc[-1] if 'BB_Width' in data.columns else 0.05
 
-    # 📈 長期トレンド判定（日足または12時間足の長期移動平均線との位置関係を判定）
     latest_close = data['Close'].iloc[-1]
     sma_50_val = data['SMA_50'].iloc[-1] if 'SMA_50' in data.columns else latest_close
     if latest_close > sma_50_val * 1.002:
-        long_term_trend = "📈 上昇トレンド (Bullish)"
+        long_term_trend = "📈 上昇 (Bullish)"
     elif latest_close < sma_50_val * 0.998:
-        long_term_trend = "📉 下降トレンド (Bearish)"
+        long_term_trend = "📉 下降 (Bearish)"
     else:
-        long_term_trend = "➡️ レンジ・方向感なし (Neutral)"
+        long_term_trend = "➡️ レンジ (Neutral)"
 
     if 45.0 <= confidence <= 55.0:
         market_status = "HOLD"
@@ -255,11 +251,13 @@ else:
 
     st.divider()
     
-    # 📊 メトリクス表示の拡張（長期トレンドを追加）
-    m_col1, m_col2, m_col3, m_col4, m_col5, m_col6 = st.columns(6)
+    # 📊 メトリクスを2段（3つずつ）に分けて表示し、文字切れを防止
+    m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("現在レート", f"{latest_price:.3f}")
     m_col2.metric("長期トレンド判定", long_term_trend)
     m_col3.metric("RSI (14)", f"{latest_rsi:.1f}")
+
+    m_col4, m_col5, m_col6 = st.columns(3)
     m_col4.metric("ADX (トレンド強度)", f"{latest_adx:.1f}", "🔥強トレンド" if latest_adx > 25 else "💤レンジ・警戒")
     m_col5.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回的中")
     m_col6.metric("データ日時", latest_time)
@@ -351,7 +349,7 @@ else:
             rep_side = "売"
             rep_lower = latest_price - (latest_atr * grid_range_atr)
             rep_upper = latest_price + (latest_atr * grid_range_atr)
-            buffer_val = max(latest_atr * dynamic_stop_multiplier, stop_min_buffer)
+            buffer_val = max(latest_atr * dynamic_store_multiplier if 'dynamic_store_multiplier' in locals() else latest_atr * dynamic_stop_multiplier, stop_min_buffer)
             rep_op_stop_line = rep_upper + buffer_val
 
             st.error(f"🔴 **売りリピート推奨** （AI予測方向: 売りSELL ／ AI信頼度: {confidence:.1f}%）")
@@ -371,7 +369,7 @@ else:
         else:
             st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%のため、新規リピート設定は非推奨です）")
 
-        if 'last_sent_status' not in st.session_state:
+        if 'last_sent_status' not in st.session_date if hasattr(st, 'session_date') else 'last_sent_status' not in st.session_state:
             st.session_state.last_sent_status = None
 
         if enable_notify and discord_url:
