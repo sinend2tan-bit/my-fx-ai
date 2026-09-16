@@ -251,14 +251,16 @@ else:
 
     st.divider()
     
-    # 📊 メトリクスを2段（3つずつ）に分けて表示し、文字切れを防止
-    m_col1, m_col2, m_col3 = st.columns(3)
+    # 📊 メトリクスを「2列×3段」に変更し、iPadなどのタブレットでも絶対に文字が切れないように調整
+    m_col1, m_col2 = st.columns(2)
     m_col1.metric("現在レート", f"{latest_price:.3f}")
     m_col2.metric("長期トレンド判定", long_term_trend)
-    m_col3.metric("RSI (14)", f"{latest_rsi:.1f}")
 
-    m_col4, m_col5, m_col6 = st.columns(3)
+    m_col3, m_col4 = st.columns(2)
+    m_col3.metric("RSI (14)", f"{latest_rsi:.1f}")
     m_col4.metric("ADX (トレンド強度)", f"{latest_adx:.1f}", "🔥強トレンド" if latest_adx > 25 else "💤レンジ・警戒")
+
+    m_col5, m_col6 = st.columns(2)
     m_col5.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回的中")
     m_col6.metric("データ日時", latest_time)
 
@@ -349,7 +351,7 @@ else:
             rep_side = "売"
             rep_lower = latest_price - (latest_atr * grid_range_atr)
             rep_upper = latest_price + (latest_atr * grid_range_atr)
-            buffer_val = max(latest_atr * dynamic_store_multiplier if 'dynamic_store_multiplier' in locals() else latest_atr * dynamic_stop_multiplier, stop_min_buffer)
+            buffer_val = max(latest_atr * dynamic_stop_multiplier, stop_min_buffer)
             rep_op_stop_line = rep_upper + buffer_val
 
             st.error(f"🔴 **売りリピート推奨** （AI予測方向: 売りSELL ／ AI信頼度: {confidence:.1f}%）")
@@ -369,7 +371,7 @@ else:
         else:
             st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%のため、新規リピート設定は非推奨です）")
 
-        if 'last_sent_status' not in st.session_date if hasattr(st, 'session_date') else 'last_sent_status' not in st.session_state:
+        if 'last_sent_status' not in st.session_state:
             st.session_state.last_sent_status = None
 
         if enable_notify and discord_url:
