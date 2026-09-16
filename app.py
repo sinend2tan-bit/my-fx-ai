@@ -70,7 +70,6 @@ TIMEFRAMES = {
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
 
-# 📌 【修正】keyを追加して選択状態を保持するように変更
 col_s1, col_s2 = st.columns(2)
 with col_s1:
     selected_label = st.selectbox("通貨ペアを選択", list(PAIRS.keys()), key="selected_pair_label")
@@ -134,6 +133,7 @@ def load_and_process_data(symbol, period, interval):
         std20 = df['Close'].rolling(window=20).std()
         upper_band = df['SMA_20'] + (std20 * 2)
         lower_band = df['SMA_20'] - (std20 * 2)
+        df['BB_Width'] = (upper_band - lower_band) / (df['SMA_20'] + 1e-10) # バンド幅（急変検知用）
         df['BB_PctB'] = (df['Close'] - lower_band) / ((upper_band - lower_band) + 1e-10)
 
         high_low = df['High'] - df['Low']
@@ -160,13 +160,14 @@ def load_and_process_data(symbol, period, interval):
 
 data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'])
 
-st.info("💡 **トレード前のチェック**: 雇用統計やFOMCなど主要経済指標の発表前後はテクニカル分析が不向きになります。重要指標発表直前のエントリーは控えましょう。")
+# 📌 相場急変リスクや重要イベントへの注意喚起バナー
+st.info("💡 **相場環境チェック**: 雇用統計・FOMC・CPI等の重要イベント前後は、ボリンジャーバンドのスクイーズ（収縮）から一気にトレンドが反転・急変しやすくなります。突発的な値動きに十分ご注意ください。")
 
 # ==========================================
 # 4. AI学習 & 予測エンジン
 # ==========================================
 if data is None or len(data) < 10:
-    st.error("データの処理中にエラーが発生しました。サイドバーの「今すぐ最新データに更新」を押してください。")
+    st.error("データの処理中にエラーが発生しました。サイドバーのガチャ「今すぐ最新データに更新」を押してください。")
 else:
     features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
     available_features = [f for f in features if f in data.columns]
@@ -197,7 +198,9 @@ else:
     confidence = max(prob) * 100
 
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
-    
+    latest_bb_width = data['BB_Width'].iloc[-1] if 'BB_Width' in data.columns else 0.05
+
+    # トレンド不鮮明、またはボラティリティ急変の警戒ゾーン判定
     if 45.0 <= confidence <= 55.0:
         market_status = "HOLD"
     elif pred == 1 and confidence > 55.0:
@@ -228,7 +231,7 @@ else:
     m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
     m_col1.metric("現在レート", f"{latest_price:.3f}")
     m_col2.metric("RSI (14)", f"{latest_rsi:.1f}")
-    m_col3.metric("ADX (トレンド強度)", f"{latest_adx:.1f}", "強トレンド" if latest_adx > 25 else "レンジ傾向")
+    m_col3.metric("ADX (トレンド強度)", f"{latest_adx:.1f}", "🔥強トレンド" if latest_adx > 25 else "💤レンジ・警戒")
     m_col4.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回的中")
     m_col5.metric("データ日時", latest_time)
 
@@ -281,8 +284,8 @@ else:
                 st.metric("損切り目安 (AI最適SL)", f"{sl_price:{fmt}}", f"+{sl_pips:.1f} pips")
                 st.code(f"{sl_price:{fmt}}", language="text")
         else:
-            st.warning(f"🟡 **様子見モード (HOLD - トレンド不鮮明)** （AI信頼度: {confidence:.1f}%）")
-            st.write("💡 **アドバイス**: 相場がどちらに振れるか分からない状態、または方向感が定まっていません。新規エントリーは控え、ポジションの整理や様子見を推奨します。")
+            st.warning(f"🟡 **様子見モード (HOLD - トレンド不鮮明・急変警戒)** （AI信頼度: {confidence:.1f}%）")
+            st.write("💡 **アドバイス**: 相場がどちらに振れるか分からない状態です。指標発表前後のような方向感のない動きや乱高下に注意し、新規エントリーは控えめを推奨します。")
 
     # --- 【タブ2】松井証券リピート注文用 ---
     with tab_repeat:
@@ -344,19 +347,29 @@ else:
             st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%のため、方向感不鮮明としてリピート新規設定は非推奨です）")
             st.write("💡 **アドバイス**: 相場が荒れそう、または方向感が定まらないため、現在は新規のリピート注文を控えるか様子見を推奨します。")
 
+        # ==========================================
+        # 📌 【改良】サインが「切り替わった瞬間」だけ通知を送るロジック
+        # ==========================================
+        if 'last_sent_status' not in st.session_state:
+            st.session_state.last_sent_status = None
+
         if enable_notify and discord_url:
-            if market_status == "BUY":
-                msg = f"🟢 **【買いシグナル確定】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 上昇トレンド優勢。ロング方向のポジションを推奨します。"
-            elif market_status == "SELL":
-                msg = f"🔴 **【売りシグナル確定】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 下降トレンド優勢。ショート方向のポジションを推奨します。"
-            else:
-                msg = f"🟡 **【様子見モード（トレンド不鮮明）】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 方向感が定まっていません。急な値動きに注意し、新規エントリーは控えめを推奨します。"
-            
-            send_discord_notification(discord_url, msg)
+            # 前回とステータスが変わったときだけDiscordに飛ばす
+            if market_status != st.session_state.last_sent_status:
+                if market_status == "BUY":
+                    msg = f"🟢 **【買いシグナル発動】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 上昇トレンド優勢のサインに切り替わりました。"
+                elif market_status == "SELL":
+                    msg = f"🔴 **【売りシグナル発動】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 下降トレンド優勢のサインに切り替わりました。"
+                else:
+                    msg = f"🟡 **【様子見モードへ移行】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 方向感が不鮮明になりました。急な値動きに注意してください。"
+                
+                success = send_discord_notification(discord_url, msg)
+                if success:
+                    st.session_state.last_sent_status = market_status  # 送信成功したら状態を記憶
 
     st.divider()
     with st.expander("📊 テクニカル指標・学習データの詳細"):
-        st.dataframe(data[available_features + ['ATR']].tail(10))
+        st.dataframe(data[available_features + ['ATR', 'BB_Width']].tail(10))
 
 if auto_refresh:
     time.sleep(refresh_interval)
