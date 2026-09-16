@@ -25,29 +25,6 @@ def send_discord_notification(webhook_url, message):
 # ==========================================
 st.title("⚡ Pro AI FX デイトレアナライザー (Ultimate Edition)")
 
-st.sidebar.header("⚙️ システム設定 & カスタマイズ")
-
-if st.sidebar.button("🔄 今すぐ最新データに更新"):
-    st.cache_data.clear()
-    st.rerun()
-
-auto_refresh = st.sidebar.checkbox("自動更新を有効にする", value=False)
-refresh_interval = st.sidebar.selectbox(
-    "更新間隔を選択",
-    options=[60, 180, 300],
-    format_func=lambda x: f"{x // 60}分ごと",
-    index=1
-)
-
-# 松井証券リピート注文設定（資金量・数量）
-st.sidebar.subheader("📋 松井証券リピート注文設定")
-account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=1000000, step=50000)
-custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100)
-
-st.sidebar.subheader("📱 Discord通知設定 (オプション)")
-discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
-enable_notify = st.sidebar.checkbox("売買サイン確定時に通知", value=False)
-
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
     "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
@@ -79,6 +56,30 @@ with col_s2:
 ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
 base_safe_width = BASE_SAFE_WIDTHS.get(ticker, 20)
+
+st.sidebar.header("⚙️ システム設定 & カスタマイズ")
+
+# 修正: 通貨ペアや設定が消えないようにキャッシュだけをクリアしてリフレッシュ
+if st.sidebar.button("🔄 今すぐ最新データに更新"):
+    st.cache_data.clear()
+    st.rerun()
+
+auto_refresh = st.sidebar.checkbox("自動更新を有効にする", value=False)
+refresh_interval = st.sidebar.selectbox(
+    "更新間隔を選択",
+    options=[60, 180, 300],
+    format_func=lambda x: f"{x // 60}분ごと" if "분" in f"{x // 60}" else f"{x // 60}分ごと",
+    index=1
+)
+
+# 松井証券リピート注文設定（資金量・数量）
+st.sidebar.subheader("📋 松井証券リピート注文設定")
+account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=1000000, step=50000)
+custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100)
+
+st.sidebar.subheader("📱 Discord通知設定 (オプション)")
+discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
+enable_notify = st.sidebar.checkbox("売買サイン確定時に通知", value=False)
 
 # ==========================================
 # 3. データ取得 & 指標処理
@@ -133,7 +134,7 @@ def load_and_process_data(symbol, period, interval):
         std20 = df['Close'].rolling(window=20).std()
         upper_band = df['SMA_20'] + (std20 * 2)
         lower_band = df['SMA_20'] - (std20 * 2)
-        df['BB_Width'] = (upper_band - lower_band) / (df['SMA_20'] + 1e-10) # バンド幅（急変検知用）
+        df['BB_Width'] = (upper_band - lower_band) / (df['SMA_20'] + 1e-10)
         df['BB_PctB'] = (df['Close'] - lower_band) / ((upper_band - lower_band) + 1e-10)
 
         high_low = df['High'] - df['Low']
@@ -160,14 +161,13 @@ def load_and_process_data(symbol, period, interval):
 
 data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'])
 
-# 📌 相場急変リスクや重要イベントへの注意喚起バナー
 st.info("💡 **相場環境チェック**: 雇用統計・FOMC・CPI等の重要イベント前後は、ボリンジャーバンドのスクイーズ（収縮）から一気にトレンドが反転・急変しやすくなります。突発的な値動きに十分ご注意ください。")
 
 # ==========================================
 # 4. AI学習 & 予測エンジン
 # ==========================================
 if data is None or len(data) < 10:
-    st.error("データの処理中にエラーが発生しました。サイドバーのガチャ「今すぐ最新データに更新」を押してください。")
+    st.error("データの処理中にエラーが発生しました。サイドバーの「今すぐ最新データに更新」を押してください。")
 else:
     features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
     available_features = [f for f in features if f in data.columns]
@@ -200,7 +200,6 @@ else:
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
     latest_bb_width = data['BB_Width'].iloc[-1] if 'BB_Width' in data.columns else 0.05
 
-    # トレンド不鮮明、またはボラティリティ急変の警戒ゾーン判定
     if 45.0 <= confidence <= 55.0:
         market_status = "HOLD"
     elif pred == 1 and confidence > 55.0:
@@ -238,11 +237,10 @@ else:
     st.divider()
 
     # ==========================================
-    # 5. タブ分けによる表示（単発トレード用 vs 松井証券リピート注文用）
+    # 5. タブ分けによる表示
     # ==========================================
     tab_single, tab_repeat = st.tabs(["🎯 デイトレ単発トレード用", "📋 松井証券リピート注文用"])
 
-    # --- 【タブ1】デイトレ単発トレード用 ---
     with tab_single:
         st.subheader("🎯 デイトレ単発トレード（指値・逆指値）パラメータ")
         
@@ -285,9 +283,8 @@ else:
                 st.code(f"{sl_price:{fmt}}", language="text")
         else:
             st.warning(f"🟡 **様子見モード (HOLD - トレンド不鮮明・急変警戒)** （AI信頼度: {confidence:.1f}%）")
-            st.write("💡 **アドバイス**: 相場がどちらに振れるか分からない状態です。指標発表前後のような方向感のない動きや乱高下に注意し、新規エントリーは控えめを推奨します。")
+            st.write("💡 **アドバイス**: 相場がどちらに振れるか分からない状態です。新規エントリーは控えめを推奨します。")
 
-    # --- 【タブ2】松井証券リピート注文用 ---
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
         
@@ -306,16 +303,15 @@ else:
             rep_op_stop_line = rep_lower - buffer_val
 
             st.success(f"🟢 **買いリピート推奨** （AI予測方向: 買いBUY ／ AI信頼度: {confidence:.1f}%）")
-            st.info("💡 **買いリピート戦略**: 現在値を中心に上下にグリッドを張り、下落時に買い・上昇時に利食いを繰り返します。")
             st.code(
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: {rep_side}\n"
                 f"AI判定　　　: 買い (信頼度 {confidence:.1f}%)\n"
-                f"レンジ下限　: {rep_lower:{fmt}} (現在値 - ATR×{grid_range_atr})\n"
-                f"レンジ上限　: {rep_upper:{fmt}} (現在値 + ATR×{grid_range_atr})\n"
-                f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-                f"益出し幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-                f"運用停止ライン: {rep_op_stop_line:{fmt}} (資金・数量連動セーフティ: ATR×{dynamic_stop_multiplier:.1f}適用)\n"
+                f"レンジ下限　: {rep_lower:{fmt}}\n"
+                f"レンジ上限　: {rep_upper:{fmt}}\n"
+                f"注文値幅　　: {ai_recommended_width} pips\n"
+                f"益出し幅　　: {ai_recommended_width} pips\n"
+                f"運用停止ライン: {rep_op_stop_line:{fmt}}\n"
                 f"注文数量　　: {custom_quantity} 通貨\n"
                 f"考慮口座資金: ¥{account_balance:,}",
                 language="text"
@@ -329,43 +325,37 @@ else:
             rep_op_stop_line = rep_upper + buffer_val
 
             st.error(f"🔴 **売りリピート推奨** （AI予測方向: 売りSELL ／ AI信頼度: {confidence:.1f}%）")
-            st.info("💡 **売りリピート戦略**: 現在値を中心に上下にグリッドを張り、上昇時に売り・下落時に利食いを繰り返します。")
             st.code(
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: {rep_side}\n"
                 f"AI判定　　　: 売り (信頼度 {confidence:.1f}%)\n"
-                f"レンジ下限　: {rep_lower:{fmt}} (現在値 - ATR×{grid_range_atr})\n"
-                f"レンジ上限　: {rep_upper:{fmt}} (現在値 + ATR×{grid_range_atr})\n"
-                f"注文値幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-                f"益出し幅　　: {ai_recommended_width} pips (AI動的最適値)\n"
-                f"運用停止ライン: {rep_op_stop_line:{fmt}} (資金・数量連動セーフティ: ATR×{dynamic_stop_multiplier:.1f}適用)\n"
+                f"レンジ下限　: {rep_lower:{fmt}}\n"
+                f"レンジ上限　: {rep_upper:{fmt}}\n"
+                f"注文値幅　　: {ai_recommended_width} pips\n"
+                f"益出し幅　　: {ai_recommended_width} pips\n"
+                f"運用停止ライン: {rep_op_stop_line:{fmt}}\n"
                 f"注文数量　　: {custom_quantity} 通貨\n"
                 f"考慮口座資金: ¥{account_balance:,}",
                 language="text"
             )
         else:
-            st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%のため、方向感不鮮明としてリピート新規設定は非推奨です）")
-            st.write("💡 **アドバイス**: 相場が荒れそう、または方向感が定まらないため、現在は新規のリピート注文を控えるか様子見を推奨します。")
+            st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%のため、新規リピート設定は非推奨です）")
 
-        # ==========================================
-        # 📌 【改良】サインが「切り替わった瞬間」だけ通知を送るロジック
-        # ==========================================
         if 'last_sent_status' not in st.session_state:
             st.session_state.last_sent_status = None
 
         if enable_notify and discord_url:
-            # 前回とステータスが変わったときだけDiscordに飛ばす
             if market_status != st.session_state.last_sent_status:
                 if market_status == "BUY":
-                    msg = f"🟢 **【買いシグナル発動】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 上昇トレンド優勢のサインに切り替わりました。"
+                    msg = f"🟢 **【買いシグナル発動】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%"
                 elif market_status == "SELL":
-                    msg = f"🔴 **【売りシグナル発動】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 下降トレンド優勢のサインに切り替わりました。"
+                    msg = f"🔴 **【売りシグナル発動】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%"
                 else:
-                    msg = f"🟡 **【様子見モードへ移行】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%\n• アドバイス: 方向感が不鮮明になりました。急な値動きに注意してください。"
+                    msg = f"🟡 **【様子見モードへ移行】**\n• 通貨ペア: {selected_label}\n• 時間軸: {tf_label}\n• AI信頼度: {confidence:.1f}%"
                 
                 success = send_discord_notification(discord_url, msg)
                 if success:
-                    st.session_state.last_sent_status = market_status  # 送信成功したら状態を記憶
+                    st.session_state.last_sent_status = market_status
 
     st.divider()
     with st.expander("📊 テクニカル指標・学習データの詳細"):
