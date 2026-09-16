@@ -5,8 +5,9 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 import requests
 import time
+from datetime import datetime
 
-st.set_page_config(page_title="プロ版 AI FXデイトレアナライザー Ultimate", layout="wide")
+st.set_page_config(page_title="プロ版 AI FXデイトレアナライザー Ultimate Pro", layout="wide")
 
 # ==========================================
 # 1. 通知ヘルパー関数 (Discord)
@@ -23,7 +24,7 @@ def send_discord_notification(webhook_url, message):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレアナライザー (Ultimate Edition)")
+st.title("⚡ Pro AI FX デイトレアナライザー (Ultimate Pro Edition)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -82,7 +83,7 @@ discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
 enable_notify = st.sidebar.checkbox("売買サイン確定時に通知", value=False)
 
 # ==========================================
-# 3. データ取得 & 指標処理
+# 3. データ取得 & 指標処理（全機能統合版）
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -175,10 +176,18 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
 data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
 
-st.info("💡 **相場環境チェック**: 雇用統計・FOMC・CPI等の重要イベント前後は、ボリンジャーバンドのスクイーズ（収縮）から一気にトレンドが反転・急変しやすくなります。突発的な値動きに十分ご注意ください。")
+# ==========================================
+# 4. 新機能チェック（流動性 ＆ スクイーズ検知）
+# ==========================================
+current_hour_jst = datetime.now().hour # ※サーバー環境やローカル環境のJST目安
+# 流動性チェック（日本時間の早朝 3時〜7時頃はスプレッド拡大やノイズに注意）
+is_low_liquidity = 3 <= current_hour_jst <= 7
+
+if is_low_liquidity:
+    st.warning("⚠️ **【流動性低下タイムゾーン警告】**: 現在はオセアニア時間帯の早朝です。スプレッドが広がりやすく、予期せぬノイズでAIのダマシが発生しやすいため慎重なトレードを推奨します。")
 
 # ==========================================
-# 4. AI学習 & 予測エンジン
+# 5. AI学習 & 予測エンジン
 # ==========================================
 if data is None or len(data) < 10:
     st.error("データの処理中にエラーが発生しました。サイドバーの「今すぐ最新データに更新」を押してください。")
@@ -195,12 +204,20 @@ else:
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
 
+    # バックテスト履歴のシミュレーション計算用
     test_len = min(30, len(X_train) - 5)
+    cumulative_wins = []
     if test_len > 3:
         X_test_hist = X_train.iloc[-test_len:]
         y_test_hist = y_train.iloc[-test_len:]
         preds_hist = model.predict(X_test_hist)
-        correct_count = int((preds_hist == y_test_hist).sum())
+        
+        correct_count = 0
+        for i, (p, actual) in enumerate(zip(preds_hist, y_test_hist)):
+            if p == actual:
+                correct_count += 1
+            cumulative_wins.append((i + 1, (correct_count / (i + 1)) * 100))
+            
         win_rate = (correct_count / test_len) * 100
     else:
         win_rate = 50.0
@@ -213,6 +230,10 @@ else:
 
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
     latest_bb_width = data['BB_Width'].iloc[-1] if 'BB_Width' in data.columns else 0.05
+
+    # 新機能：ボリンジャーバンドのスクイーズ（収縮）判定（BB_Widthが過去平均より低い場合に発動）
+    avg_bb_width = data['BB_Width'].rolling(window=20).mean().iloc[-1] if 'BB_Width' in data.columns else 0.05
+    is_squeezed = latest_bb_width < (avg_bb_width * 0.8)
 
     latest_close = data['Close'].iloc[-1]
     sma_50_val = data['SMA_50'].iloc[-1] if 'SMA_50' in data.columns else latest_close
@@ -249,9 +270,12 @@ else:
     dynamic_width_adjustment = int(round((confidence - 50) / 10)) * 2
     ai_recommended_width = max(10, base_safe_width + dynamic_width_adjustment)
 
+    if is_squeezed:
+        st.error("⚡ **【ボラティリティ急変・スクイーズ検知】**: ボリンジャーバンドが収縮（スクイーズ）しています。まもなく上下どちらかに強烈なトレンドが爆発（エクスパンション）する可能性が高いため、ブレイクアウトに十分ご注意ください！")
+
     st.divider()
     
-    # 📊 メトリクスを「2列×3段」に変更し、iPadなどのタブレットでも絶対に文字が切れないように調整
+    # 📊 メトリクス表示（2列×3段レイアウト）
     m_col1, m_col2 = st.columns(2)
     m_col1.metric("現在レート", f"{latest_price:.3f}")
     m_col2.metric("長期トレンド判定", long_term_trend)
@@ -267,9 +291,14 @@ else:
     st.divider()
 
     # ==========================================
-    # 5. タブ分けによる表示
+    # 6. タブ切り替え（新機能：一括スキャン＆バックテストを追加）
     # ==========================================
-    tab_single, tab_repeat = st.tabs(["🎯 デイトレ単発トレード用", "📋 松井証券リピート注文用"])
+    tab_single, tab_repeat, tab_scanner, tab_backtest = st.tabs([
+        "🎯 デイトレ単発トレード用", 
+        "📋 松井証券リピート注文用", 
+        "🔍 全通貨ペア一括スキャン", 
+        "📈 AIバックテスト検証"
+    ])
 
     with tab_single:
         st.subheader("🎯 デイトレ単発トレード（指値・逆指値）パラメータ")
@@ -386,6 +415,54 @@ else:
                 success = send_discord_notification(discord_url, msg)
                 if success:
                     st.session_state.last_sent_status = market_status
+
+    with tab_scanner:
+        st.subheader("🔍 全監視通貨ペア AIスコア・一括スキャン")
+        st.write("現在登録されているすべての通貨ペアの状況を一括でスキャンし、チャンスのあるペアをランキング形式で表示します。")
+        
+        if st.button("🚀 全ペアを一括スキャン実行"):
+            scan_results = []
+            with st.spinner("各通貨ペアのAI予測モデルを計算中..."):
+                for p_label, p_symbol in PAIRS.items():
+                    sub_df = load_and_process_data(p_symbol, tf_config['period'], tf_config['interval'], tf_label)
+                    if sub_df is not None and len(sub_df) > 10:
+                        sub_X = sub_df[available_features]
+                        sub_y = sub_df['Target']
+                        sub_model = RandomForestClassifier(n_estimators=50, random_state=42)
+                        sub_model.fit(sub_X.iloc[:-1], sub_y.iloc[:-1])
+                        
+                        s_pred = sub_model.predict(sub_X.iloc[[-1]])[0]
+                        s_prob = sub_model.predict_proba(sub_X.iloc[[-1]])[0]
+                        s_conf = max(s_prob) * 100
+                        s_adx = sub_df['ADX'].iloc[-1] if 'ADX' in sub_df.columns else 20.0
+                        
+                        direction = "買い (BUY)" if s_pred == 1 else "売り (SELL)"
+                        if 45 <= s_conf <= 55:
+                            direction = "様子見 (HOLD)"
+                            
+                        scan_results.append({
+                            "通貨ペア": p_label,
+                            "AI推奨方向": direction,
+                            "信頼度 (%)": round(s_conf, 1),
+                            "ADX (トレンド強度)": round(s_adx, 1)
+                        })
+            
+            if scan_results:
+                res_df = pd.DataFrame(scan_results).sort_values(by="信頼度 (%)", ascending=False)
+                st.dataframe(res_df, use_container_width=True)
+        else:
+            st.info("上のボタンを押すと、全通貨ペアの現在のAI予測信頼度とトレンド強度を一斉にスキャンできます。")
+
+    with tab_backtest:
+        st.subheader("📈 直近AI予測モデルの累積勝率バックテスト")
+        st.write(f"選択中の時間軸（{tf_label}）における、直近 {test_len} 本のローソク足でのAI予測の的中推移です。")
+        
+        if cumulative_wins:
+            cb_df = pd.DataFrame(cumulative_wins, columns=["検証ステップ (直近からの経過)", "累積勝率 (%)"]).set_index("検証ステップ (直近からの経過)")
+            st.line_chart(cb_df)
+            st.metric("最終テスト勝率", f"{win_rate:.1f}%", f"{correct_count}勝 / {test_len}戦")
+        else:
+            st.warning("十分な過去データがありません。")
 
     st.divider()
     with st.expander("📊 テクニカル指標・学習データの詳細"):
