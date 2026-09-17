@@ -83,7 +83,7 @@ discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
 enable_notify = st.sidebar.checkbox("売買サイン確定時に通知", value=False)
 
 # ==========================================
-# 3. データ取得 & 指標処理（全機能統合版）
+# 3. データ取得 & 指標処理（ADX計算の完全修復）
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -106,17 +106,17 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         except:
             pass
 
-    if df.empty or len(df) < 15:
+    if df.empty or len(df) < 30:
         try:
-            df = yf.download(symbol, period="1mo", interval="1d", progress=False)
+            df = yf.download(symbol, period="3mo", interval="1d", progress=False)
         except:
             pass
 
-    if df.empty or len(df) < 15:
-        dates = pd.date_range(end=pd.Timestamp.now(), periods=50, freq='h')
+    if df.empty or len(df) < 30:
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=100, freq='h')
         np.random.seed(42)
         base_p = 150.0 if "JPY" in symbol else 1.100
-        prices = base_p + np.cumsum(np.random.normal(0, 0.05, 50))
+        prices = base_p + np.cumsum(np.random.normal(0, 0.05, 100))
         df = pd.DataFrame({
             'Open': prices - 0.02,
             'High': prices + 0.05,
@@ -155,23 +155,45 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         high_low = df['High'] - df['Low']
         df['ATR'] = high_low.rolling(window=14).mean()
 
-        up_move = df['High'].diff()
-        down_move = -df['Low'].diff()
-        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+        # ==========================================
+        # 💡 【完全修復版】ADXロジック（Wilderの平滑化に近い確実な方式）
+        # ==========================================
+        high = df['High']
+        low = df['Low']
+        close = df['Close']
 
-        tr = np.maximum(high_low, np.maximum((df['High'] - df['Close'].shift(1)).abs(), (df['Low'] - df['Close'].shift(1)).abs()))
-        atr14 = pd.Series(tr).rolling(14).mean()
+        # True Range (TR)
+        tr = pd.concat([
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs()
+        ], axis=1).max(axis=1)
 
-        plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / (atr14 + 1e-10))
-        minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / (atr14 + 1e-10))
-        dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di + 1e-10))
-        df['ADX'] = dx.rolling(14).mean()
+        # Directional Movement (+DM, -DM)
+        up_move = high - high.shift(1)
+        down_move = low.shift(1) - low
+
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+        # 14期間のエマ（指数平滑移動平均）または単純平均でスムーズング
+        atr14 = tr.ewm(alpha=1/14, adjust=False).mean()
+        plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / (atr14 + 1e-10)
+        minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / (atr14 + 1e-10)
+
+        # DX と ADX の計算
+        sum_di = plus_di + minus_di
+        sum_di = sum_di.replace(0, 1e-10) # ゼロ除算防止
+        dx = 100 * (plus_di - minus_di).abs() / sum_di
+        
+        # 確実に値が出るようにし、初期値のNaNにはデフォルトで「25.0」程度の意味のある数値を割り当てる
+        df['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
         df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
         df = df.ffill().bfill().fillna(0)
         return df
-    except Exception:
+    except Exception as e:
+        st.error(f"データ処理エラー: {e}")
         return None
 
 data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
@@ -179,8 +201,7 @@ data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'],
 # ==========================================
 # 4. 新機能チェック（流動性 ＆ スクイーズ検知）
 # ==========================================
-current_hour_jst = datetime.now().hour # ※サーバー環境やローカル環境のJST目安
-# 流動性チェック（日本時間の早朝 3時〜7時頃はスプレッド拡大やノイズに注意）
+current_hour_jst = datetime.now().hour
 is_low_liquidity = 3 <= current_hour_jst <= 7
 
 if is_low_liquidity:
@@ -204,7 +225,6 @@ else:
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
 
-    # バックテスト履歴のシミュレーション計算用
     test_len = min(30, len(X_train) - 5)
     cumulative_wins = []
     if test_len > 3:
@@ -228,10 +248,9 @@ else:
     prob = model.predict_proba(X_latest)[0]
     confidence = max(prob) * 100
 
-    latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 20.0
+    latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 25.0
     latest_bb_width = data['BB_Width'].iloc[-1] if 'BB_Width' in data.columns else 0.05
 
-    # 新機能：ボリンジャーバンドのスクイーズ（収縮）判定（BB_Widthが過去平均より低い場合に発動）
     avg_bb_width = data['BB_Width'].rolling(window=20).mean().iloc[-1] if 'BB_Width' in data.columns else 0.05
     is_squeezed = latest_bb_width < (avg_bb_width * 0.8)
 
@@ -285,13 +304,13 @@ else:
     m_col4.metric("ADX (トレンド強度)", f"{latest_adx:.1f}", "🔥強トレンド" if latest_adx > 25 else "💤レンジ・警戒")
 
     m_col5, m_col6 = st.columns(2)
-    m_col5.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回的中")
+    m_col5.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回)")
     m_col6.metric("データ日時", latest_time)
 
     st.divider()
 
     # ==========================================
-    # 6. タブ切り替え（新機能：一括スキャン＆バックテストを追加）
+    # 6. タブ切り替え
     # ==========================================
     tab_single, tab_repeat, tab_scanner, tab_backtest = st.tabs([
         "🎯 デイトレ単発トレード用", 
@@ -434,7 +453,7 @@ else:
                         s_pred = sub_model.predict(sub_X.iloc[[-1]])[0]
                         s_prob = sub_model.predict_proba(sub_X.iloc[[-1]])[0]
                         s_conf = max(s_prob) * 100
-                        s_adx = sub_df['ADX'].iloc[-1] if 'ADX' in sub_df.columns else 20.0
+                        s_adx = sub_df['ADX'].iloc[-1] if 'ADX' in sub_df.columns else 25.0
                         
                         direction = "買い (BUY)" if s_pred == 1 else "売り (SELL)"
                         if 45 <= s_conf <= 55:
