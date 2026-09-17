@@ -75,7 +75,7 @@ refresh_interval = st.sidebar.selectbox(
 )
 
 st.sidebar.subheader("📋 松井証券リピート注文設定")
-account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=1000000, step=50000)
+account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=100000, step=10000)
 custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100)
 
 st.sidebar.subheader("📱 Discord通知設定 (オプション)")
@@ -83,7 +83,7 @@ discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
 enable_notify = st.sidebar.checkbox("売買サイン確定時に通知", value=False)
 
 # ==========================================
-# 3. データ取得 & 指標処理（ADX計算の完全修復）
+# 3. データ取得 & 指標処理（ADX計算修復版）
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -155,38 +155,30 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         high_low = df['High'] - df['Low']
         df['ATR'] = high_low.rolling(window=14).mean()
 
-        # ==========================================
-        # 💡 【完全修復版】ADXロジック（Wilderの平滑化に近い確実な方式）
-        # ==========================================
         high = df['High']
         low = df['Low']
         close = df['Close']
 
-        # True Range (TR)
         tr = pd.concat([
             high - low,
             (high - close.shift(1)).abs(),
             (low - close.shift(1)).abs()
         ], axis=1).max(axis=1)
 
-        # Directional Movement (+DM, -DM)
         up_move = high - high.shift(1)
         down_move = low.shift(1) - low
 
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
 
-        # 14期間のエマ（指数平滑移動平均）または単純平均でスムーズング
         atr14 = tr.ewm(alpha=1/14, adjust=False).mean()
         plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / (atr14 + 1e-10)
         minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / (atr14 + 1e-10)
 
-        # DX と ADX の計算
         sum_di = plus_di + minus_di
-        sum_di = sum_di.replace(0, 1e-10) # ゼロ除算防止
+        sum_di = sum_di.replace(0, 1e-10)
         dx = 100 * (plus_di - minus_di).abs() / sum_di
         
-        # 確実に値が出るようにし、初期値のNaNにはデフォルトで「25.0」程度の意味のある数値を割り当てる
         df['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
         df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
@@ -294,7 +286,7 @@ else:
 
     st.divider()
     
-    # 📊 メトリクス表示（2列×3段レイアウト）
+    # 📊 メトリクス表示
     m_col1, m_col2 = st.columns(2)
     m_col1.metric("現在レート", f"{latest_price:.3f}")
     m_col2.metric("長期トレンド判定", long_term_trend)
@@ -329,7 +321,7 @@ else:
             tp_pips = (tp_price - entry_price) / pip_unit
             sl_pips = (entry_price - sl_price) / pip_unit
 
-            st.success(f"🟢 **買いシグナル確定 (BUY)** （AI信頼度: {confidence:.1f}% ／ 最適TP倍率: {ai_tp_mult}x ／ 最適SL倍率: {ai_sl_mult}x）")
+            st.success(f"🟢 **買いシグナル確定 (BUY)** （AI信頼度: {confidence:.1f}%）")
             t_col1, t_col2, t_col3 = st.columns(3)
             with t_col1:
                 st.metric("新規買い目安 (Entry)", f"{entry_price:{fmt}}")
@@ -348,7 +340,7 @@ else:
             tp_pips = (entry_price - tp_price) / pip_unit
             sl_pips = (sl_price - entry_price) / pip_unit
 
-            st.error(f"🔴 **売りシグナル確定 (SELL)** （AI信頼度: {confidence:.1f}% ／ 最適TP倍率: {ai_tp_mult}x ／ 最適SL倍率: {ai_sl_mult}x）")
+            st.error(f"🔴 **売りシグナル確定 (SELL)** （AI信頼度: {confidence:.1f}%）")
             t_col1, t_col2, t_col3 = st.columns(3)
             with t_col1:
                 st.metric("新規売り目安 (Entry)", f"{entry_price:{fmt}}")
@@ -360,60 +352,75 @@ else:
                 st.metric("損切り目安 (AI最適SL)", f"{sl_price:{fmt}}", f"+{sl_pips:.1f} pips")
                 st.code(f"{sl_price:{fmt}}", language="text")
         else:
-            st.warning(f"🟡 **様子見モード (HOLD - トレンド不鮮明・急変警戒)** （AI信頼度: {confidence:.1f}%）")
-            st.write("💡 **アドバイス**: 相場がどちらに振れるか分からない状態です。新規エントリーは控えめを推奨します。")
+            st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%）")
 
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
+        st.write("💡 入力された「口座資金」の範囲内に自動で収まる安全なレンジ幅・注文数量を逆算して表示しています。")
         
-        risk_per_unit = custom_quantity * latest_price * 0.04 
-        fund_ratio = account_balance / max(risk_per_unit, 1.0)
-        dynamic_stop_multiplier = float(np.clip(2.0 + (fund_ratio / 500.0), 2.0, 5.0))
-
-        grid_range_atr = 1.5  
-        stop_min_buffer = 1.5 if "JPY" in selected_label else 0.15 
+        # ==========================================
+        # 💡 【自動安全レンジ計算ロジック】
+        # 口座資金（例:10万円）と注文数量（例:100通貨）で確実に証拠金エラーが起きないようレンジ幅を自動制限
+        # ==========================================
+        is_jpy_pair = "JPY" in selected_label
+        leverage = 25.0
+        # 1通貨あたりの必要証拠金の目安（例: USD/JPY 150円なら約6円/1通貨）
+        margin_per_unit = latest_price / leverage
+        
+        # 口座資金で保有できる最大のおおよその総通貨量（安全率0.7をかけてバッファを確保）
+        max_safe_total_units = (account_balance * 0.7) / max(margin_per_unit, 1.0)
+        max_allowable_grids = max(5, int(max_safe_total_units / max(custom_quantity, 1)))
+        
+        # グリッド数から逆算した安全なレンジ幅 (pips単位)
+        max_safe_range_pips = max_allowable_grids * ai_recommended_width
+        
+        # 通貨ペアに応じた安全な上限レンジ幅のキャップ（円ペアなら最大約1.5円〜2.0円幅程度に安全制限）
+        cap_pips = 150 if is_jpy_pair else 1500
+        safe_range_pips = min(max_safe_range_pips, cap_pips)
+        
+        half_range = (safe_range_pips * pip_unit) / 2.0
 
         if market_status == "BUY":
             rep_side = "買"
-            rep_lower = latest_price - (latest_atr * grid_range_atr)
-            rep_upper = latest_price + (latest_atr * grid_range_atr)
-            buffer_val = max(latest_atr * dynamic_stop_multiplier, stop_min_buffer)
-            rep_op_stop_line = rep_lower - buffer_val
+            rep_lower = round(latest_price - half_range, 3 if not is_jpy_pair else 3)
+            rep_upper = round(latest_price + half_range, 3 if not is_jpy_pair else 3)
+            buffer_val = max(latest_atr * 2.0, 0.5 if is_jpy_pair else 0.05)
+            rep_op_stop_line = round(rep_lower - buffer_val, 3 if not is_jpy_pair else 3)
 
-            st.success(f"🟢 **買いリピート推奨** （AI予測方向: 買いBUY ／ AI信頼度: {confidence:.1f}%）")
+            st.success(f"🟢 **買いリピート推奨** （資金連動・安全レンジ自動調整済み）")
             st.code(
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: {rep_side}\n"
                 f"AI判定　　　: 買い (信頼度 {confidence:.1f}%)\n"
-                f"レンジ下限　: {rep_lower:{fmt}}\n"
-                f"レンジ上限　: {rep_upper:{fmt}}\n"
+                f"レンジ下限　: {rep_lower}\n"
+                f"レンジ上限　: {rep_upper}\n"
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
-                f"運用停止ライン: {rep_op_stop_line:{fmt}}\n"
+                f"運用停止ライン: {rep_op_stop_line}\n"
                 f"注文数量　　: {custom_quantity} 通貨\n"
-                f"考慮口座資金: ¥{account_balance:,}",
+                f"考慮口座資金: ¥{account_balance:,} （※資金オーバー防止安全モード適用中）",
                 language="text"
             )
 
         elif market_status == "SELL":
             rep_side = "売"
-            rep_lower = latest_price - (latest_atr * grid_range_atr)
-            rep_upper = latest_price + (latest_atr * grid_range_atr)
-            buffer_val = max(latest_atr * dynamic_stop_multiplier, stop_min_buffer)
-            rep_op_stop_line = rep_upper + buffer_val
+            rep_lower = round(latest_price - half_range, 3 if not is_jpy_pair else 3)
+            rep_upper = round(latest_price + half_range, 3 if not is_jpy_pair else 3)
+            buffer_val = max(latest_atr * 2.0, 0.5 if is_jpy_pair else 0.05)
+            rep_op_stop_line = round(rep_upper + buffer_val, 3 if not is_jpy_pair else 3)
 
-            st.error(f"🔴 **売りリピート推奨** （AI予測方向: 売りSELL ／ AI信頼度: {confidence:.1f}%）")
+            st.error(f"🔴 **売りリピート推奨** （資金連動・安全レンジ自動調整済み）")
             st.code(
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: {rep_side}\n"
                 f"AI判定　　　: 売り (信頼度 {confidence:.1f}%)\n"
-                f"レンジ下限　: {rep_lower:{fmt}}\n"
-                f"レンジ上限　: {rep_upper:{fmt}}\n"
+                f"レンジ下限　: {rep_lower}\n"
+                f"レンジ上限　: {rep_upper}\n"
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
-                f"運用停止ライン: {rep_op_stop_line:{fmt}}\n"
+                f"運用停止ライン: {rep_op_stop_line}\n"
                 f"注文数量　　: {custom_quantity} 通貨\n"
-                f"考慮口座資金: ¥{account_balance:,}",
+                f"考慮口座資金: ¥{account_balance:,} （※資金オーバー防止安全モード適用中）",
                 language="text"
             )
         else:
@@ -437,8 +444,6 @@ else:
 
     with tab_scanner:
         st.subheader("🔍 全監視通貨ペア AIスコア・一括スキャン")
-        st.write("現在登録されているすべての通貨ペアの状況を一括でスキャンし、チャンスのあるペアをランキング形式で表示します。")
-        
         if st.button("🚀 全ペアを一括スキャン実行"):
             scan_results = []
             with st.spinner("各通貨ペアのAI予測モデルを計算中..."):
