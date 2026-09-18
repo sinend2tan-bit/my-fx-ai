@@ -87,7 +87,7 @@ refresh_interval = st.sidebar.selectbox(
 st.sidebar.subheader("📋 松井証券トレード設定")
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=200000, step=10000, key="input_account_balance")
 
-# 万通貨単位に入力を変更（初期値 0.02 = 200通貨）
+# 万通貨単位に入力を統一（初期値 0.02 = 200通貨）
 quantity_wan = st.sidebar.number_input(
     "注文数量 (万通貨)", 
     min_value=0.0001, 
@@ -98,7 +98,7 @@ quantity_wan = st.sidebar.number_input(
     key="input_quantity_wan"
 )
 
-# 計算用（通貨単位換算）
+# 通貨換算（内部計算用）
 custom_quantity = int(round(quantity_wan * 10000))
 
 st.sidebar.subheader("📱 アラート通知設定 (Discord)")
@@ -256,13 +256,19 @@ data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'],
 higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足 (スイング・環境認識用)")
 
 # ==========================================
-# 4. 時間帯・イベント危険度フィルター
+# 4. 時間帯・週末市場クローズ判定
 # ==========================================
-current_hour_jst = datetime.now().hour
+now_datetime = datetime.now()
+current_day = now_datetime.weekday()  # 5: 土曜日, 6: 日曜日
+current_hour_jst = now_datetime.hour
+
+is_weekend = (current_day == 5 and current_hour_jst >= 6) or (current_day == 6) or (current_day == 0 and current_hour_jst < 6)
 is_low_liquidity = 3 <= current_hour_jst <= 7
 is_ny_open = 21 <= current_hour_jst <= 23
 
-if is_low_liquidity:
+if is_weekend:
+    st.error("🛑 **【週末・為替市場クローズ中】**: 現在外国為替市場は休業時間帯です。表示価格は最終クローズ値となります。新規注文の発注にご注意ください。")
+elif is_low_liquidity:
     st.warning("⚠️ **【流動性低下タイムゾーン】**: オセアニア時間の早朝です。スプレッド拡大および急変動リスクにご注意ください。")
 elif is_ny_open:
     st.info("🔥 **【NY市場オープンタイムゾーン】**: ボラティリティが高まる時間帯です。利益・損切り幅を意識してトレードしてください。")
@@ -271,7 +277,7 @@ elif is_ny_open:
 # 5. AI学習 & メイン画面表示
 # ==========================================
 if data is None or len(data) < 10:
-    st.error("🚨 リアルタイムデータの取得に失敗しました。市場休業日（土日等）か、ネットワーク接続をご確認のうえ「最新データに更新」を押してください。")
+    st.error("🚨 リアルタイムデータの取得に失敗しました。市場休業日かネットワーク接続をご確認のうえ「最新データに更新」を押してください。")
 else:
     market_status, confidence, main_model = analyze_signal(data, higher_tf_data)
 
@@ -436,7 +442,6 @@ else:
         
         leverage = 25.0
 
-        # 通貨ペアごとの円換算レート算出
         if is_jpy_pair:
             jpy_rate = latest_price
         else:
@@ -447,14 +452,11 @@ else:
                 usdjpy_price = 155.0
             jpy_rate = latest_price * usdjpy_price
 
-        # 1本あたりの必要証拠金（円）
         margin_per_unit = (jpy_rate * custom_quantity) / leverage
-        
-        # 資金の70%までに抑えた安全な最大注文本数
         max_allowable_grids = max(5, int((account_balance * 0.7) / max(margin_per_unit, 1.0)))
         
         max_safe_range_pips = max_allowable_grids * ai_recommended_width
-        cap_pips = 1500  # レンジ幅の上限
+        cap_pips = 1500
         safe_range_pips = min(max_safe_range_pips, cap_pips)
         
         half_range = (safe_range_pips * pip_unit) / 2.0
@@ -465,6 +467,7 @@ else:
             rep_upper = round(latest_price + half_range, 3 if is_jpy_pair else 5)
             buffer_val = max(latest_atr * 2.0, 0.5 if is_jpy_pair else 0.05)
             rep_op_stop_line = round(rep_lower - buffer_val, 3 if is_jpy_pair else 5)
+            buffer_pips = round(buffer_val / pip_unit, 1)
 
             st.success(f"🟢 **買いリピート推奨** （資金連動・安全レンジ自動調整済み）")
             summary_text = (
@@ -476,7 +479,7 @@ else:
                 f"数量（万）　: {quantity_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
-                f"運用停止ライン: {rep_op_stop_line}\n"
+                f"運用停止ライン: {rep_op_stop_line} （レンジ下限から -{buffer_pips} pips）\n"
                 f"（参考・計算用通貨量: {custom_quantity:,} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
             )
             st.code(summary_text, language="text")
@@ -487,6 +490,7 @@ else:
             rep_upper = round(latest_price + half_range, 3 if is_jpy_pair else 5)
             buffer_val = max(latest_atr * 2.0, 0.5 if is_jpy_pair else 0.05)
             rep_op_stop_line = round(rep_upper + buffer_val, 3 if is_jpy_pair else 5)
+            buffer_pips = round(buffer_val / pip_unit, 1)
 
             st.error(f"🔴 **売りリピート推奨** （資金連動・安全レンジ自動調整済み）")
             summary_text = (
@@ -498,7 +502,7 @@ else:
                 f"数量（万）　: {quantity_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
-                f"運用停止ライン: {rep_op_stop_line}\n"
+                f"運用停止ライン: {rep_op_stop_line} （レンジ上限から +{buffer_pips} pips）\n"
                 f"（参考・計算用通貨量: {custom_quantity:,} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
             )
             st.code(summary_text, language="text")
@@ -586,8 +590,7 @@ else:
     with st.expander("📄 データテーブル表示（デバッグ・分析用）"):
         st.dataframe(data[available_features + ['ATR', 'BB_Width', 'SMA_50']].tail(10))
 
-# 安全な自動リフレッシュ処理
+# スマート自動リフレッシュ処理（API過剰負荷を防止）
 if auto_refresh:
     time.sleep(refresh_interval)
-    st.cache_data.clear()
     st.rerun()
