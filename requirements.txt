@@ -1,4 +1,7 @@
-streamlit
+plotly
+requests
+scikit-learn
 yfinance
 pandas
-scikit-learn
+numpy
+streamlit
