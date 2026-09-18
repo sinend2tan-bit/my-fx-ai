@@ -85,15 +85,15 @@ refresh_interval = st.sidebar.selectbox(
 )
 
 st.sidebar.subheader("📋 松井証券トレード設定")
-account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=100000, step=10000, key="input_account_balance")
-custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100, key="input_custom_quantity")
+account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=200000, step=10000, key="input_account_balance")
+custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=200, step=100, key="input_custom_quantity")
 
 st.sidebar.subheader("📱 アラート通知設定 (Discord)")
 discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
 enable_notify = st.sidebar.checkbox("売買サイン確定時に自動通知", value=False)
 
 # ==========================================
-# 3. データ取得 & 指標計算エンジン (安全策強化版)
+# 3. データ取得 & 指標計算エンジン
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -255,7 +255,7 @@ elif is_ny_open:
     st.info("🔥 **【NY市場オープンタイムゾーン】**: ボラティリティが高まる時間帯です。利益・損切り幅を意識してトレードしてください。")
 
 # ==========================================
-# 5. AI学習 & メイン画面表示 (エラーガード強化)
+# 5. AI学習 & メイン画面表示
 # ==========================================
 if data is None or len(data) < 10:
     st.error("🚨 リアルタイムデータの取得に失敗しました。市場休業日（土日等）か、ネットワーク接続をご確認のうえ「最新データに更新」を押してください。")
@@ -402,7 +402,7 @@ else:
         sp_sl_pips = round(latest_atr * ai_sl_mult / pip_unit, 1)
 
         sp_col1, sp_col2, sp_col3 = st.columns(3)
-        sp_col1.metric("注文数量", f"{custom_quantity:,} 通貨")
+        sp_col1.metric("数量 (万)", f"{custom_quantity / 10000}")
         sp_col2.metric("益出し幅 (利確)", f"{sp_tp_pips} pips")
         sp_col3.metric("損切り幅 (損切)", f"{sp_sl_pips} pips")
 
@@ -410,7 +410,7 @@ else:
         st.code(
             f"通貨ペア: {selected_label}\n"
             f"推奨エントリー: {'買 (ASK)' if market_status == 'BUY' else '売 (BID)' if market_status == 'SELL' else '様子見'}\n"
-            f"注文数量: {custom_quantity}\n"
+            f"数量(万): {custom_quantity / 10000}\n"
             f"益出し幅: {sp_tp_pips} pips\n"
             f"損切り幅: {sp_sl_pips} pips\n"
             f"許容スリッページ: {recommended_slippage} pips",
@@ -423,7 +423,7 @@ else:
         
         leverage = 25.0
 
-        # 通貨ペアごとの円換算レート算出（USD/JPY等の数量掛け算漏れも完全修正）
+        # 通貨ペアごとの円換算レート算出
         if is_jpy_pair:
             jpy_rate = latest_price
         else:
@@ -434,7 +434,7 @@ else:
                 usdjpy_price = 155.0
             jpy_rate = latest_price * usdjpy_price
 
-        # 正確な1本あたりの必要証拠金（円）
+        # 1本あたりの必要証拠金（円）
         margin_per_unit = (jpy_rate * custom_quantity) / leverage
         
         # 資金の70%までに抑えた安全な最大注文本数
@@ -445,6 +445,9 @@ else:
         safe_range_pips = min(max_safe_range_pips, cap_pips)
         
         half_range = (safe_range_pips * pip_unit) / 2.0
+
+        # 松井証券アプリ入力用（万単位表記）
+        quantity_in_wan = custom_quantity / 10000
 
         if market_status == "BUY":
             rep_side = "買"
@@ -460,11 +463,11 @@ else:
                 f"AI判定　　　: 買い (信頼度 {confidence:.1f}%)\n"
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
+                f"数量（万）　: {quantity_in_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
                 f"運用停止ライン: {rep_op_stop_line}\n"
-                f"注文数量　　: {custom_quantity} 通貨\n"
-                f"考慮口座資金: ¥{account_balance:,}"
+                f"（参考・総通貨量: {custom_quantity} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
             )
             st.code(summary_text, language="text")
 
@@ -482,24 +485,22 @@ else:
                 f"AI判定　　　: 売り (信頼度 {confidence:.1f}%)\n"
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
+                f"数量（万）　: {quantity_in_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
                 f"運用停止ライン: {rep_op_stop_line}\n"
-                f"注文数量　　: {custom_quantity} 通貨\n"
-                f"考慮口座資金: ¥{account_balance:,}"
+                f"（参考・総通貨量: {custom_quantity} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
             )
             st.code(summary_text, language="text")
         else:
             st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%のため、新規リピート設定は非推奨です）")
 
-        # Discord 重複通知防止ロジックの改善
+        # Discord 重複通知防止ロジック
         if 'last_sent_pair_status' not in st.session_state:
             st.session_state.last_sent_pair_status = {}
 
         if enable_notify and discord_url:
-            current_pair_status_key = f"{selected_label}_{market_status}"
             last_sent = st.session_state.last_sent_pair_status.get(selected_label)
-            
             if market_status in ["BUY", "SELL"] and last_sent != market_status:
                 msg = f"📱 **【FX AIシグナル発動】**\n• 通貨ペア: {selected_label}\n• 判定: {market_status}\n• 信頼度: {confidence:.1f}%\n• レート: {latest_price:{price_fmt}}"
                 success = send_discord_notification(discord_url, msg)
