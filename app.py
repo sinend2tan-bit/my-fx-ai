@@ -188,53 +188,56 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception:
         return None
 
-# AIシグナル & MTF判定を共通化するロジック関数
+# AIシグナル & MTF判定関数
 def analyze_signal(df_current, df_higher):
     if df_current is None or len(df_current) < 10:
-        return None, 0.0, "判定不可"
+        return "HOLD", 50.0, None
 
-    features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
-    avail = [f for f in features if f in df_current.columns]
-    
-    X = df_current[avail]
-    y = df_current['Target']
-    X_train, y_train = X.iloc[:-1], y.iloc[:-1]
-    X_latest = X.iloc[[-1]]
+    try:
+        features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
+        avail = [f for f in features if f in df_current.columns]
+        
+        X = df_current[avail]
+        y = df_current['Target']
+        X_train, y_train = X.iloc[:-1], y.iloc[:-1]
+        X_latest = X.iloc[[-1]]
 
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X_train, y_train)
 
-    raw_pred = model.predict(X_latest)[0]
-    prob = model.predict_proba(X_latest)[0]
-    confidence = max(prob) * 100
+        raw_pred = model.predict(X_latest)[0]
+        prob = model.predict_proba(X_latest)[0]
+        confidence = max(prob) * 100
 
-    # 上位足バイアス
-    htf_bias = -1
-    if df_higher is not None and not df_higher.empty and 'SMA_50' in df_higher.columns:
-        htf_close = df_higher['Close'].iloc[-1]
-        htf_sma50 = df_higher['SMA_50'].iloc[-1]
-        if htf_close > htf_sma50 * 1.002:
-            htf_bias = 1
-        elif htf_close < htf_sma50 * 0.998:
-            htf_bias = 0
+        # 上位足バイアス
+        htf_bias = -1
+        if df_higher is not None and not df_higher.empty and 'SMA_50' in df_higher.columns:
+            htf_close = df_higher['Close'].iloc[-1]
+            htf_sma50 = df_higher['SMA_50'].iloc[-1]
+            if htf_close > htf_sma50 * 1.002:
+                htf_bias = 1
+            elif htf_close < htf_sma50 * 0.998:
+                htf_bias = 0
 
-    # 最終判定
-    if 45.0 <= confidence <= 55.0:
-        status = "HOLD"
-    elif raw_pred == 1 and confidence > 55.0:
-        if htf_bias == 0 and confidence < 65.0:
-            status = "HOLD (逆張り警戒)"
+        # 最終判定
+        if 45.0 <= confidence <= 55.0:
+            status = "HOLD"
+        elif raw_pred == 1 and confidence > 55.0:
+            if htf_bias == 0 and confidence < 65.0:
+                status = "HOLD (逆張り警戒)"
+            else:
+                status = "BUY"
+        elif raw_pred == 0 and confidence > 55.0:
+            if htf_bias == 1 and confidence < 65.0:
+                status = "HOLD (逆張り警戒)"
+            else:
+                status = "SELL"
         else:
-            status = "BUY"
-    elif raw_pred == 0 and confidence > 55.0:
-        if htf_bias == 1 and confidence < 65.0:
-            status = "HOLD (逆張り警戒)"
-        else:
-            status = "SELL"
-    else:
-        status = "HOLD"
+            status = "HOLD"
 
-    return status, confidence, model
+        return status, confidence, model
+    except Exception:
+        return "HOLD", 50.0, None
 
 data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
 higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足 (スイング・環境認識用)")
@@ -252,10 +255,10 @@ elif is_ny_open:
     st.info("🔥 **【NY市場オープンタイムゾーン】**: ボラティリティが高まる時間帯です。利益・損切り幅を意識してトレードしてください。")
 
 # ==========================================
-# 5. AI学習 & メイン画面表示
+# 5. AI学習 & メイン画面表示 (エラーガード強化)
 # ==========================================
 if data is None or len(data) < 10:
-    st.error("🚨 リアルタイムデータの取得に失敗しました。市場休業日か、ネットワークの接続状況をご確認のうえ「最新データに更新」を押してください。")
+    st.error("🚨 リアルタイムデータの取得に失敗しました。市場休業日（土日等）か、ネットワーク接続をご確認のうえ「最新データに更新」を押してください。")
 else:
     market_status, confidence, main_model = analyze_signal(data, higher_tf_data)
 
@@ -284,10 +287,11 @@ else:
 
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 25.0
     latest_bb_width = data['BB_Width'].iloc[-1] if 'BB_Width' in data.columns else 0.05
-    avg_bb_width = data['BB_Width'].rolling(window=20).mean().iloc[-1] if 'BB_Width' in data.columns else 0.05
+    avg_bb_series = data['BB_Width'].rolling(window=20).mean()
+    avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
     is_squeezed = latest_bb_width < (avg_bb_width * 0.8)
 
-    # 上位足安全ガード（クラッシュ回避処理）
+    # 上位足安全ガード
     if higher_tf_data is not None and not higher_tf_data.empty and 'SMA_50' in higher_tf_data.columns:
         htf_close = higher_tf_data['Close'].iloc[-1]
         htf_sma50 = higher_tf_data['SMA_50'].iloc[-1]
@@ -419,7 +423,7 @@ else:
         
         leverage = 25.0
 
-        # 通貨ペアごとの円換算レート算出（EUR/USD等のドルストレート対応で預託証拠金不足を防止）
+        # 通貨ペアごとの円換算レート算出（USD/JPY等の数量掛け算漏れも完全修正）
         if is_jpy_pair:
             jpy_rate = latest_price
         else:
@@ -488,16 +492,19 @@ else:
         else:
             st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%のため、新規リピート設定は非推奨です）")
 
-        # Discord 通知処理
-        if 'last_sent_status' not in st.session_state:
-            st.session_state.last_sent_status = None
+        # Discord 重複通知防止ロジックの改善
+        if 'last_sent_pair_status' not in st.session_state:
+            st.session_state.last_sent_pair_status = {}
 
         if enable_notify and discord_url:
-            if market_status != st.session_state.last_sent_status:
+            current_pair_status_key = f"{selected_label}_{market_status}"
+            last_sent = st.session_state.last_sent_pair_status.get(selected_label)
+            
+            if market_status in ["BUY", "SELL"] and last_sent != market_status:
                 msg = f"📱 **【FX AIシグナル発動】**\n• 通貨ペア: {selected_label}\n• 判定: {market_status}\n• 信頼度: {confidence:.1f}%\n• レート: {latest_price:{price_fmt}}"
                 success = send_discord_notification(discord_url, msg)
                 if success:
-                    st.session_state.last_sent_status = market_status
+                    st.session_state.last_sent_pair_status[selected_label] = market_status
 
     with tab_chart:
         st.subheader("📈 Pro仕様 インタラクティブ・ローソク足チャート (Plotly)")
