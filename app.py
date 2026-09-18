@@ -86,7 +86,20 @@ refresh_interval = st.sidebar.selectbox(
 
 st.sidebar.subheader("📋 松井証券トレード設定")
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=200000, step=10000, key="input_account_balance")
-custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=200, step=100, key="input_custom_quantity")
+
+# 万通貨単位に入力を変更（初期値 0.02 = 200通貨）
+quantity_wan = st.sidebar.number_input(
+    "注文数量 (万通貨)", 
+    min_value=0.0001, 
+    max_value=10.0, 
+    value=0.02, 
+    step=0.01, 
+    format="%.4f",
+    key="input_quantity_wan"
+)
+
+# 計算用（通貨単位換算）
+custom_quantity = int(round(quantity_wan * 10000))
 
 st.sidebar.subheader("📱 アラート通知設定 (Discord)")
 discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
@@ -402,7 +415,7 @@ else:
         sp_sl_pips = round(latest_atr * ai_sl_mult / pip_unit, 1)
 
         sp_col1, sp_col2, sp_col3 = st.columns(3)
-        sp_col1.metric("数量 (万)", f"{custom_quantity / 10000}")
+        sp_col1.metric("数量 (万)", f"{quantity_wan}")
         sp_col2.metric("益出し幅 (利確)", f"{sp_tp_pips} pips")
         sp_col3.metric("損切り幅 (損切)", f"{sp_sl_pips} pips")
 
@@ -410,7 +423,7 @@ else:
         st.code(
             f"通貨ペア: {selected_label}\n"
             f"推奨エントリー: {'買 (ASK)' if market_status == 'BUY' else '売 (BID)' if market_status == 'SELL' else '様子見'}\n"
-            f"数量(万): {custom_quantity / 10000}\n"
+            f"数量(万): {quantity_wan}\n"
             f"益出し幅: {sp_tp_pips} pips\n"
             f"損切り幅: {sp_sl_pips} pips\n"
             f"許容スリッページ: {recommended_slippage} pips",
@@ -419,7 +432,7 @@ else:
 
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
-        st.write(f"💡 入力された口座資金（¥{account_balance:,}）と注文数量（{custom_quantity}通貨）を元に、ロスカットリスクを抑制した最適設定を算出しています。")
+        st.write(f"💡 入力された口座資金（¥{account_balance:,}）と注文数量（{quantity_wan}万通貨 / {custom_quantity:,}通貨）を元に、ロスカットリスクを抑制した最適設定を算出しています。")
         
         leverage = 25.0
 
@@ -446,9 +459,6 @@ else:
         
         half_range = (safe_range_pips * pip_unit) / 2.0
 
-        # 松井証券アプリ入力用（万単位表記）
-        quantity_in_wan = custom_quantity / 10000
-
         if market_status == "BUY":
             rep_side = "買"
             rep_lower = round(latest_price - half_range, 3 if is_jpy_pair else 5)
@@ -463,11 +473,11 @@ else:
                 f"AI判定　　　: 買い (信頼度 {confidence:.1f}%)\n"
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
-                f"数量（万）　: {quantity_in_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
+                f"数量（万）　: {quantity_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
                 f"運用停止ライン: {rep_op_stop_line}\n"
-                f"（参考・総通貨量: {custom_quantity} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
+                f"（参考・計算用通貨量: {custom_quantity:,} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
             )
             st.code(summary_text, language="text")
 
@@ -485,11 +495,11 @@ else:
                 f"AI判定　　　: 売り (信頼度 {confidence:.1f}%)\n"
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
-                f"数量（万）　: {quantity_in_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
+                f"数量（万）　: {quantity_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
                 f"運用停止ライン: {rep_op_stop_line}\n"
-                f"（参考・総通貨量: {custom_quantity} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
+                f"（参考・計算用通貨量: {custom_quantity:,} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
             )
             st.code(summary_text, language="text")
         else:
