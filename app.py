@@ -126,7 +126,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         except Exception:
             pass
 
-    # ダミーデータ生成を廃止し、取得失敗時は明確にNoneを返す（実トレード保護）
     if df.empty or len(df) < 30:
         return None
 
@@ -186,7 +185,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
         df = df.ffill().bfill().fillna(0)
         return df
-    except Exception as e:
+    except Exception:
         return None
 
 # AIシグナル & MTF判定を共通化するロジック関数
@@ -211,7 +210,7 @@ def analyze_signal(df_current, df_higher):
 
     # 上位足バイアス
     htf_bias = -1
-    if df_higher is not None and not df_higher.empty:
+    if df_higher is not None and not df_higher.empty and 'SMA_50' in df_higher.columns:
         htf_close = df_higher['Close'].iloc[-1]
         htf_sma50 = df_higher['SMA_50'].iloc[-1]
         if htf_close > htf_sma50 * 1.002:
@@ -288,8 +287,13 @@ else:
     avg_bb_width = data['BB_Width'].rolling(window=20).mean().iloc[-1] if 'BB_Width' in data.columns else 0.05
     is_squeezed = latest_bb_width < (avg_bb_width * 0.8)
 
-    htf_close = higher_tf_data['Close'].iloc[-1] if higher_tf_data is not None else data['Close'].iloc[-1]
-    htf_sma50 = higher_tf_data['SMA_50'].iloc[-1] if higher_tf_data is not None else data['SMA_50'].iloc[-1]
+    # 上位足安全ガード（クラッシュ回避処理）
+    if higher_tf_data is not None and not higher_tf_data.empty and 'SMA_50' in higher_tf_data.columns:
+        htf_close = higher_tf_data['Close'].iloc[-1]
+        htf_sma50 = higher_tf_data['SMA_50'].iloc[-1]
+    else:
+        htf_close = data['Close'].iloc[-1]
+        htf_sma50 = data['SMA_50'].iloc[-1]
     
     if htf_close > htf_sma50 * 1.002:
         long_term_trend = "📈 強気上昇"
@@ -312,7 +316,6 @@ else:
     dynamic_width_adjustment = int(round((confidence - 50) / 10)) * 2
     ai_recommended_width = max(10, base_safe_width + dynamic_width_adjustment)
 
-    # 動的許容スリッページ算出（ボラティリティが高い時は少し広めに設定して約定拒否を防ぐ）
     recommended_slippage = round(max(0.5, (latest_atr / pip_unit) * 0.05), 1)
 
     if is_squeezed:
@@ -440,7 +443,7 @@ else:
                 f"AI判定　　　: 買い (信頼度 {confidence:.1f}%)\n"
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
-                f"注文値幅　{ai_recommended_width} pips\n"
+                f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
                 f"運用停止ライン: {rep_op_stop_line}\n"
                 f"注文数量　　: {custom_quantity} 通貨\n"
@@ -534,6 +537,8 @@ else:
             if scan_results:
                 res_df = pd.DataFrame(scan_results).sort_values(by="信頼度 (%)", ascending=False)
                 st.dataframe(res_df, use_container_width=True)
+            else:
+                st.error("データの取得に失敗しました。時間をおいて再度お試しください。")
 
     with tab_backtest:
         st.subheader("📊 AIモデルの時系列バックテスト（Walk-forward方式）")
