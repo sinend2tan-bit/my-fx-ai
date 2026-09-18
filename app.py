@@ -418,13 +418,26 @@ else:
         st.write(f"💡 入力された口座資金（¥{account_balance:,}）と注文数量（{custom_quantity}通貨）を元に、ロスカットリスクを抑制した最適設定を算出しています。")
         
         leverage = 25.0
-        margin_per_unit = latest_price / leverage
+
+        # 通貨ペアごとの円換算レート算出（EUR/USD等のドルストレート対応で預託証拠金不足を防止）
+        if is_jpy_pair:
+            jpy_rate = latest_price
+        else:
+            try:
+                usdjpy_data = load_and_process_data("USDJPY=X", "5d", "5m", "ドル円換算用")
+                usdjpy_price = usdjpy_data['Close'].iloc[-1] if usdjpy_data is not None else 155.0
+            except Exception:
+                usdjpy_price = 155.0
+            jpy_rate = latest_price * usdjpy_price
+
+        # 正確な1本あたりの必要証拠金（円）
+        margin_per_unit = (jpy_rate * custom_quantity) / leverage
         
-        max_safe_total_units = (account_balance * 0.7) / max(margin_per_unit, 1.0)
-        max_allowable_grids = max(5, int(max_safe_total_units / max(custom_quantity, 1)))
+        # 資金の70%までに抑えた安全な最大注文本数
+        max_allowable_grids = max(5, int((account_balance * 0.7) / max(margin_per_unit, 1.0)))
         
         max_safe_range_pips = max_allowable_grids * ai_recommended_width
-        cap_pips = 150 if is_jpy_pair else 1500
+        cap_pips = 1500  # レンジ幅の上限
         safe_range_pips = min(max_safe_range_pips, cap_pips)
         
         half_range = (safe_range_pips * pip_unit) / 2.0
