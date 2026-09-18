@@ -522,13 +522,14 @@ else:
         st.subheader("🔍 全監視通貨ペア AIスコア・一括スキャン")
         if st.button("🚀 全ペアを一括スキャン実行", use_container_width=True):
             scan_results = []
-            with st.spinner("各通貨ペアのAI予測モデルを計算中..."):
+            with st.spinner("各通貨ペアのAI予測モデルを計算中...（精度優先・100本学習）"):
                 for p_label, p_symbol in PAIRS.items():
                     sub_df = load_and_process_data(p_symbol, tf_config['period'], tf_config['interval'], tf_label)
                     if sub_df is not None and len(sub_df) > 10:
                         sub_X = sub_df[available_features]
                         sub_y = sub_df['Target']
-                        sub_model = RandomForestClassifier(n_estimators=50, random_state=42)
+                        # 個別画面と同じ100本（n_estimators=100）に統一して精度と数値を合致させます
+                        sub_model = RandomForestClassifier(n_estimators=100, random_state=42)
                         sub_model.fit(sub_X.iloc[:-1], sub_y.iloc[:-1])
                         
                         s_pred = sub_model.predict(sub_X.iloc[[-1]])[0]
