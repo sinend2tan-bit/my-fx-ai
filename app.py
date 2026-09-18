@@ -70,20 +70,21 @@ auto_refresh = st.sidebar.checkbox("自動更新を有効にする", value=False
 refresh_interval = st.sidebar.selectbox(
     "更新間隔を選択",
     options=[60, 180, 300],
-    format_func=lambda x: f"{x // 60}분ごと" if "분" in f"{x // 60}" else f"{x // 60}分ごと",
+    format_func=lambda x: f"{x // 60}分ごと",
     index=1
 )
 
 st.sidebar.subheader("📋 松井証券リピート注文設定")
-account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=100000, step=10000)
-custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100)
+# 💡 入力値が確実に保持されるよう key を追加
+account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=100000, step=10000, key="input_account_balance")
+custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100, key="input_custom_quantity")
 
 st.sidebar.subheader("📱 Discord通知設定 (オプション)")
 discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
 enable_notify = st.sidebar.checkbox("売買サイン確定時に通知", value=False)
 
 # ==========================================
-# 3. データ取得 & 指標処理（ADX計算修復版）
+# 3. データ取得 & 指標処理
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -191,19 +192,19 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
 
 # ==========================================
-# 4. 新機能チェック（流動性 ＆ スクイーズ検知）
+# 4. 新機能チェック
 # ==========================================
 current_hour_jst = datetime.now().hour
 is_low_liquidity = 3 <= current_hour_jst <= 7
 
 if is_low_liquidity:
-    st.warning("⚠️ **【流動性低下タイムゾーン警告】**: 現在はオセアニア時間帯の早朝です。スプレッドが広がりやすく、予期せぬノイズでAIのダマシが発生しやすいため慎重なトレードを推奨します。")
+    st.warning("⚠️ **【流動性低下タイムゾーン警告】**: 現在はオセアニア時間帯の早朝です。スプレッド拡大にご注意ください。")
 
 # ==========================================
 # 5. AI学習 & 予測エンジン
 # ==========================================
 if data is None or len(data) < 10:
-    st.error("データの処理中にエラーが発生しました。サイドバーの「今すぐ最新データに更新」を押してください。")
+    st.error("データの処理中にエラーが発生しました。")
 else:
     features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
     available_features = [f for f in features if f in data.columns]
@@ -282,7 +283,7 @@ else:
     ai_recommended_width = max(10, base_safe_width + dynamic_width_adjustment)
 
     if is_squeezed:
-        st.error("⚡ **【ボラティリティ急変・スクイーズ検知】**: ボリンジャーバンドが収縮（スクイーズ）しています。まもなく上下どちらかに強烈なトレンドが爆発（エクスパンション）する可能性が高いため、ブレイクアウトに十分ご注意ください！")
+        st.error("⚡ **【スクイーズ検知】**: ボリンジャーバンドが収縮しています。ブレイクアウトにご注意ください！")
 
     st.divider()
     
@@ -356,25 +357,16 @@ else:
 
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用サマリー")
-        st.write("💡 入力された「口座資金」の範囲内に自動で収まる安全なレンジ幅・注文数量を逆算して表示しています。")
+        st.write(f"💡 入力された口座資金（¥{account_balance:,}）と注文数量（{custom_quantity}通貨）を元に、証拠金エラーが起きない安全なレンジ幅を自動計算しています。")
         
-        # ==========================================
-        # 💡 【自動安全レンジ計算ロジック】
-        # 口座資金（例:10万円）と注文数量（例:100通貨）で確実に証拠金エラーが起きないようレンジ幅を自動制限
-        # ==========================================
         is_jpy_pair = "JPY" in selected_label
         leverage = 25.0
-        # 1通貨あたりの必要証拠金の目安（例: USD/JPY 150円なら約6円/1通貨）
         margin_per_unit = latest_price / leverage
         
-        # 口座資金で保有できる最大のおおよその総通貨量（安全率0.7をかけてバッファを確保）
         max_safe_total_units = (account_balance * 0.7) / max(margin_per_unit, 1.0)
         max_allowable_grids = max(5, int(max_safe_total_units / max(custom_quantity, 1)))
         
-        # グリッド数から逆算した安全なレンジ幅 (pips単位)
         max_safe_range_pips = max_allowable_grids * ai_recommended_width
-        
-        # 通貨ペアに応じた安全な上限レンジ幅のキャップ（円ペアなら最大約1.5円〜2.0円幅程度に安全制限）
         cap_pips = 150 if is_jpy_pair else 1500
         safe_range_pips = min(max_safe_range_pips, cap_pips)
         
@@ -382,10 +374,10 @@ else:
 
         if market_status == "BUY":
             rep_side = "買"
-            rep_lower = round(latest_price - half_range, 3 if not is_jpy_pair else 3)
-            rep_upper = round(latest_price + half_range, 3 if not is_jpy_pair else 3)
+            rep_lower = round(latest_price - half_range, 3)
+            rep_upper = round(latest_price + half_range, 3)
             buffer_val = max(latest_atr * 2.0, 0.5 if is_jpy_pair else 0.05)
-            rep_op_stop_line = round(rep_lower - buffer_val, 3 if not is_jpy_pair else 3)
+            rep_op_stop_line = round(rep_lower - buffer_val, 3)
 
             st.success(f"🟢 **買いリピート推奨** （資金連動・安全レンジ自動調整済み）")
             st.code(
@@ -404,10 +396,10 @@ else:
 
         elif market_status == "SELL":
             rep_side = "売"
-            rep_lower = round(latest_price - half_range, 3 if not is_jpy_pair else 3)
-            rep_upper = round(latest_price + half_range, 3 if not is_jpy_pair else 3)
+            rep_lower = round(latest_price - half_range, 3)
+            rep_upper = round(latest_price + half_range, 3)
             buffer_val = max(latest_atr * 2.0, 0.5 if is_jpy_pair else 0.05)
-            rep_op_stop_line = round(rep_upper + buffer_val, 3 if not is_jpy_pair else 3)
+            rep_op_stop_line = round(rep_upper + buffer_val, 3)
 
             st.error(f"🔴 **売りリピート推奨** （資金連動・安全レンジ自動調整済み）")
             st.code(
