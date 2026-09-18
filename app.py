@@ -93,7 +93,7 @@ discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
 enable_notify = st.sidebar.checkbox("売買サイン確定時に自動通知", value=False)
 
 # ==========================================
-# 3. データ取得 & 指標計算エンジン
+# 3. データ取得 & 指標計算エンジン (安全策強化版)
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -126,18 +126,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         except Exception:
             pass
 
+    # ダミーデータ生成を廃止し、取得失敗時は明確にNoneを返す（実トレード保護）
     if df.empty or len(df) < 30:
-        dates = pd.date_range(end=pd.Timestamp.now(), periods=100, freq='h')
-        np.random.seed(42)
-        base_p = 150.0 if "JPY" in symbol else 1.100
-        prices = base_p + np.cumsum(np.random.normal(0, 0.05, 100))
-        df = pd.DataFrame({
-            'Open': prices - 0.02,
-            'High': prices + 0.05,
-            'Low': prices - 0.05,
-            'Close': prices,
-            'Volume': 1000
-        }, index=dates)
+        return None
 
     try:
         df['Return'] = df['Close'].pct_change()
@@ -196,12 +187,57 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df = df.ffill().bfill().fillna(0)
         return df
     except Exception as e:
-        st.error(f"データ処理エラー: {e}")
         return None
 
-data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
+# AIシグナル & MTF判定を共通化するロジック関数
+def analyze_signal(df_current, df_higher):
+    if df_current is None or len(df_current) < 10:
+        return None, 0.0, "判定不可"
 
-# 上位足（日足）データの取得でマルチタイムフレーム（MTF）環境認識
+    features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
+    avail = [f for f in features if f in df_current.columns]
+    
+    X = df_current[avail]
+    y = df_current['Target']
+    X_train, y_train = X.iloc[:-1], y.iloc[:-1]
+    X_latest = X.iloc[[-1]]
+
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+
+    raw_pred = model.predict(X_latest)[0]
+    prob = model.predict_proba(X_latest)[0]
+    confidence = max(prob) * 100
+
+    # 上位足バイアス
+    htf_bias = -1
+    if df_higher is not None and not df_higher.empty:
+        htf_close = df_higher['Close'].iloc[-1]
+        htf_sma50 = df_higher['SMA_50'].iloc[-1]
+        if htf_close > htf_sma50 * 1.002:
+            htf_bias = 1
+        elif htf_close < htf_sma50 * 0.998:
+            htf_bias = 0
+
+    # 最終判定
+    if 45.0 <= confidence <= 55.0:
+        status = "HOLD"
+    elif raw_pred == 1 and confidence > 55.0:
+        if htf_bias == 0 and confidence < 65.0:
+            status = "HOLD (逆張り警戒)"
+        else:
+            status = "BUY"
+    elif raw_pred == 0 and confidence > 55.0:
+        if htf_bias == 1 and confidence < 65.0:
+            status = "HOLD (逆張り警戒)"
+        else:
+            status = "SELL"
+    else:
+        status = "HOLD"
+
+    return status, confidence, model
+
+data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
 higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足 (スイング・環境認識用)")
 
 # ==========================================
@@ -217,88 +253,50 @@ elif is_ny_open:
     st.info("🔥 **【NY市場オープンタイムゾーン】**: ボラティリティが高まる時間帯です。利益・損切り幅を意識してトレードしてください。")
 
 # ==========================================
-# 5. AI学習 & MTFトレンド判定エンジン
+# 5. AI学習 & メイン画面表示
 # ==========================================
 if data is None or len(data) < 10:
-    st.error("データの処理中にエラーが発生しました。サイドバーから最新データに更新してください。")
+    st.error("🚨 リアルタイムデータの取得に失敗しました。市場休業日か、ネットワークの接続状況をご確認のうえ「最新データに更新」を押してください。")
 else:
+    market_status, confidence, main_model = analyze_signal(data, higher_tf_data)
+
+    # バックテスト計算
     features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
     available_features = [f for f in features if f in data.columns]
-
-    X = data[available_features]
-    y = data['Target']
-
-    X_train, y_train = X.iloc[:-1], y.iloc[:-1]
-    X_latest = X.iloc[[-1]]
-
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-
-    # ウォークフォワード・バックテスト（未来リークなし）
-    test_len = min(30, len(X_train) - 10)
+    X_bt = data[available_features].iloc[:-1]
+    y_bt = data['Target'].iloc[:-1]
+    
+    test_len = min(30, len(X_bt) - 10)
     cumulative_wins = []
     
     if test_len > 5:
         correct_count = 0
         for i in range(test_len):
-            idx = len(X_train) - test_len + i
-            X_sub = X_train.iloc[:idx]
-            y_sub = y_train.iloc[:idx]
-            
+            idx = len(X_bt) - test_len + i
             sub_model = RandomForestClassifier(n_estimators=30, random_state=42)
-            sub_model.fit(X_sub, y_sub)
-            
-            p = sub_model.predict(X_train.iloc[[idx]])[0]
-            actual = y_train.iloc[idx]
-            
-            if p == actual:
+            sub_model.fit(X_bt.iloc[:idx], y_bt.iloc[:idx])
+            p = sub_model.predict(X_bt.iloc[[idx]])[0]
+            if p == y_bt.iloc[idx]:
                 correct_count += 1
             cumulative_wins.append((i + 1, (correct_count / (i + 1)) * 100))
-            
         win_rate = (correct_count / test_len) * 100
     else:
-        win_rate = 50.0
-        correct_count = 0
-        test_len = 0
-
-    raw_pred = model.predict(X_latest)[0]
-    prob = model.predict_proba(X_latest)[0]
-    confidence = max(prob) * 100
+        win_rate, correct_count, test_len = 50.0, 0, 0
 
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 25.0
     latest_bb_width = data['BB_Width'].iloc[-1] if 'BB_Width' in data.columns else 0.05
     avg_bb_width = data['BB_Width'].rolling(window=20).mean().iloc[-1] if 'BB_Width' in data.columns else 0.05
     is_squeezed = latest_bb_width < (avg_bb_width * 0.8)
 
-    # 🌐 上位足（日足）トレンド判定によるフィルター
     htf_close = higher_tf_data['Close'].iloc[-1] if higher_tf_data is not None else data['Close'].iloc[-1]
     htf_sma50 = higher_tf_data['SMA_50'].iloc[-1] if higher_tf_data is not None else data['SMA_50'].iloc[-1]
     
     if htf_close > htf_sma50 * 1.002:
-        long_term_trend = "📈 強気上昇 (Bullish)"
-        htf_bias = 1 # 上昇バイアス
+        long_term_trend = "📈 強気上昇"
     elif htf_close < htf_sma50 * 0.998:
-        long_term_trend = "📉 弱気下降 (Bearish)"
-        htf_bias = 0 # 下降バイアス
+        long_term_trend = "📉 弱気下降"
     else:
-        long_term_trend = "➡️ レンジ相場 (Neutral)"
-        htf_bias = -1
-
-    # MTF安全フィルター適用の相場判定
-    if 45.0 <= confidence <= 55.0:
-        market_status = "HOLD"
-    elif raw_pred == 1 and confidence > 55.0:
-        if htf_bias == 0 and confidence < 65.0:
-            market_status = "HOLD (逆張り警戒)"
-        else:
-            market_status = "BUY"
-    elif raw_pred == 0 and confidence > 55.0:
-        if htf_bias == 1 and confidence < 65.0:
-            market_status = "HOLD (逆張り警戒)"
-        else:
-            market_status = "SELL"
-    else:
-        market_status = "HOLD"
+        long_term_trend = "➡️ レンジ相場"
 
     latest_price = data['Close'].iloc[-1]
     latest_rsi = data['RSI'].iloc[-1] if 'RSI' in data.columns else 50.0
@@ -314,34 +312,36 @@ else:
     dynamic_width_adjustment = int(round((confidence - 50) / 10)) * 2
     ai_recommended_width = max(10, base_safe_width + dynamic_width_adjustment)
 
+    # 動的許容スリッページ算出（ボラティリティが高い時は少し広めに設定して約定拒否を防ぐ）
+    recommended_slippage = round(max(0.5, (latest_atr / pip_unit) * 0.05), 1)
+
     if is_squeezed:
         st.error("⚡ **【スクイーズ発生】**: ボリンジャーバンドが極端に収縮しています。エネルギー蓄積後の急激なブレイクアウトにご注意ください！")
 
     st.divider()
 
-    # 📊 メトリクス表示
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("現在レート", f"{latest_price:{price_fmt}}")
-    m_col2.metric("上位足 (日足) トレンド環境", long_term_trend)
+    m_col2.metric("上位足 (日足) トレンド", long_term_trend)
     m_col3.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"({correct_count}/{test_len} 回)")
 
     m_col4, m_col5, m_col6 = st.columns(3)
     m_col4.metric("RSI (14)", f"{latest_rsi:.1f}")
-    m_col5.metric("ADX (トレンド強度)", f"{latest_adx:.1f}", "🔥強トレンド" if latest_adx > 25 else "💤レンジ・低ボラ")
+    m_col5.metric("ADX (トレンド強度)", f"{latest_adx:.1f}", "🔥強トレンド" if latest_adx > 25 else "💤低ボラ")
     m_col6.metric("データ更新日時", latest_time)
 
     st.divider()
 
     # ==========================================
-    # 6. タブ切り替え & フルスペック機能
+    # 6. タブ切り替え機能
     # ==========================================
     tab_single, tab_speed, tab_repeat, tab_chart, tab_scanner, tab_backtest = st.tabs([
-        "🎯 デイトレ単発パラメータ", 
-        "⚡ 松井証券 スピード注文用",
-        "📋 松井証券 リピート注文用", 
-        "📈 Pro仕様 ローソク足チャート",
-        "🔍 全通貨ペア一括スキャン", 
-        "📊 AIバックテスト検証"
+        "🎯 デイトレ単発", 
+        "⚡ スピード注文",
+        "📋 リピート注文", 
+        "📈 ローソク足チャート",
+        "🔍 全ペアスキャン", 
+        "📊 バックテスト"
     ])
 
     with tab_single:
@@ -389,7 +389,7 @@ else:
 
     with tab_speed:
         st.subheader("⚡ 松井証券FX アプリ【スピード注文】設定用")
-        st.write("松井証券FXアプリの「スピード注文設定」画面に直接入力できる数値です。ワンタップ発注と同時に利確・損切が自動セットされます。")
+        st.write("松井証券FXアプリの「スピード注文設定」画面に直接入力できる数値です。")
 
         sp_tp_pips = round(latest_atr * ai_tp_mult / pip_unit, 1)
         sp_sl_pips = round(latest_atr * ai_sl_mult / pip_unit, 1)
@@ -406,7 +406,7 @@ else:
             f"注文数量: {custom_quantity}\n"
             f"益出し幅: {sp_tp_pips} pips\n"
             f"損切り幅: {sp_sl_pips} pips\n"
-            f"許容スリッページ: 0.5 pips",
+            f"許容スリッページ: {recommended_slippage} pips",
             language="text"
         )
 
@@ -440,7 +440,7 @@ else:
                 f"AI判定　　　: 買い (信頼度 {confidence:.1f}%)\n"
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
-                f"注文値幅　　: {ai_recommended_width} pips\n"
+                f"注文値幅　{ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
                 f"運用停止ライン: {rep_op_stop_line}\n"
                 f"注文数量　　: {custom_quantity} 通貨\n"
@@ -489,61 +489,44 @@ else:
         df_chart = data.tail(60)
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
 
-        # ローソク足
         fig.add_trace(go.Candlestick(
-            x=df_chart.index,
-            open=df_chart['Open'],
-            high=df_chart['High'],
-            low=df_chart['Low'],
-            close=df_chart['Close'],
-            name="ローソク足"
+            x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], name="ローソク足"
         ), row=1, col=1)
 
-        # 移動平均線 & ボリンジャーバンド
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['SMA_20'], mode='lines', name='SMA 20', line=dict(color='orange', width=1)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['SMA_50'], mode='lines', name='SMA 50', line=dict(color='blue', width=1)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Upper_Band'], mode='lines', name='+2σ', line=dict(color='gray', dash='dash', width=1)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Lower_Band'], mode='lines', name='-2σ', line=dict(color='gray', dash='dash', width=1)), row=1, col=1)
 
-        # RSIサブチャート
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['RSI'], mode='lines', name='RSI(14)', line=dict(color='purple', width=1.5)), row=2, col=1)
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 
         fig.update_layout(
             xaxis_rangeslider_visible=False,
-            height=600,
-            margin=dict(l=10, r=10, t=30, b=10),
+            height=500,
+            margin=dict(l=5, r=5, t=20, b=5),
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
 
     with tab_scanner:
         st.subheader("🔍 全監視通貨ペア AIスコア・一括スキャン")
+        st.write("※個別画面と全く同じ日足フィルター＆100本学習で一括スキャンを行います。")
         if st.button("🚀 全ペアを一括スキャン実行", use_container_width=True):
             scan_results = []
-            with st.spinner("各通貨ペアのAI予測モデルを計算中...（精度優先・100本学習）"):
+            with st.spinner("全通貨ペアを同条件（100本学習＆日足分析）で計算中..."):
                 for p_label, p_symbol in PAIRS.items():
                     sub_df = load_and_process_data(p_symbol, tf_config['period'], tf_config['interval'], tf_label)
+                    sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
+                    
                     if sub_df is not None and len(sub_df) > 10:
-                        sub_X = sub_df[available_features]
-                        sub_y = sub_df['Target']
-                        # 個別画面と同じ100本（n_estimators=100）に統一して精度と数値を合致させます
-                        sub_model = RandomForestClassifier(n_estimators=100, random_state=42)
-                        sub_model.fit(sub_X.iloc[:-1], sub_y.iloc[:-1])
-                        
-                        s_pred = sub_model.predict(sub_X.iloc[[-1]])[0]
-                        s_prob = sub_model.predict_proba(sub_X.iloc[[-1]])[0]
-                        s_conf = max(s_prob) * 100
+                        s_status, s_conf, _ = analyze_signal(sub_df, sub_htf)
                         s_adx = sub_df['ADX'].iloc[-1] if 'ADX' in sub_df.columns else 25.0
                         
-                        direction = "買い (BUY)" if s_pred == 1 else "売り (SELL)"
-                        if 45 <= s_conf <= 55:
-                            direction = "様子見 (HOLD)"
-                            
                         scan_results.append({
                             "通貨ペア": p_label,
-                            "AI推奨方向": direction,
+                            "AI総合判定": s_status,
                             "信頼度 (%)": round(s_conf, 1),
                             "ADX (トレンド強度)": round(s_adx, 1)
                         })
