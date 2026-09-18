@@ -75,7 +75,6 @@ refresh_interval = st.sidebar.selectbox(
 )
 
 st.sidebar.subheader("📋 松井証券リピート注文設定")
-# 💡 入力値が確実に保持されるよう key を追加
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=100000, step=10000, key="input_account_balance")
 custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100, key="input_custom_quantity")
 
@@ -84,14 +83,16 @@ discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
 enable_notify = st.sidebar.checkbox("売買サイン確定時に通知", value=False)
 
 # ==========================================
-# 3. データ取得 & 指標処理
+# 3. データ取得 & 指標処理（デバッグ強化版）
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
-    except:
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+    except Exception:
         pass
 
     if not df.empty and ("4時間足" in tf_name or "12時間足" in tf_name) and interval == "1h":
@@ -104,13 +105,15 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 'Close': 'last',
                 'Volume': 'sum'
             }).dropna()
-        except:
+        except Exception:
             pass
 
     if df.empty or len(df) < 30:
         try:
             df = yf.download(symbol, period="3mo", interval="1d", progress=False)
-        except:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+        except Exception:
             pass
 
     if df.empty or len(df) < 30:
@@ -127,9 +130,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         }, index=dates)
 
     try:
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-
         df['Return'] = df['Close'].pct_change()
         df['SMA_20'] = df['Close'].rolling(window=20).mean()
         df['SMA_50'] = df['Close'].rolling(window=50).mean()
@@ -204,7 +204,7 @@ if is_low_liquidity:
 # 5. AI学習 & 予測エンジン
 # ==========================================
 if data is None or len(data) < 10:
-    st.error("データの処理中にエラーが発生しました。")
+    st.error("データの処理中にエラーが発生しました。サイドバーから最新データに更新してください。")
 else:
     features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
     available_features = [f for f in features if f in data.columns]
@@ -389,7 +389,7 @@ else:
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
                 f"運用停止ライン: {rep_op_stop_line}\n"
-                f"注文数量　　: {custom_quantity} 通貨\n"
+                f"注文数量　{custom_quantity} 通貨\n"
                 f"考慮口座資金: ¥{account_balance:,} （※資金オーバー防止安全モード適用中）",
                 language="text"
             )
@@ -484,7 +484,7 @@ else:
     with st.expander("📊 テクニカル指標・学習データの詳細"):
         st.dataframe(data[available_features + ['ATR', 'BB_Width', 'SMA_50']].tail(10))
 
+# 自動更新処理（ループクラッシュ回避策）
 if auto_refresh:
     time.sleep(refresh_interval)
     st.cache_data.clear()
-    st.rerun()
