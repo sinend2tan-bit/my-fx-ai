@@ -16,7 +16,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 1. 通知ヘルパー関数 (Discord / LINE Notify)
+# 1. 通知ヘルパー関数 (Discordのみ)
 # ==========================================
 def send_discord_notification(webhook_url, message):
     if not webhook_url:
@@ -24,19 +24,7 @@ def send_discord_notification(webhook_url, message):
     try:
         res = requests.post(webhook_url, json={"content": message}, timeout=5)
         return res.status_code == 204
-    except:
-        return False
-
-def send_line_notification(token, message):
-    if not token:
-        return False
-    try:
-        url = "https://notify-api.line.me/api/notify"
-        headers = {"Authorization": f"Bearer {token}"}
-        data = {"message": message}
-        res = requests.post(url, headers=headers, data=data, timeout=5)
-        return res.status_code == 200
-    except:
+    except Exception:
         return False
 
 # ==========================================
@@ -100,9 +88,8 @@ st.sidebar.subheader("📋 松井証券トレード設定")
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=100000, step=10000, key="input_account_balance")
 custom_quantity = st.sidebar.number_input("注文数量 (通貨)", min_value=1, max_value=100000, value=100, step=100, key="input_custom_quantity")
 
-st.sidebar.subheader("📱 アラート通知設定 (オプション)")
+st.sidebar.subheader("📱 アラート通知設定 (Discord)")
 discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
-line_token = st.sidebar.text_input("LINE Notify Token", type="password")
 enable_notify = st.sidebar.checkbox("売買サイン確定時に自動通知", value=False)
 
 # ==========================================
@@ -301,13 +288,11 @@ else:
     if 45.0 <= confidence <= 55.0:
         market_status = "HOLD"
     elif raw_pred == 1 and confidence > 55.0:
-        # 上昇シグナルだが上位足が強烈な下落トレンドの場合はフィルターをかけてHOLDに昇華
         if htf_bias == 0 and confidence < 65.0:
             market_status = "HOLD (逆張り警戒)"
         else:
             market_status = "BUY"
     elif raw_pred == 0 and confidence > 55.0:
-        # 下降シグナルだが上位足が強烈な上昇トレンドの場合はフィルター
         if htf_bias == 1 and confidence < 65.0:
             market_status = "HOLD (逆張り警戒)"
         else:
@@ -338,7 +323,7 @@ else:
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("現在レート", f"{latest_price:{price_fmt}}")
     m_col2.metric("上位足 (日足) トレンド環境", long_term_trend)
-    m_col3.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"{correct_count}/{test_len} 回)")
+    m_col3.metric("直近AI予測勝率", f"{win_rate:.1f}%", f"({correct_count}/{test_len} 回)")
 
     m_col4, m_col5, m_col6 = st.columns(3)
     m_col4.metric("RSI (14)", f"{latest_rsi:.1f}")
@@ -487,25 +472,20 @@ else:
         else:
             st.warning(f"🟡 **様子見モード (HOLD)** （AI信頼度: {confidence:.1f}%のため、新規リピート設定は非推奨です）")
 
-        # Discord & LINE Notify 通知処理
+        # Discord 通知処理
         if 'last_sent_status' not in st.session_state:
             st.session_state.last_sent_status = None
 
-        if enable_notify:
+        if enable_notify and discord_url:
             if market_status != st.session_state.last_sent_status:
-                msg = f"\n📱 【FX AIシグナル発動】\n• 通貨ペア: {selected_label}\n• 判定: {market_status}\n• 信頼度: {confidence:.1f}%\n• レート: {latest_price:{price_fmt}}"
-                
-                if discord_url:
-                    send_discord_notification(discord_url, msg)
-                if line_token:
-                    send_line_notification(line_token, msg)
-                    
-                st.session_state.last_sent_status = market_status
+                msg = f"📱 **【FX AIシグナル発動】**\n• 通貨ペア: {selected_label}\n• 判定: {market_status}\n• 信頼度: {confidence:.1f}%\n• レート: {latest_price:{price_fmt}}"
+                success = send_discord_notification(discord_url, msg)
+                if success:
+                    st.session_state.last_sent_status = market_status
 
     with tab_chart:
         st.subheader("📈 Pro仕様 インタラクティブ・ローソク足チャート (Plotly)")
         
-        # Plotlyによる高度なチャート生成
         df_chart = data.tail(60)
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
 
@@ -578,7 +558,7 @@ else:
         if cumulative_wins:
             cb_df = pd.DataFrame(cumulative_wins, columns=["検証ステップ", "累積勝率 (%)"]).set_index("検証ステップ")
             st.line_chart(cb_df)
-            st.metric("ウォークフォワード最終勝率", f"{win_rate:.1f}%", f"{correct_count}勝 / {test_len}戦")
+            st.metric("ウォークフォワード最終勝率", f"{win_rate:.1f}%", f"({correct_count}勝 / {test_len}戦)")
         else:
             st.warning("十分な過去データがないため、バックテストをスキップしました。")
 
