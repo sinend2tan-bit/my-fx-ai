@@ -5,6 +5,8 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 import requests
 import time
+import json
+import os
 from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -16,20 +18,55 @@ st.set_page_config(
 )
 
 # ==========================================
-# 0. セッション状態の初期化（入力値の保持）
+# 0. 設定ファイルの永続化（保存・読み込み）ヘルパー
 # ==========================================
-if "account_balance" not in st.session_state:
-    st.session_state.account_balance = 200000
-if "quantity_wan" not in st.session_state:
-    st.session_state.quantity_wan = 0.02
-if "discord_url" not in st.session_state:
-    st.session_state.discord_url = ""
-if "enable_notify" not in st.session_state:
-    st.session_state.enable_notify = False
-if "auto_refresh" not in st.session_state:
-    st.session_state.auto_refresh = False
-if "refresh_interval" not in st.session_state:
-    st.session_state.refresh_interval = 180
+SETTINGS_FILE = "user_settings.json"
+
+DEFAULT_SETTINGS = {
+    "account_balance": 200000,
+    "quantity_wan": 0.02,
+    "discord_url": "",
+    "enable_notify": False,
+    "auto_refresh": False,
+    "refresh_interval": 180
+}
+
+def load_user_settings():
+    """ローカルファイルから設定を読み込む"""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                # デフォルト値とマージしてキー不足を防止
+                merged = DEFAULT_SETTINGS.copy()
+                merged.update(saved)
+                return merged
+        except Exception:
+            return DEFAULT_SETTINGS.copy()
+    return DEFAULT_SETTINGS.copy()
+
+def save_user_settings():
+    """現在の設定をローカルファイルに保存する"""
+    settings = {
+        "account_balance": st.session_state.get("account_balance", DEFAULT_SETTINGS["account_balance"]),
+        "quantity_wan": st.session_state.get("quantity_wan", DEFAULT_SETTINGS["quantity_wan"]),
+        "discord_url": st.session_state.get("discord_url", DEFAULT_SETTINGS["discord_url"]),
+        "enable_notify": st.session_state.get("enable_notify", DEFAULT_SETTINGS["enable_notify"]),
+        "auto_refresh": st.session_state.get("auto_refresh", DEFAULT_SETTINGS["auto_refresh"]),
+        "refresh_interval": st.session_state.get("refresh_interval", DEFAULT_SETTINGS["refresh_interval"]),
+    }
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+# 初期化時にファイルをロードして session_state に設定
+if "initialized" not in st.session_state:
+    saved_settings = load_user_settings()
+    for key, val in saved_settings.items():
+        st.session_state[key] = val
+    st.session_state["initialized"] = True
 
 # ==========================================
 # 1. 通知ヘルパー関数 (Discordのみ)
@@ -92,12 +129,13 @@ if st.sidebar.button("🔄 今すぐ最新データに更新", use_container_wid
     st.cache_data.clear()
     st.rerun()
 
-auto_refresh = st.sidebar.checkbox("自動更新を有効にする", key="auto_refresh")
+auto_refresh = st.sidebar.checkbox("自動更新を有効にする", key="auto_refresh", on_change=save_user_settings)
 refresh_interval = st.sidebar.selectbox(
     "更新間隔を選択",
     options=[60, 180, 300],
     format_func=lambda x: f"{x // 60}分ごと",
-    key="refresh_interval"
+    key="refresh_interval",
+    on_change=save_user_settings
 )
 
 st.sidebar.subheader("📋 松井証券トレード設定")
@@ -106,25 +144,25 @@ account_balance = st.sidebar.number_input(
     min_value=10000, 
     max_value=100000000, 
     step=10000, 
-    key="account_balance"
+    key="account_balance",
+    on_change=save_user_settings
 )
 
-# 万通貨単位に入力を統一（設定値保持対応）
 quantity_wan = st.sidebar.number_input(
     "注文数量 (万通貨)", 
     min_value=0.0001, 
     max_value=10.0, 
     step=0.01, 
     format="%.4f",
-    key="quantity_wan"
+    key="quantity_wan",
+    on_change=save_user_settings
 )
 
-# 通貨換算（内部計算用）
 custom_quantity = int(round(quantity_wan * 10000))
 
 st.sidebar.subheader("📱 アラート通知設定 (Discord)")
-discord_url = st.sidebar.text_input("Discord Webhook URL", type="password", key="discord_url")
-enable_notify = st.sidebar.checkbox("売買サイン確定時に自動通知", key="enable_notify")
+discord_url = st.sidebar.text_input("Discord Webhook URL", type="password", key="discord_url", on_change=save_user_settings)
+enable_notify = st.sidebar.checkbox("売買サイン確定時に自動通知", key="enable_notify", on_change=save_user_settings)
 
 # ==========================================
 # 3. データ取得 & 指標計算エンジン
@@ -280,7 +318,7 @@ higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足 (スイング
 # 4. 時間帯・週末市場クローズ判定
 # ==========================================
 now_datetime = datetime.now()
-current_day = now_datetime.weekday()  # 5: 土曜日, 6: 日曜日
+current_day = now_datetime.weekday()
 current_hour_jst = now_datetime.hour
 
 is_weekend = (current_day == 5 and current_hour_jst >= 6) or (current_day == 6) or (current_day == 0 and current_hour_jst < 6)
@@ -498,7 +536,7 @@ else:
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
                 f"数量（万）　: {quantity_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
-                f"注文値幅　_ : {ai_recommended_width} pips\n"
+                f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
                 f"運用停止ライン: {rep_op_stop_line} （レンジ下限から -{buffer_pips} pips）\n"
                 f"（参考・計算用通貨量: {custom_quantity:,} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
