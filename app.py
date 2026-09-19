@@ -16,6 +16,22 @@ st.set_page_config(
 )
 
 # ==========================================
+# 0. セッション状態の初期化（入力値の保持）
+# ==========================================
+if "account_balance" not in st.session_state:
+    st.session_state.account_balance = 200000
+if "quantity_wan" not in st.session_state:
+    st.session_state.quantity_wan = 0.02
+if "discord_url" not in st.session_state:
+    st.session_state.discord_url = ""
+if "enable_notify" not in st.session_state:
+    st.session_state.enable_notify = False
+if "auto_refresh" not in st.session_state:
+    st.session_state.auto_refresh = False
+if "refresh_interval" not in st.session_state:
+    st.session_state.refresh_interval = 180
+
+# ==========================================
 # 1. 通知ヘルパー関数 (Discordのみ)
 # ==========================================
 def send_discord_notification(webhook_url, message):
@@ -76,34 +92,39 @@ if st.sidebar.button("🔄 今すぐ最新データに更新", use_container_wid
     st.cache_data.clear()
     st.rerun()
 
-auto_refresh = st.sidebar.checkbox("自動更新を有効にする", value=False)
+auto_refresh = st.sidebar.checkbox("自動更新を有効にする", key="auto_refresh")
 refresh_interval = st.sidebar.selectbox(
     "更新間隔を選択",
     options=[60, 180, 300],
     format_func=lambda x: f"{x // 60}分ごと",
-    index=1
+    key="refresh_interval"
 )
 
 st.sidebar.subheader("📋 松井証券トレード設定")
-account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, value=200000, step=10000, key="input_account_balance")
+account_balance = st.sidebar.number_input(
+    "口座資金 (円)", 
+    min_value=10000, 
+    max_value=100000000, 
+    step=10000, 
+    key="account_balance"
+)
 
-# 万通貨単位に入力を統一（初期値 0.02 = 200通貨）
+# 万通貨単位に入力を統一（設定値保持対応）
 quantity_wan = st.sidebar.number_input(
     "注文数量 (万通貨)", 
     min_value=0.0001, 
     max_value=10.0, 
-    value=0.02, 
     step=0.01, 
     format="%.4f",
-    key="input_quantity_wan"
+    key="quantity_wan"
 )
 
 # 通貨換算（内部計算用）
 custom_quantity = int(round(quantity_wan * 10000))
 
 st.sidebar.subheader("📱 アラート通知設定 (Discord)")
-discord_url = st.sidebar.text_input("Discord Webhook URL", type="password")
-enable_notify = st.sidebar.checkbox("売買サイン確定時に自動通知", value=False)
+discord_url = st.sidebar.text_input("Discord Webhook URL", type="password", key="discord_url")
+enable_notify = st.sidebar.checkbox("売買サイン確定時に自動通知", key="enable_notify")
 
 # ==========================================
 # 3. データ取得 & 指標計算エンジン
@@ -477,7 +498,7 @@ else:
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
                 f"数量（万）　: {quantity_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
-                f"注文値幅　　: {ai_recommended_width} pips\n"
+                f"注文値幅　_ : {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
                 f"運用停止ライン: {rep_op_stop_line} （レンジ下限から -{buffer_pips} pips）\n"
                 f"（参考・計算用通貨量: {custom_quantity:,} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
@@ -590,7 +611,7 @@ else:
     with st.expander("📄 データテーブル表示（デバッグ・分析用）"):
         st.dataframe(data[available_features + ['ATR', 'BB_Width', 'SMA_50']].tail(10))
 
-# スマート自動リフレッシュ処理（API過剰負荷を防止）
+# スマート自動リフレッシュ処理
 if auto_refresh:
     time.sleep(refresh_interval)
     st.rerun()
