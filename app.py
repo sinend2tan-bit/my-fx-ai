@@ -32,12 +32,10 @@ DEFAULT_SETTINGS = {
 }
 
 def load_user_settings():
-    """ローカルファイルから設定を読み込む"""
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-                # デフォルト値とマージしてキー不足を防止
                 merged = DEFAULT_SETTINGS.copy()
                 merged.update(saved)
                 return merged
@@ -46,7 +44,6 @@ def load_user_settings():
     return DEFAULT_SETTINGS.copy()
 
 def save_user_settings():
-    """現在の設定をローカルファイルに保存する"""
     settings = {
         "account_balance": st.session_state.get("account_balance", DEFAULT_SETTINGS["account_balance"]),
         "quantity_wan": st.session_state.get("quantity_wan", DEFAULT_SETTINGS["quantity_wan"]),
@@ -61,7 +58,6 @@ def save_user_settings():
     except Exception:
         pass
 
-# 初期化時にファイルをロードして session_state に設定
 if "initialized" not in st.session_state:
     saved_settings = load_user_settings()
     for key, val in saved_settings.items():
@@ -96,7 +92,7 @@ PAIRS = {
 BASE_SAFE_WIDTHS = {
     "USDJPY=X": 20,
     "EURJPY=X": 25,
-    "GBPJPY=X": 40,
+    "GBPJPY=X": 30,  # GBP/JPYのベース値を最適化
     "AUDJPY=X": 20,
     "EURUSD=X": 20,
 }
@@ -395,8 +391,9 @@ else:
     ai_tp_mult = round(max(0.8, min(2.5, 1.0 * conf_factor + adx_bonus)), 2)
     ai_sl_mult = round(max(0.4, min(1.2, 0.6 / (conf_factor * 0.9))), 2)
 
+    # 約定力を高めるため、値幅が大きくなりすぎないように上限（40pips）を自動設定
     dynamic_width_adjustment = int(round((confidence - 50) / 10)) * 2
-    ai_recommended_width = max(10, base_safe_width + dynamic_width_adjustment)
+    ai_recommended_width = min(40, max(10, base_safe_width + dynamic_width_adjustment))
 
     recommended_slippage = round(max(0.5, (latest_atr / pip_unit) * 0.05), 1)
 
