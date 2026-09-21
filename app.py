@@ -92,7 +92,7 @@ PAIRS = {
 BASE_SAFE_WIDTHS = {
     "USDJPY=X": 20,
     "EURJPY=X": 25,
-    "GBPJPY=X": 30,  # GBP/JPYのベース値を最適化
+    "GBPJPY=X": 30,
     "AUDJPY=X": 20,
     "EURUSD=X": 20,
 }
@@ -161,7 +161,7 @@ discord_url = st.sidebar.text_input("Discord Webhook URL", type="password", key=
 enable_notify = st.sidebar.checkbox("売買サイン確定時に自動通知", key="enable_notify", on_change=save_user_settings)
 
 # ==========================================
-# 3. データ取得 & 指標計算エンジン
+# 3. データ取得 & 指標計算エンジン (勝率向上改修)
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -201,7 +201,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df['Return'] = df['Close'].pct_change()
         df['SMA_20'] = df['Close'].rolling(window=20).mean()
         df['SMA_50'] = df['Close'].rolling(window=50).mean()
+        df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean() # 追加: 長期トレンド軸
+        
         df['Dev_SMA20'] = (df['Close'] - df['SMA_20']) / (df['SMA_20'] + 1e-10)
+        df['Dev_EMA200'] = (df['Close'] - df['EMA_200']) / (df['EMA_200'] + 1e-10) # 追加: 200EMA乖離
 
         delta = df['Close'].diff()
         gain = delta.where(delta > 0, 0.0).rolling(window=14).mean()
@@ -256,50 +259,48 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception:
         return None
 
-# AIシグナル & MTF判定関数
+# AIシグナル & MTF判定関数 (勝率ロジック強化)
 def analyze_signal(df_current, df_higher):
-    if df_current is None or len(df_current) < 10:
+    if df_current is None or len(df_current) < 30:
         return "HOLD", 50.0, None
 
     try:
-        features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
+        features = ['Return', 'Dev_SMA20', 'Dev_EMA200', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
         avail = [f for f in features if f in df_current.columns]
         
         X = df_current[avail]
         y = df_current['Target']
-        X_train, y_train = X.iloc[:-1], y.iloc[:-1]
+        
+        # 学習サンプル数を直近1,000本に最適化して過学習を防止
+        X_train = X.iloc[-1000:-1] if len(X) > 1000 else X.iloc[:-1]
+        y_train = y.iloc[-1000:-1] if len(y) > 1000 else y.iloc[:-1]
         X_latest = X.iloc[[-1]]
 
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        # 木の深さを制限(max_depth=5)して勝率安定化
+        model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
         model.fit(X_train, y_train)
 
         raw_pred = model.predict(X_latest)[0]
         prob = model.predict_proba(X_latest)[0]
         confidence = max(prob) * 100
 
-        # 上位足バイアス
-        htf_bias = -1
-        if df_higher is not None and not df_higher.empty and 'SMA_50' in df_higher.columns:
-            htf_close = df_higher['Close'].iloc[-1]
-            htf_sma50 = df_higher['SMA_50'].iloc[-1]
-            if htf_close > htf_sma50 * 1.002:
-                htf_bias = 1
-            elif htf_close < htf_sma50 * 0.998:
-                htf_bias = 0
+        # 長期200EMAトレンド判定
+        latest_price = df_current['Close'].iloc[-1]
+        latest_ema200 = df_current['EMA_200'].iloc[-1] if 'EMA_200' in df_current.columns else latest_price
 
-        # 最終判定
-        if 45.0 <= confidence <= 55.0:
+        # 信頼度60%未満は様子見、かつ200EMAと同方向のシグナルのみ厳選発注
+        if confidence < 60.0:
             status = "HOLD"
-        elif raw_pred == 1 and confidence > 55.0:
-            if htf_bias == 0 and confidence < 65.0:
-                status = "HOLD (逆張り警戒)"
-            else:
+        elif raw_pred == 1 and confidence >= 60.0:
+            if latest_price > latest_ema200:
                 status = "BUY"
-        elif raw_pred == 0 and confidence > 55.0:
-            if htf_bias == 1 and confidence < 65.0:
-                status = "HOLD (逆張り警戒)"
             else:
+                status = "HOLD (逆張り警戒)"
+        elif raw_pred == 0 and confidence >= 60.0:
+            if latest_price < latest_ema200:
                 status = "SELL"
+            else:
+                status = "HOLD (逆張り警戒)"
         else:
             status = "HOLD"
 
@@ -336,8 +337,8 @@ if data is None or len(data) < 10:
 else:
     market_status, confidence, main_model = analyze_signal(data, higher_tf_data)
 
-    # バックテスト計算
-    features = ['Return', 'Dev_SMA20', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
+    # バックテスト計算（過学習防止設定を適用）
+    features = ['Return', 'Dev_SMA20', 'Dev_EMA200', 'RSI', 'MACD_Hist', 'BB_PctB', 'ADX']
     available_features = [f for f in features if f in data.columns]
     X_bt = data[available_features].iloc[:-1]
     y_bt = data['Target'].iloc[:-1]
@@ -349,7 +350,7 @@ else:
         correct_count = 0
         for i in range(test_len):
             idx = len(X_bt) - test_len + i
-            sub_model = RandomForestClassifier(n_estimators=30, random_state=42)
+            sub_model = RandomForestClassifier(n_estimators=30, max_depth=5, random_state=42)
             sub_model.fit(X_bt.iloc[:idx], y_bt.iloc[:idx])
             p = sub_model.predict(X_bt.iloc[[idx]])[0]
             if p == y_bt.iloc[idx]:
@@ -436,7 +437,7 @@ else:
             tp_pips = (tp_price - entry_price) / pip_unit
             sl_pips = (entry_price - sl_price) / pip_unit
 
-            st.success(f"🟢 **買いシグナル確定 (BUY)** （AI信頼度: {confidence:.1f}% | MTF一致）")
+            st.success(f"🟢 **買いシグナル確定 (BUY)** （AI信頼度: {confidence:.1f}% | 200EMA順張り）")
             t_col1, t_col2, t_col3 = st.columns(3)
             with t_col1:
                 st.metric("新規買い目安 (Entry)", f"{entry_price:{price_fmt}}")
@@ -455,7 +456,7 @@ else:
             tp_pips = (entry_price - tp_price) / pip_unit
             sl_pips = (sl_price - entry_price) / pip_unit
 
-            st.error(f"🔴 **売りシグナル確定 (SELL)** （AI信頼度: {confidence:.1f}% | MTF一致）")
+            st.error(f"🔴 **売りシグナル確定 (SELL)** （AI信頼度: {confidence:.1f}% | 200EMA順張り）")
             t_col1, t_col2, t_col3 = st.columns(3)
             with t_col1:
                 st.metric("新規売り目安 (Entry)", f"{entry_price:{price_fmt}}")
@@ -589,6 +590,8 @@ else:
 
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['SMA_20'], mode='lines', name='SMA 20', line=dict(color='orange', width=1)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['SMA_50'], mode='lines', name='SMA 50', line=dict(color='blue', width=1)), row=1, col=1)
+        if 'EMA_200' in df_chart.columns:
+            fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_200'], mode='lines', name='EMA 200', line=dict(color='white', width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Upper_Band'], mode='lines', name='+2σ', line=dict(color='gray', dash='dash', width=1)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Lower_Band'], mode='lines', name='-2σ', line=dict(color='gray', dash='dash', width=1)), row=1, col=1)
 
@@ -606,10 +609,10 @@ else:
 
     with tab_scanner:
         st.subheader("🔍 全監視通貨ペア AIスコア・一括スキャン")
-        st.write("※個別画面と全く同じ日足フィルター＆100本学習で一括スキャンを行います。")
+        st.write("※個別画面と全く同じ日足フィルター＆学習条件で一括スキャンを行います。")
         if st.button("🚀 全ペアを一括スキャン実行", use_container_width=True):
             scan_results = []
-            with st.spinner("全通貨ペアを同条件（100本学習＆日足分析）で計算中..."):
+            with st.spinner("全通貨ペアを同条件（200EMA順張り＆信頼度60%超）で計算中..."):
                 for p_label, p_symbol in PAIRS.items():
                     sub_df = load_and_process_data(p_symbol, tf_config['period'], tf_config['interval'], tf_label)
                     sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
@@ -644,7 +647,7 @@ else:
 
     st.divider()
     with st.expander("📄 データテーブル表示（デバッグ・分析用）"):
-        st.dataframe(data[available_features + ['ATR', 'BB_Width', 'SMA_50']].tail(10))
+        st.dataframe(data[available_features + ['ATR', 'BB_Width', 'SMA_50', 'EMA_200']].tail(10))
 
 # スマート自動リフレッシュ処理
 if auto_refresh:
