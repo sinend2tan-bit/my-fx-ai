@@ -548,7 +548,7 @@ else:
         cap_pips = 1500
         safe_range_pips = min(max_safe_range_pips, cap_pips)
 
-        # 【不具合修正点】選択されたタイムフレームに依存せず、常に日足データから過去30日分のレンジを正確に取得
+        # 【v4.1 修正点】タイムフレームに依存せず、常に日足データから過去30日分のレンジを正確に取得
         if higher_tf_data is not None and len(higher_tf_data) >= 30:
             recent_30d_high = higher_tf_data['High'].iloc[-30:].max()
             recent_30d_low = higher_tf_data['Low'].iloc[-30:].min()
