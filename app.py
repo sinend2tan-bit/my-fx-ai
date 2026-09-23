@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレアナライザー Ultimate Pro", 
+    page_title="プロ版 AI FXデイトレアナライザー Ultimate Pro v2", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -79,7 +79,7 @@ def send_discord_notification(webhook_url, message):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレアナライザー (Ultimate Hybrid Edition)")
+st.title("⚡ Pro AI FX デイトレアナライザー (v2.0 Defense Focused)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -98,8 +98,8 @@ BASE_SAFE_WIDTHS = {
 }
 
 TIMEFRAMES = {
-    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
     "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
+    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
     "4時間足 (中期トレンド用)": {"period": "6mo", "interval": "1h"},
     "12時間足 (長期トレンド用)": {"period": "1y", "interval": "1h"},
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
@@ -186,7 +186,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         except Exception:
             pass
 
-    if df.empty or len(df) < 30:
+    if df.empty or len(df) < 50:
         try:
             df = yf.download(symbol, period="3mo", interval="1d", progress=False)
             if isinstance(df.columns, pd.MultiIndex):
@@ -194,7 +194,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         except Exception:
             pass
 
-    if df.empty or len(df) < 30:
+    if df.empty or len(df) < 50:
         return None
 
     try:
@@ -259,9 +259,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception:
         return None
 
-# AIシグナル & ハイブリッド相場判定関数（トレンド順張り ＋ レンジ逆張り）
+# AIシグナル & 防御重視型フィルター判定関数 (v2.0)
 def analyze_signal(df_current, df_higher):
-    if df_current is None or len(df_current) < 30:
+    if df_current is None or len(df_current) < 50:
         return "HOLD", 50.0, None, "不明"
 
     try:
@@ -284,8 +284,10 @@ def analyze_signal(df_current, df_higher):
 
         latest_price = df_current['Close'].iloc[-1]
         latest_ema200 = df_current['EMA_200'].iloc[-1] if 'EMA_200' in df_current.columns else latest_price
+        latest_sma20 = df_current['SMA_20'].iloc[-1] if 'SMA_20' in df_current.columns else latest_price
         latest_adx = df_current['ADX'].iloc[-1] if 'ADX' in df_current.columns else 25.0
         latest_rsi = df_current['RSI'].iloc[-1] if 'RSI' in df_current.columns else 50.0
+        latest_atr = df_current['ATR'].iloc[-1] if 'ATR' in df_current.columns else 0.1
         upper_band = df_current['Upper_Band'].iloc[-1] if 'Upper_Band' in df_current.columns else latest_price
         lower_band = df_current['Lower_Band'].iloc[-1] if 'Lower_Band' in df_current.columns else latest_price
         
@@ -295,42 +297,62 @@ def analyze_signal(df_current, df_higher):
         avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
         is_squeezed = latest_bb_width < (avg_bb_width * 0.75)
 
+        # 過去50本の高値・安値（サポレジ帯）の算出
+        recent_50_high = df_current['High'].iloc[-50:-1].max()
+        recent_50_low = df_current['Low'].iloc[-50:-1].min()
+
+        # 追っかけ売買判定 (20SMAから1.5ATR以上離れているか)
+        is_far_from_sma = abs(latest_price - latest_sma20) > (latest_atr * 1.5)
+
+        # 壁（サポレジ）突撃判定 (直近高値・安値まで0.8ATR未満か)
+        space_to_support = latest_price - recent_50_low
+        space_to_resistance = recent_50_high - latest_price
+        is_near_support = space_to_support < (latest_atr * 0.8)
+        is_near_resistance = space_to_resistance < (latest_atr * 0.8)
+
         # ------------------------------------
         # 相場環境分岐 (ADX = 22 を境界線とする)
         # ------------------------------------
         if latest_adx > 22.0:
             market_type = "トレンド相場"
             
-            # 【トレンド戦略】 信頼度60%以上 ＋ 200EMA順張り
+            # 【トレンド順張り】防御フィルター適用
             if confidence < 60.0:
-                status = "HOLD"
+                status = "HOLD (確信度不足)"
             elif raw_pred == 1 and confidence >= 60.0:
-                if latest_price > latest_ema200:
+                if latest_price <= latest_ema200:
+                    status = "HOLD (逆張り警戒: 200EMA下)"
+                elif is_far_from_sma:
+                    status = "HOLD (押し待ち: 追っかけ買い回避)"
+                elif is_near_resistance:
+                    status = "HOLD (レジスタンス直前: 伸びしろ限定)"
+                else:
                     status = "BUY"
-                else:
-                    status = "HOLD (逆張り警戒)"
+
             elif raw_pred == 0 and confidence >= 60.0:
-                if latest_price < latest_ema200:
-                    status = "SELL"
+                if latest_price >= latest_ema200:
+                    status = "HOLD (逆張り警戒: 200EMA上)"
+                elif is_far_from_sma:
+                    status = "HOLD (戻り待ち: 追っかけ売り回避)"
+                elif is_near_support:
+                    status = "HOLD (サポート直前: 反発警戒)"
                 else:
-                    status = "HOLD (逆張り警戒)"
+                    status = "SELL"
             else:
                 status = "HOLD"
 
         else:
             market_type = "レンジ相場"
 
-            # スクイーズ発生中は突発ブレイクアウト警戒で取引回避
             if is_squeezed:
                 status = "HOLD (ブレイク警戒)"
             else:
-                # 【レンジ戦略】 RSI ＋ ボリンジャーバンド逆張り
                 if latest_price <= lower_band or latest_rsi <= 35.0:
                     status = "BUY (レンジ逆張り)"
-                    confidence = max(confidence, 65.0) # 条件成立で確信度補正
+                    confidence = max(confidence, 65.0)
                 elif latest_price >= upper_band or latest_rsi >= 65.0:
                     status = "SELL (レンジ逆張り)"
-                    confidence = max(confidence, 65.0) # 条件成立で確信度補正
+                    confidence = max(confidence, 65.0)
                 else:
                     status = "HOLD (レンジ内静観)"
 
@@ -413,22 +435,28 @@ else:
     latest_price = data['Close'].iloc[-1]
     latest_rsi = data['RSI'].iloc[-1] if 'RSI' in data.columns else 50.0
     latest_atr = data['ATR'].iloc[-1] if 'ATR' in data.columns else 0.1
-    latest_time = data.index[-1].strftime('%Y-%m-%d %H:%M')
 
+    # 構造的SL（直近20本の高値・安値 ＋ 10pipsバッファ）の計算
+    recent_high_20 = data['High'].iloc[-20:].max()
+    recent_low_20 = data['Low'].iloc[-20:].min()
+    buffer_margin = 10 * pip_unit
+
+    structural_buy_sl = round(recent_low_20 - buffer_margin, 3 if is_jpy_pair else 5)
+    structural_sell_sl = round(recent_high_20 + buffer_margin, 3 if is_jpy_pair else 5)
+
+    # TP/SL幅の動的最適化
     conf_factor = confidence / 50.0
     adx_bonus = 0.2 if latest_adx > 25 else 0.0
 
-    # 利確・損切り倍率の自動算出（レンジ逆張りの場合は利確を速める）
     if "レンジ" in market_type:
         ai_tp_mult = 0.8
         ai_sl_mult = 0.6
     else:
-        ai_tp_mult = round(max(0.8, min(2.5, 1.0 * conf_factor + adx_bonus)), 2)
-        ai_sl_mult = round(max(0.4, min(1.2, 0.6 / (conf_factor * 0.9))), 2)
+        ai_tp_mult = round(max(1.0, min(2.5, 1.2 * conf_factor + adx_bonus)), 2)
+        ai_sl_mult = round(max(0.6, min(1.5, 0.8 / (conf_factor * 0.8))), 2)
 
     dynamic_width_adjustment = int(round((confidence - 50) / 10)) * 2
     ai_recommended_width = min(40, max(10, base_safe_width + dynamic_width_adjustment))
-
     recommended_slippage = round(max(0.5, (latest_atr / pip_unit) * 0.05), 1)
 
     if is_squeezed:
@@ -461,12 +489,12 @@ else:
     ])
 
     with tab_single:
-        st.subheader("🎯 デイトレ単発トレード（指値・逆指値）最適化値")
+        st.subheader("🎯 デイトレ単発トレード（構造的SL対応・安全設計）")
         
-        if "BUY" in market_status:
+        if market_status == "BUY" or "BUY (" in market_status:
             entry_price = latest_price
             tp_price = entry_price + (latest_atr * ai_tp_mult)
-            sl_price = entry_price - (latest_atr * ai_sl_mult)
+            sl_price = min(entry_price - (latest_atr * ai_sl_mult), structural_buy_sl)
             tp_pips = (tp_price - entry_price) / pip_unit
             sl_pips = (entry_price - sl_price) / pip_unit
 
@@ -479,13 +507,13 @@ else:
                 st.metric("利確目標 (AI最適TP)", f"{tp_price:{price_fmt}}", f"+{tp_pips:.1f} pips")
                 st.code(f"{tp_price:{price_fmt}}", language="text")
             with t_col3:
-                st.metric("損切り目安 (AI最適SL)", f"{sl_price:{price_fmt}}", f"-{sl_pips:.1f} pips")
+                st.metric("防衛SL (構造的安値外側)", f"{sl_price:{price_fmt}}", f"-{sl_pips:.1f} pips")
                 st.code(f"{sl_price:{price_fmt}}", language="text")
 
-        elif "SELL" in market_status:
+        elif market_status == "SELL" or "SELL (" in market_status:
             entry_price = latest_price
             tp_price = entry_price - (latest_atr * ai_tp_mult)
-            sl_price = entry_price + (latest_atr * ai_sl_mult)
+            sl_price = max(entry_price + (latest_atr * ai_sl_mult), structural_sell_sl)
             tp_pips = (entry_price - tp_price) / pip_unit
             sl_pips = (sl_price - entry_price) / pip_unit
 
@@ -498,22 +526,29 @@ else:
                 st.metric("利確目標 (AI最適TP)", f"{tp_price:{price_fmt}}", f"-{tp_pips:.1f} pips")
                 st.code(f"{tp_price:{price_fmt}}", language="text")
             with t_col3:
-                st.metric("損切り目安 (AI最適SL)", f"{sl_price:{price_fmt}}", f"+{sl_pips:.1f} pips")
+                st.metric("防衛SL (構造的高値外側)", f"{sl_price:{price_fmt}}", f"+{sl_pips:.1f} pips")
                 st.code(f"{sl_price:{price_fmt}}", language="text")
         else:
-            st.warning(f"🟡 **様子見モード ({market_status})** （AI信頼度: {confidence:.1f}% | モード: {market_type}）")
+            st.warning(f"🟡 **静観モード ({market_status})** （AI信頼度: {confidence:.1f}% | 無駄打ち防止ブロック発動中）")
+            st.info("💡 **アドバイス:** 現在は追っかけリスクや壁直前、または押し目・戻り目形成中のため、AIがエントリーを回避しています。明確な買い・売りシグナルが灯るまで静観してください。")
 
     with tab_speed:
         st.subheader("⚡ 松井証券FX アプリ【スピード注文】設定用")
         st.write("松井証券FXアプリの「スピード注文設定」画面に直接入力できる数値です。")
 
         sp_tp_pips = round(latest_atr * ai_tp_mult / pip_unit, 1)
-        sp_sl_pips = round(latest_atr * ai_sl_mult / pip_unit, 1)
+        
+        if "SELL" in market_status:
+            sp_sl_pips = round((structural_sell_sl - latest_price) / pip_unit, 1)
+        elif "BUY" in market_status:
+            sp_sl_pips = round((latest_price - structural_buy_sl) / pip_unit, 1)
+        else:
+            sp_sl_pips = round(latest_atr * ai_sl_mult / pip_unit, 1)
 
         sp_col1, sp_col2, sp_col3 = st.columns(3)
         sp_col1.metric("数量 (万)", f"{quantity_wan}")
         sp_col2.metric("益出し幅 (利確)", f"{sp_tp_pips} pips")
-        sp_col3.metric("損切り幅 (損切)", f"{sp_sl_pips} pips")
+        sp_col3.metric("防衛損切り幅 (損切)", f"{sp_sl_pips} pips")
 
         st.markdown("#### 📱 スピード注文設定用サマリー（コピー用）")
         st.code(
@@ -521,7 +556,7 @@ else:
             f"推奨エントリー: {'買 (ASK)' if 'BUY' in market_status else '売 (BID)' if 'SELL' in market_status else '様子見'}\n"
             f"数量(万): {quantity_wan}\n"
             f"益出し幅: {sp_tp_pips} pips\n"
-            f"損切り幅: {sp_sl_pips} pips\n"
+            f"損切り幅: {sp_sl_pips} pips (高安外側防衛ライン)\n"
             f"許容スリッページ: {recommended_slippage} pips",
             language="text"
         )
@@ -590,7 +625,7 @@ else:
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
                 f"数量（万）　: {quantity_wan}  ← ※松井証券アプリの「数量(万)」にそのまま入力！\n"
-                f"注文値幅　{ai_recommended_width} pips\n"
+                f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
                 f"運用停止ライン: {rep_op_stop_line} （レンジ上限から +{buffer_pips} pips）\n"
                 f"（参考・計算用通貨量: {custom_quantity:,} 通貨 / 考慮口座資金: ¥{account_balance:,}）"
@@ -605,8 +640,8 @@ else:
 
         if enable_notify and discord_url:
             last_sent = st.session_state.last_sent_pair_status.get(selected_label)
-            if market_status in ["BUY", "SELL", "BUY (レンジ逆張り)", "SELL (レンジ逆張り)"] and last_sent != market_status:
-                msg = f"📱 **【FX AIシグナル発動】**\n• 通貨ペア: {selected_label}\n• 判定: {market_status}\n• 相場環境: {market_type}\n• 信頼度: {confidence:.1f}%\n• レート: {latest_price:{price_fmt}}"
+            if (market_status == "BUY" or market_status == "SELL" or "レンジ逆張り" in market_status) and last_sent != market_status:
+                msg = f"📱 **【FX AI防衛シグナル発動】**\n• 通貨ペア: {selected_label}\n• 判定: {market_status}\n• 相場環境: {market_type}\n• 信頼度: {confidence:.1f}%\n• レート: {latest_price:{price_fmt}}"
                 success = send_discord_notification(discord_url, msg)
                 if success:
                     st.session_state.last_sent_pair_status[selected_label] = market_status
@@ -641,11 +676,11 @@ else:
         st.plotly_chart(fig, use_container_width=True)
 
     with tab_scanner:
-        st.subheader("🔍 全監視通貨ペア AIスコア・一括スキャン")
-        st.write("※全ペアのトレンド／レンジ環境と最適シグナルを一括分析します。")
+        st.subheader("🔍 全監視通貨ペア AI防衛スキャン")
+        st.write("※全ペアのノイズリスク・サポレジ衝突をチェックし、厳選されたシグナルのみを抽出します。")
         if st.button("🚀 全ペアを一括スキャン実行", use_container_width=True):
             scan_results = []
-            with st.spinner("全通貨ペアをハイブリッドロジックで同時計算中..."):
+            with st.spinner("全通貨ペアを防御重視型ロジックで分析中..."):
                 for p_label, p_symbol in PAIRS.items():
                     sub_df = load_and_process_data(p_symbol, tf_config['period'], tf_config['interval'], tf_label)
                     sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
