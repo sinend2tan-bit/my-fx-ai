@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.1", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.2", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -70,7 +70,7 @@ if "initialized" not in st.session_state:
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.1)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.2)")
 
 PAIRS = {
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -501,6 +501,19 @@ else:
     ai_recommended_width = min(40, max(10, base_safe_width + dynamic_width_adjustment))
     recommended_slippage = round(max(0.5, (latest_atr / pip_unit) * 0.05), 1)
 
+    # 【v4.2 新機能】単発トレード向け「資金2%リスク内」の適正数量自動計算エンジン
+    sl_distance_pips = round((latest_atr * ai_sl_mult) / pip_unit, 1)
+    if sl_distance_pips <= 0:
+        sl_distance_pips = 20.0
+        
+    allowed_loss_jpy = account_balance * 0.02  # 資金の2%を最大許容損失とする
+    pip_value_per_unit = 0.01 if is_jpy_pair else (0.0001 * 155.0) # おおよその円換算
+    
+    # 適正通貨数の算出 (許容損失額 ÷ (SL距離pips × 1pipsあたりの価値))
+    safe_single_units = int(allowed_loss_jpy / (sl_distance_pips * pip_value_per_unit))
+    safe_single_units = max(100, min(safe_single_units, 50000))  # 100通貨〜5万通貨の範囲に抑える
+    safe_single_wan = round(safe_single_units / 10000.0, 4)
+
     if is_squeezed:
         st.error("⚡ **【スクイーズ発生】**: ボリンジャーバンドが収縮中です。ブレイクアウトにご注意ください。")
 
@@ -548,7 +561,6 @@ else:
         cap_pips = 1500
         safe_range_pips = min(max_safe_range_pips, cap_pips)
 
-        # 【v4.1 修正点】タイムフレームに依存せず、常に日足データから過去30日分のレンジを正確に取得
         if higher_tf_data is not None and len(higher_tf_data) >= 30:
             recent_30d_high = higher_tf_data['High'].iloc[-30:].max()
             recent_30d_low = higher_tf_data['Low'].iloc[-30:].min()
@@ -595,6 +607,9 @@ else:
 
     with tab_single:
         st.subheader("🎯 デイトレ単発トレード（高精度ノイズ除去モデル）")
+        
+        # 【v4.2 追加】単発トレード用の資金管理案内表示
+        st.info(f"🛡️ **口座資金 ({account_balance:,}円) に基づく単発適正数量ガイド**: 1回のリスクを資金2%（{int(allowed_loss_jpy):,}円）以下に抑える推奨注文数量は **`{safe_single_wan}万通貨` ({safe_single_units:,}通貨)** です。")
         
         if market_status == "BUY" or "BUY (" in market_status:
             entry_price = latest_price
@@ -648,14 +663,14 @@ else:
             sp_sl_pips = round(latest_atr * ai_sl_mult / pip_unit, 1)
 
         sp_col1, sp_col2, sp_col3 = st.columns(3)
-        sp_col1.metric("数量 (万)", f"{quantity_wan}")
+        sp_col1.metric("資金ベース推奨数量 (万)", f"{safe_single_wan}万 ({safe_single_units:,}通貨)")
         sp_col2.metric("益出し幅 (利確)", f"{sp_tp_pips} pips")
         sp_col3.metric("防衛損切り幅 (損切)", f"{sp_sl_pips} pips")
 
         st.code(
             f"通貨ペア: {selected_label}\n"
             f"推奨エントリー: {'買 (ASK)' if 'BUY' in market_status else '売 (BID)' if 'SELL' in market_status else '様子見'}\n"
-            f"数量(万): {quantity_wan}\n"
+            f"【推奨安全数量】: {safe_single_wan} 万通貨 ({safe_single_units:,} 通貨)\n"
             f"益出し幅: {sp_tp_pips} pips\n"
             f"損切り幅: {sp_sl_pips} pips\n"
             f"許容スリッページ: {recommended_slippage} pips",
