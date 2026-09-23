@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.2", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.3", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -27,7 +27,7 @@ SETTINGS_FILE = "user_settings.json"
 
 DEFAULT_SETTINGS = {
     "account_balance": 200000,
-    "quantity_wan": 0.02,
+    "quantity_wan": 0.20,
     "discord_url": "",
     "enable_notify": False,
     "auto_refresh": False,
@@ -70,7 +70,7 @@ if "initialized" not in st.session_state:
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.2)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.3)")
 
 PAIRS = {
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -81,11 +81,11 @@ PAIRS = {
 }
 
 BASE_SAFE_WIDTHS = {
-    "GBPJPY=X": 30,
+    "GBPJPY=X": 25,
     "USDJPY=X": 20,
-    "EURJPY=X": 25,
-    "AUDJPY=X": 20,
-    "EURUSD=X": 20,
+    "EURJPY=X": 20,
+    "AUDJPY=X": 15,
+    "EURUSD=X": 15,
 }
 
 TIMEFRAMES = {
@@ -497,21 +497,19 @@ else:
         ai_tp_mult = round(max(1.0, min(2.5, 1.2 * conf_factor + adx_bonus)), 2)
         ai_sl_mult = round(max(0.6, min(1.5, 0.8 / (conf_factor * 0.8))), 2)
 
-    dynamic_width_adjustment = int(round((confidence - 50) / 10)) * 2
-    ai_recommended_width = min(40, max(10, base_safe_width + dynamic_width_adjustment))
+    ai_recommended_width = base_safe_width
     recommended_slippage = round(max(0.5, (latest_atr / pip_unit) * 0.05), 1)
 
-    # 【v4.2 新機能】単発トレード向け「資金2%リスク内」の適正数量自動計算エンジン
+    # 単発適正数量計算
     sl_distance_pips = round((latest_atr * ai_sl_mult) / pip_unit, 1)
     if sl_distance_pips <= 0:
         sl_distance_pips = 20.0
         
-    allowed_loss_jpy = account_balance * 0.02  # 資金の2%を最大許容損失とする
-    pip_value_per_unit = 0.01 if is_jpy_pair else (0.0001 * 155.0) # おおよその円換算
+    allowed_loss_jpy = account_balance * 0.02
+    pip_value_per_unit = 0.01 if is_jpy_pair else (0.0001 * 155.0)
     
-    # 適正通貨数の算出 (許容損失額 ÷ (SL距離pips × 1pipsあたりの価値))
     safe_single_units = int(allowed_loss_jpy / (sl_distance_pips * pip_value_per_unit))
-    safe_single_units = max(100, min(safe_single_units, 50000))  # 100通貨〜5万通貨の範囲に抑える
+    safe_single_units = max(100, min(safe_single_units, 50000))
     safe_single_wan = round(safe_single_units / 10000.0, 4)
 
     if is_squeezed:
@@ -545,7 +543,7 @@ else:
 
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用パラメータ")
-        st.write("💡 **HOLD判定を無視して常に有効なレンジを算出します。** 松井証券アプリの「リピート注文」画面に直接入力してください。")
+        st.write("💡 **口座資金（20万円）と指定数量（0.2万）から証拠金エラーにならない安全レンジを自動計算しています。**")
         
         leverage = 25.0
         if is_jpy_pair:
@@ -554,27 +552,27 @@ else:
             uj_price = usdjpy_data['Close'].iloc[-1] if usdjpy_data is not None else 155.0
             jpy_rate = latest_price * uj_price
 
+        # 【v4.3 核心修正】口座資金と注文数量から証拠金オーバーにならない最大可能本数（グリッド数）を厳密算出
         margin_per_unit = (jpy_rate * custom_quantity) / leverage
-        max_allowable_grids = max(5, int((account_balance * 0.7) / max(margin_per_unit, 1.0)))
         
-        max_safe_range_pips = max_allowable_grids * ai_recommended_width
-        cap_pips = 1500
-        safe_range_pips = min(max_safe_range_pips, cap_pips)
-
-        if higher_tf_data is not None and len(higher_tf_data) >= 30:
-            recent_30d_high = higher_tf_data['High'].iloc[-30:].max()
-            recent_30d_low = higher_tf_data['Low'].iloc[-30:].min()
-        else:
-            recent_30d_high = data['High'].max()
-            recent_30d_low = data['Low'].min()
-
-        rep_lower = round(recent_30d_low, 3 if is_jpy_pair else 5)
-        rep_upper = round(recent_30d_high, 3 if is_jpy_pair else 5)
+        # 安全のために資金の70%までを証拠金として使える計算にする
+        max_allowable_grids = max(2, int((account_balance * 0.7) / max(margin_per_unit, 1.0)))
         
-        buffer_val = max(latest_atr * 2.0, 0.5 if is_jpy_pair else 0.05)
+        # 許容本数からカバーできる最大pips幅を逆算（本数 ÷ 2 × 注文値幅）
+        max_half_grids = max(1, max_allowable_grids // 2)
+        safe_half_range_pips = max_half_grids * ai_recommended_width
+        safe_half_range_val = safe_half_range_pips * pip_unit
+
+        # 現在価格を中心に証拠金20万円で確実に収まる範囲（レンジ）を決定
+        rep_lower = round(latest_price - safe_half_range_val, 3 if is_jpy_pair else 5)
+        rep_upper = round(latest_price + safe_half_range_val, 3 if is_jpy_pair else 5)
+        
+        buffer_val = max(latest_atr * 1.5, 0.4 if is_jpy_pair else 0.04)
         rep_buy_stop = round(rep_lower - buffer_val, 3 if is_jpy_pair else 5)
         rep_sell_stop = round(rep_upper + buffer_val, 3 if is_jpy_pair else 5)
         buffer_pips = round(buffer_val / pip_unit, 1)
+
+        st.info(f"🛡️ **証拠金管理**: 現在の口座資金 ({account_balance:,}円) で {quantity_wan}万通貨 ({custom_quantity:,}通貨) を運用する場合、最大 **{max_allowable_grids}本** の同時注文が可能です。注文が確実に通る安全レンジ幅を算出しました。")
 
         rep_c1, rep_c2 = st.columns(2)
         with rep_c1:
@@ -608,7 +606,6 @@ else:
     with tab_single:
         st.subheader("🎯 デイトレ単発トレード（高精度ノイズ除去モデル）")
         
-        # 【v4.2 追加】単発トレード用の資金管理案内表示
         st.info(f"🛡️ **口座資金 ({account_balance:,}円) に基づく単発適正数量ガイド**: 1回のリスクを資金2%（{int(allowed_loss_jpy):,}円）以下に抑える推奨注文数量は **`{safe_single_wan}万通貨` ({safe_single_units:,}通貨)** です。")
         
         if market_status == "BUY" or "BUY (" in market_status:
