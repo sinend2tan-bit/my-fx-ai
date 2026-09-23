@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.6", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.7", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -68,33 +68,34 @@ if "initialized" not in st.session_state:
     st.session_state["initialized"] = True
 
 # ==========================================
-# 2. メイン画面 & サイドバー設定
+# 2. メイン画面 & サイドバー設定 (並び順修正)
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.6)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.7)")
 
+# 1番目を「米ドル / 円」に変更
 PAIRS = {
-    "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
+    "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
     "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
     "豪ドル / 円 (AUD/JPY)": "AUDJPY=X",
     "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
 }
 
-# ATR掛け率と最低担保値幅の設定
-PAIR_ATR_CONFIG = {
-    "GBPJPY=X": {"atr_mult": 0.25, "min_pips": 20},
-    "USDJPY=X": {"atr_mult": 0.20, "min_pips": 15},
-    "EURJPY=X": {"atr_mult": 0.20, "min_pips": 15},
-    "AUDJPY=X": {"atr_mult": 0.18, "min_pips": 12},
-    "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
-}
-
+# 1番目を「15分足」に変更
 TIMEFRAMES = {
-    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
     "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
+    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
     "4時間足 (中期トレンド用)": {"period": "6mo", "interval": "1h"},
     "12時間足 (長期トレンド用)": {"period": "1y", "interval": "1h"},
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
+}
+
+PAIR_ATR_CONFIG = {
+    "USDJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "GBPJPY=X": {"atr_mult": 0.25, "min_pips": 20},
+    "EURJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "AUDJPY=X": {"atr_mult": 0.18, "min_pips": 12},
+    "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
 col_s1, col_s2 = st.columns(2)
@@ -588,7 +589,7 @@ else:
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: 買\n"
                 f"レンジ下限　: {rep_lower}\n"
-                f"レンジ上限{rep_upper}\n"
+                f"レンジ上限　: {rep_upper}\n"
                 f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
                 f"注文値幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
                 f"益出し幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
