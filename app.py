@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.5", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.6", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -70,7 +70,7 @@ if "initialized" not in st.session_state:
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.5 - ATR動的連動)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.6)")
 
 PAIRS = {
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -149,7 +149,7 @@ quantity_wan = st.sidebar.number_input(
 custom_quantity = int(round(quantity_wan * 10000))
 
 # ==========================================
-# 3. データ取得 & 高精度インジケーター計算エンジン (エラー保護強化)
+# 3. データ取得 & 高精度インジケーター計算エンジン
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -499,7 +499,7 @@ else:
         ai_tp_mult = round(max(1.0, min(2.5, 1.2 * conf_factor + adx_bonus)), 2)
         ai_sl_mult = round(max(0.6, min(1.5, 0.8 / (conf_factor * 0.8))), 2)
 
-    # 【新ロジック】ATR連動型の動的リピート注文値幅計算
+    # ATR連動型の動的リピート注文値幅計算
     raw_atr_pips = (latest_atr / pip_unit)
     calc_dynamic_width = round(raw_atr_pips * atr_cfg["atr_mult"], 1)
     ai_recommended_width = int(max(calc_dynamic_width, atr_cfg["min_pips"]))
@@ -549,7 +549,7 @@ else:
 
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用パラメータ")
-        st.write(f"💡 **直近の相場変動幅 (ATR = {raw_atr_pips:.1f} pips) に連動し、最適値幅を自動選定しています。**")
+        st.write(f"💡 **直近の相場変動幅 (ATR = {raw_atr_pips:.1f} pips) に連動し、値幅 `{ai_recommended_width} pips` を自動設定しました。**")
         
         leverage = 25.0
         if is_jpy_pair:
@@ -588,7 +588,7 @@ else:
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: 買\n"
                 f"レンジ下限　: {rep_lower}\n"
-                f"レンジ上限　: {rep_upper}\n"
+                f"レンジ上限{rep_upper}\n"
                 f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
                 f"注文値幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
                 f"益出し幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
@@ -687,21 +687,23 @@ else:
 
     with tab_chart:
         st.subheader("📈 Pro仕様 インタラクティブ・ローソク足チャート (Plotly)")
-        df_chart = data.tail(60)
+        df_chart = data.tail(60).copy()
+        chart_x = [str(x) for x in df_chart.index]
+        
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
 
         fig.add_trace(go.Candlestick(
-            x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], name="ローソク足"
+            x=chart_x, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], name="ローソク足"
         ), row=1, col=1)
 
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['SMA_20'], mode='lines', name='SMA 20', line=dict(color='orange', width=1)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['SMA_50'], mode='lines', name='SMA 50', line=dict(color='blue', width=1)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=chart_x, y=df_chart['SMA_20'], mode='lines', name='SMA 20', line=dict(color='orange', width=1)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=chart_x, y=df_chart['SMA_50'], mode='lines', name='SMA 50', line=dict(color='blue', width=1)), row=1, col=1)
         if 'EMA_200' in df_chart.columns:
-            fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_200'], mode='lines', name='EMA 200', line=dict(color='white', width=1.5)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Upper_Band'], mode='lines', name='+2σ', line=dict(color='gray', dash='dash', width=1)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Lower_Band'], mode='lines', name='-2σ', line=dict(color='gray', dash='dash', width=1)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=chart_x, y=df_chart['EMA_200'], mode='lines', name='EMA 200', line=dict(color='white', width=1.5)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=chart_x, y=df_chart['Upper_Band'], mode='lines', name='+2σ', line=dict(color='gray', dash='dash', width=1)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=chart_x, y=df_chart['Lower_Band'], mode='lines', name='-2σ', line=dict(color='gray', dash='dash', width=1)), row=1, col=1)
 
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['RSI'], mode='lines', name='RSI(14)', line=dict(color='purple', width=1.5)), row=2, col=1)
+        fig.add_trace(go.Scatter(x=chart_x, y=df_chart['RSI'], mode='lines', name='RSI(14)', line=dict(color='purple', width=1.5)), row=2, col=1)
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 
