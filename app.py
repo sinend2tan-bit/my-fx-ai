@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.0", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.1", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -26,7 +26,7 @@ st.set_page_config(
 SETTINGS_FILE = "user_settings.json"
 
 DEFAULT_SETTINGS = {
-    "account_balance": 1000000,
+    "account_balance": 200000,
     "quantity_wan": 0.02,
     "discord_url": "",
     "enable_notify": False,
@@ -70,7 +70,7 @@ if "initialized" not in st.session_state:
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.0)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.1)")
 
 PAIRS = {
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -148,7 +148,7 @@ quantity_wan = st.sidebar.number_input(
 custom_quantity = int(round(quantity_wan * 10000))
 
 # ==========================================
-# 3. データ取得 & 高精度インジケーター計算エンジン (機能拡張版)
+# 3. データ取得 & 高精度インジケーター計算エンジン
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -192,13 +192,13 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df['SMA_50'] = df['Close'].rolling(window=50).mean()
         df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
 
-        # ATR & ボラティリティ変化率 (改善点1)
+        # ATR & ボラティリティ変化率
         high_low = df['High'] - df['Low']
         df['ATR'] = high_low.rolling(window=14).mean()
         df['ATR_SMA20'] = df['ATR'].rolling(window=20).mean()
         df['ATR_Ratio'] = df['ATR'] / (df['ATR_SMA20'] + 1e-10)
 
-        # ローソク足ヒゲ率 (改善点1)
+        # ローソク足ヒゲ率
         total_range = df['High'] - df['Low'] + 1e-10
         df['Upper_Wick_Ratio'] = (df['High'] - df[['Open', 'Close']].max(axis=1)) / total_range
         df['Lower_Wick_Ratio'] = (df[['Open', 'Close']].min(axis=1) - df['Low']) / total_range
@@ -249,7 +249,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         dx = 100 * (plus_di - minus_di).abs() / sum_di
         df['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
-        # タイムフレーム別のTarget動的閾値設定 (改善点3)
+        # タイムフレーム別のTarget動的閾値設定
         if "15分" in tf_name or interval == "15m":
             target_pips_val = 8.0
         elif "1時間" in tf_name or interval == "1h":
@@ -266,13 +266,12 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception:
         return None
 
-# AIシグナル & 防御重視型フィルター判定関数 (v4.0)
+# AIシグナル & 防御重視型フィルター判定関数
 def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
     if df_current is None or len(df_current) < 50:
         return "HOLD", 50.0, None, "不明"
 
     try:
-        # 拡張された特徴量リスト
         features = [
             'Return_1', 'Return_5', 'Dev_SMA20', 'Dev_EMA200', 'Vol_Ratio', 
             'RSI', 'RSI_Diff', 'MACD_Hist_Ratio', 'BB_PctB', 'ADX',
@@ -321,7 +320,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
             elif htf_close < htf_ema:
                 htf_trend = "DOWN"
 
-        # クロス円ストッパー判定 (改善点4)
+        # クロス円ストッパー判定
         is_cross_jpy = "JPY" in current_symbol and current_symbol != "USDJPY=X"
         usdjpy_strong_up = False
         usdjpy_strong_down = False
@@ -389,13 +388,13 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
     except Exception:
         return "HOLD", 50.0, None, "不明"
 
-# ドル円データの事前読み込み (クロス円ストッパー用)
+# ドル円データの事前読み込み
 usdjpy_data = load_and_process_data("USDJPY=X", tf_config['period'], tf_config['interval'], tf_label)
 data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
 higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足 (スイング・環境認識用)")
 
 # ==========================================
-# 4. 時間帯・指標・週末市場クローズ判定 (改善点2)
+# 4. 時間帯・指標・週末市場クローズ判定
 # ==========================================
 now_datetime = datetime.now()
 current_day = now_datetime.weekday()
@@ -406,7 +405,7 @@ is_weekend = (current_day == 5 and current_hour_jst >= 6) or (current_day == 6) 
 is_low_liquidity = 3 <= current_hour_jst <= 7
 is_ny_open = 21 <= current_hour_jst <= 23
 
-# 主要指標発表帯 (例: 21:15〜22:45 / NY指標＆雇用統計帯)
+# 主要指標発表帯 (21:15〜22:45)
 is_econ_indicator_time = (current_hour_jst == 21 and current_minute_jst >= 15) or (current_hour_jst == 22 and current_minute_jst <= 45)
 
 if is_weekend:
@@ -428,7 +427,6 @@ else:
         data, higher_tf_data, usdjpy_df=usdjpy_data, current_symbol=ticker
     )
 
-    # 指標発表帯の場合はAIステータスをオーバーライド
     if is_econ_indicator_time and ("BUY" in market_status or "SELL" in market_status):
         market_status = "HOLD (指標発表警戒時間帯)"
 
@@ -550,8 +548,13 @@ else:
         cap_pips = 1500
         safe_range_pips = min(max_safe_range_pips, cap_pips)
 
-        recent_30d_high = data['High'].iloc[-500:].max()
-        recent_30d_low = data['Low'].iloc[-500:].min()
+        # 【不具合修正点】選択されたタイムフレームに依存せず、常に日足データから過去30日分のレンジを正確に取得
+        if higher_tf_data is not None and len(higher_tf_data) >= 30:
+            recent_30d_high = higher_tf_data['High'].iloc[-30:].max()
+            recent_30d_low = higher_tf_data['Low'].iloc[-30:].min()
+        else:
+            recent_30d_high = data['High'].max()
+            recent_30d_low = data['Low'].min()
 
         rep_lower = round(recent_30d_low, 3 if is_jpy_pair else 5)
         rep_upper = round(recent_30d_high, 3 if is_jpy_pair else 5)
