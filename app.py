@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.9", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.0", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -92,7 +92,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.9)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.0)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -648,8 +648,8 @@ else:
             st.code(
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: 買\n"
+                f"レンジ上限　: {rep_upper}\n"
                 f"レンジ下限　: {rep_lower}\n"
-                f"レンジ上限{rep_upper}\n"
                 f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
                 f"注文値幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
                 f"益出し幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
@@ -664,8 +664,8 @@ else:
             st.code(
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: 売\n"
-                f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
+                f"レンジ下限　: {rep_lower}\n"
                 f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
                 f"注文値幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
                 f"益出し幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
