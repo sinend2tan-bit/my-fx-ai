@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.7", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.8", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -67,12 +67,33 @@ if "initialized" not in st.session_state:
         st.session_state[key] = val
     st.session_state["initialized"] = True
 
-# ==========================================
-# 2. メイン画面 & サイドバー設定 (並び順修正)
-# ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.7)")
+# Discord通知関数
+def send_discord_notification(webhook_url, title, message, color=0x00ff00):
+    if not webhook_url:
+        return False, "URL未設定"
+    
+    payload = {
+        "embeds": [{
+            "title": title,
+            "description": message,
+            "color": color,
+            "timestamp": datetime.utcnow().isoformat()
+        }]
+    }
+    try:
+        res = requests.post(webhook_url, json=payload, timeout=5)
+        if res.status_code in [200, 204]:
+            return True, "送信成功"
+        else:
+            return False, f"ステータスコード: {res.status_code}"
+    except Exception as e:
+        return False, str(e)
 
-# 1番目を「米ドル / 円」に変更
+# ==========================================
+# 2. メイン画面 & サイドバー設定
+# ==========================================
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.8)")
+
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -81,7 +102,6 @@ PAIRS = {
     "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
 }
 
-# 1番目を「15分足」に変更
 TIMEFRAMES = {
     "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
     "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
@@ -148,6 +168,29 @@ quantity_wan = st.sidebar.number_input(
 )
 
 custom_quantity = int(round(quantity_wan * 10000))
+
+st.sidebar.subheader("🔔 Discord 通知設定")
+discord_url = st.sidebar.text_input(
+    "Webhook URL", 
+    type="password", 
+    key="discord_url", 
+    on_change=save_user_settings
+)
+enable_notify = st.sidebar.checkbox(
+    "AI売買シグナル時に通知する", 
+    key="enable_notify", 
+    on_change=save_user_settings
+)
+
+if st.sidebar.button("🧪 Discord テスト送信"):
+    if discord_url:
+        ok, msg = send_discord_notification(discord_url, "🧪 テスト通知", "Discord連携は正常に動作しています！", color=0x3498db)
+        if ok:
+            st.sidebar.success("テスト通知を送信しました！")
+        else:
+            st.sidebar.error(f"送信失敗: {msg}")
+    else:
+        st.sidebar.warning("Webhook URLを入力してください。")
 
 # ==========================================
 # 3. データ取得 & 高精度インジケーター計算エンジン
@@ -432,6 +475,22 @@ else:
 
     if is_econ_indicator_time and ("BUY" in market_status or "SELL" in market_status):
         market_status = "HOLD (指標発表警戒時間帯)"
+
+    # Discord 自動通知処理（シグナル発生時）
+    if enable_notify and discord_url and ("BUY" in market_status or "SELL" in market_status):
+        last_sig_key = f"last_notified_{ticker}"
+        if st.session_state.get(last_sig_key) != market_status:
+            color_val = 0x2ecc71 if "BUY" in market_status else 0xe74c3c
+            msg_body = (
+                f"**通貨ペア**: {selected_label}\n"
+                f"**現在レート**: {data['Close'].iloc[-1]:{price_fmt}}\n"
+                f"**AIシグナル**: {market_status}\n"
+                f"**確信度**: {confidence:.1f}%\n"
+                f"**相場環境**: {market_type}"
+            )
+            ok, _ = send_discord_notification(discord_url, f"🚨 AI FXシグナル通知 [{selected_label}]", msg_body, color=color_val)
+            if ok:
+                st.session_state[last_sig_key] = market_status
 
     features = [
         'Return_1', 'Return_5', 'Dev_SMA20', 'Dev_EMA200', 'Vol_Ratio', 
