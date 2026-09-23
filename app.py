@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Ultimate Pro v3.1", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v3.2", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -32,11 +32,6 @@ DEFAULT_SETTINGS = {
     "enable_notify": False,
     "auto_refresh": False,
     "refresh_interval": 180,
-    "has_pos": True,
-    "pos_pair": "GBPJPY=X",
-    "pos_type": "売り (SELL)",
-    "pos_price": 198.50,
-    "pos_lots": 1.0
 }
 
 def load_user_settings():
@@ -59,10 +54,6 @@ def save_user_settings():
         "enable_notify": st.session_state.get("enable_notify", DEFAULT_SETTINGS["enable_notify"]),
         "auto_refresh": st.session_state.get("auto_refresh", DEFAULT_SETTINGS["auto_refresh"]),
         "refresh_interval": st.session_state.get("refresh_interval", DEFAULT_SETTINGS["refresh_interval"]),
-        "has_pos": st.session_state.get("has_pos", DEFAULT_SETTINGS["has_pos"]),
-        "pos_type": st.session_state.get("pos_type", DEFAULT_SETTINGS["pos_type"]),
-        "pos_price": st.session_state.get("pos_price", DEFAULT_SETTINGS["pos_price"]),
-        "pos_lots": st.session_state.get("pos_lots", DEFAULT_SETTINGS["pos_lots"]),
     }
     try:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
@@ -91,7 +82,7 @@ def send_discord_notification(webhook_url, message):
 # ==========================================
 # 3. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v3.1 High-Precision)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v3.2)")
 
 PAIRS = {
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -169,15 +160,6 @@ quantity_wan = st.sidebar.number_input(
 custom_quantity = int(round(quantity_wan * 10000))
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🚨 保有ポジション（含み損）管理")
-has_pos = st.sidebar.checkbox("既存ポジションを入力して監視", key="has_pos", on_change=save_user_settings)
-
-if has_pos:
-    pos_type = st.sidebar.radio("ポジション売買種別", ["売り (SELL)", "買い (BUY)"], key="pos_type", on_change=save_user_settings)
-    pos_price = st.sidebar.number_input("平均取得単価", value=198.50, step=0.1, key="pos_price", on_change=save_user_settings)
-    pos_lots = st.sidebar.number_input("保有数量 (万通貨)", value=1.0, step=0.1, key="pos_lots", on_change=save_user_settings)
-
-st.sidebar.markdown("---")
 st.sidebar.subheader("📱 アラート通知設定 (Discord)")
 discord_url = st.sidebar.text_input("Discord Webhook URL", type="password", key="discord_url", on_change=save_user_settings)
 enable_notify = st.sidebar.checkbox("売買サイン確定時に自動通知", key="enable_notify", on_change=save_user_settings)
@@ -222,7 +204,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     try:
         pip_unit_local = 0.01 if "JPY" in symbol else 0.0001
         
-        # --- 基本指標 ---
+        # 移動平均線
         df['SMA_20'] = df['Close'].rolling(window=20).mean()
         df['SMA_50'] = df['Close'].rolling(window=50).mean()
         df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
@@ -231,7 +213,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         high_low = df['High'] - df['Low']
         df['ATR'] = high_low.rolling(window=14).mean()
 
-        # --- 特徴量エンジニアリング (1): 価格の生値を廃止し、相対距離・騰落率へ変換 ---
+        # 特徴量 (相対化・騰落率)
         df['Return_1'] = df['Close'].pct_change(1)
         df['Return_5'] = df['Close'].pct_change(5)
         df['Dev_SMA20'] = (df['Close'] - df['SMA_20']) / (df['SMA_20'] + 1e-10)
@@ -277,8 +259,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         dx = 100 * (plus_di - minus_di).abs() / sum_di
         df['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
-        # --- 特徴量エンジニアリング (2): 正解ラベルの再定義 ---
-        # 単なる「次の足の上下」ではなく「今後3足以内に+15pips以上の有利な動きができたか」を1とする
+        # 正解ラベル定義 (3足以内に+15pips以上の達成)
         target_pips = 15 * pip_unit_local
         future_max_up = df['High'].shift(-3).rolling(3).max() - df['Close']
         df['Target'] = np.where(future_max_up >= target_pips, 1, 0)
@@ -288,13 +269,12 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception:
         return None
 
-# 高精度 AIシグナル & 防御重視型フィルター判定関数 (v3.1)
+# AIシグナル & 防御重視型フィルター判定関数 (v3.2)
 def analyze_signal(df_current, df_higher):
     if df_current is None or len(df_current) < 50:
         return "HOLD", 50.0, None, "不明"
 
     try:
-        # 相対化されたノイズに強い特徴量のみをモデルへ渡す
         features = ['Return_1', 'Return_5', 'Dev_SMA20', 'Dev_EMA200', 'Vol_Ratio', 'RSI', 'RSI_Diff', 'MACD_Hist_Ratio', 'BB_PctB', 'ADX']
         avail = [f for f in features if f in df_current.columns]
         
@@ -305,7 +285,6 @@ def analyze_signal(df_current, df_higher):
         y_train = y.iloc[-1000:-3] if len(y) > 1000 else y.iloc[:-3]
         X_latest = X.iloc[[-1]]
 
-        # 過学習を激減させるモデル設定 (浅い木構造 + ノードサンプル制限)
         model = RandomForestClassifier(
             n_estimators=200,
             max_depth=4,
@@ -331,7 +310,6 @@ def analyze_signal(df_current, df_higher):
         avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
         is_squeezed = latest_bb_width < (avg_bb_width * 0.75)
 
-        # 日足上位足のトレンド確認
         htf_trend = "FLAT"
         if df_higher is not None and not df_higher.empty and 'EMA_200' in df_higher.columns:
             htf_close = df_higher['Close'].iloc[-1]
@@ -350,7 +328,6 @@ def analyze_signal(df_current, df_higher):
         is_near_support = space_to_support < (latest_atr * 0.8)
         is_near_resistance = space_to_resistance < (latest_atr * 0.8)
 
-        # --- シグナル判定条件（確率70%以上へ厳格化） ---
         HIGH_THRESHOLD = 0.70
 
         if latest_adx > 22.0:
@@ -488,7 +465,7 @@ else:
     recommended_slippage = round(max(0.5, (latest_atr / pip_unit) * 0.05), 1)
 
     if is_squeezed:
-        st.error("⚡ **【スクイーズ発生】**: ボリンジャーバンドが収縮中です。エネルギー蓄積後の強烈なブレイクアウトにご注意ください！")
+        st.error("⚡ **【スクイーズ発生】**: ボリンジャーバンドが収縮中です。ブレイクアウトにご注意ください。")
 
     st.divider()
 
@@ -501,39 +478,6 @@ else:
     m_col4.metric("RSI (14)", f"{latest_rsi:.1f}")
     m_col5.metric("ADX (トレンド強度)", f"{latest_adx:.1f}")
     m_col6.metric("上位足 (日足) トレンド", long_term_trend)
-
-    # 既存ポジション含み損シミュレーション表示
-    if has_pos:
-        st.markdown("---")
-        st.subheader("🚨 保有ポジション（含み損・ロスカット）監視パネル")
-        units = pos_lots * 10000
-        if "売り" in pos_type:
-            unrealized_pnl = (pos_price - latest_price) * units
-            pips_diff = (pos_price - latest_price) * 100
-            margin_req = (latest_price * units) / 25.0
-            eff_bal = account_balance + unrealized_pnl
-            margin_call_price = latest_price + (eff_bal - margin_req) / units
-            allowable_pips = (margin_call_price - latest_price) * 100
-        else:
-            unrealized_pnl = (latest_price - pos_price) * units
-            pips_diff = (latest_price - pos_price) * 100
-            margin_req = (latest_price * units) / 25.0
-            eff_bal = account_balance + unrealized_pnl
-            margin_call_price = latest_price - (eff_bal - margin_req) / units
-            allowable_pips = (latest_price - margin_call_price) * 100
-
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric("保有ポジション含み損益", f"{unrealized_pnl:,.0f} 円", f"{pips_diff:+.1f} pips", delta_color="inverse" if unrealized_pnl < 0 else "normal")
-        p2.metric("実質有効残高", f"{eff_bal:,.0f} 円")
-        p3.metric("ロスカット目安価格", f"{margin_call_price:{price_fmt}}")
-        p4.metric("ロスカットまでの距離", f"{allowable_pips:.0f} pips")
-
-        if allowable_pips < 300:
-            st.error("⚠️ **【超厳重警戒】**: ロスカットまで残り300pips以下です！新規のトレード・リピート運用は絶対にお控えください。")
-        elif allowable_pips < 800:
-            st.warning("⚡ **【警戒】**: 含み損による圧迫があります。運用時は最小ロット（0.01万通貨）に抑えてください。")
-        else:
-            st.success("✅ **【正常範囲】**: 十分な耐性距離があります。計画的な運用が可能です。")
 
     st.divider()
 
@@ -653,7 +597,7 @@ else:
                 st.code(f"{sl_price:{price_fmt}}", language="text")
         else:
             st.warning(f"🟡 **静観フィルター発動中 ({market_status})**")
-            st.info("💡 **解説:** ノイズによる「騙し」を避けるため、上昇/下落確率が70%に達しない場合や上位足と逆行する場合はAIがエントリーを厳しく自動ブロック（HOLD）します。無駄打ちを防止しています。")
+            st.info("💡 **解説:** ノイズによる「騙し」を避けるため、確信度が70%に達しない場合や上位足と逆行する場合はAIがエントリーを自動ブロック（HOLD）します。")
 
     with tab_speed:
         st.subheader("⚡ 松井証券FX アプリ【スピード注文】設定用")
