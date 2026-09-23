@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.0", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.1", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -92,7 +92,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.0)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.1)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -646,13 +646,13 @@ else:
         with rep_c1:
             st.markdown("#### 🟢 買いリピート設定 (BUY)")
             st.code(
-                f"通貨ペア　　: {selected_label}\n"
-                f"売買区分　　: 買\n"
-                f"レンジ上限　: {rep_upper}\n"
-                f"レンジ下限　: {rep_lower}\n"
-                f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
-                f"注文値幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
-                f"益出し幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
+                f"通貨ペア    : {selected_label}\n"
+                f"売買区分    : 買\n"
+                f"レンジ上限  : {rep_upper}\n"
+                f"レンジ下限  : {rep_lower}\n"
+                f"数量（万）  : {quantity_wan}  (※松井アプリ用)\n"
+                f"注文値幅    : {ai_recommended_width} pips  (ATR自動連動)\n"
+                f"益出し幅    : {ai_recommended_width} pips  (ATR自動連動)\n"
                 f"運用停止ライン: {rep_buy_stop} (-{buffer_pips}pips)\n"
                 f"----------------------------------------\n"
                 f"【構成案内】最大仕掛け本数: {max_allowable_grids}本 ({total_est_wan}万通貨分)",
@@ -662,13 +662,13 @@ else:
         with rep_c2:
             st.markdown("#### 🔴 売りリピート設定 (SELL)")
             st.code(
-                f"通貨ペア　　: {selected_label}\n"
-                f"売買区分　　: 売\n"
-                f"レンジ上限　: {rep_upper}\n"
-                f"レンジ下限　: {rep_lower}\n"
-                f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
-                f"注文値幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
-                f"益出し幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
+                f"通貨ペア    : {selected_label}\n"
+                f"売買区分    : 売\n"
+                f"レンジ上限  : {rep_upper}\n"
+                f"レンジ下限  : {rep_lower}\n"
+                f"数量（万）  : {quantity_wan}  (※松井アプリ用)\n"
+                f"注文値幅    : {ai_recommended_width} pips  (ATR自動連動)\n"
+                f"益出し幅    : {ai_recommended_width} pips  (ATR自動連動)\n"
                 f"運用停止ライン: {rep_sell_stop} (+{buffer_pips}pips)\n"
                 f"----------------------------------------\n"
                 f"【構成案内】最大仕掛け本数: {max_allowable_grids}本 ({total_est_wan}万通貨分)",
