@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v3.2", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.0", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -68,21 +68,9 @@ if "initialized" not in st.session_state:
     st.session_state["initialized"] = True
 
 # ==========================================
-# 2. 通知ヘルパー関数 (Discord)
+# 2. メイン画面 & サイドバー設定
 # ==========================================
-def send_discord_notification(webhook_url, message):
-    if not webhook_url:
-        return False
-    try:
-        res = requests.post(webhook_url, json={"content": message}, timeout=5)
-        return res.status_code == 204
-    except Exception:
-        return False
-
-# ==========================================
-# 3. メイン画面 & サイドバー設定
-# ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v3.2)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.0)")
 
 PAIRS = {
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -159,13 +147,8 @@ quantity_wan = st.sidebar.number_input(
 
 custom_quantity = int(round(quantity_wan * 10000))
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("📱 アラート通知設定 (Discord)")
-discord_url = st.sidebar.text_input("Discord Webhook URL", type="password", key="discord_url", on_change=save_user_settings)
-enable_notify = st.sidebar.checkbox("売買サイン確定時に自動通知", key="enable_notify", on_change=save_user_settings)
-
 # ==========================================
-# 4. データ取得 & 高精度インジケーター計算エンジン
+# 3. データ取得 & 高精度インジケーター計算エンジン (機能拡張版)
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -209,9 +192,16 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df['SMA_50'] = df['Close'].rolling(window=50).mean()
         df['EMA_200'] = df['Close'].ewm(span=200, adjust=False).mean()
 
-        # ATR
+        # ATR & ボラティリティ変化率 (改善点1)
         high_low = df['High'] - df['Low']
         df['ATR'] = high_low.rolling(window=14).mean()
+        df['ATR_SMA20'] = df['ATR'].rolling(window=20).mean()
+        df['ATR_Ratio'] = df['ATR'] / (df['ATR_SMA20'] + 1e-10)
+
+        # ローソク足ヒゲ率 (改善点1)
+        total_range = df['High'] - df['Low'] + 1e-10
+        df['Upper_Wick_Ratio'] = (df['High'] - df[['Open', 'Close']].max(axis=1)) / total_range
+        df['Lower_Wick_Ratio'] = (df[['Open', 'Close']].min(axis=1) - df['Low']) / total_range
 
         # 特徴量 (相対化・騰落率)
         df['Return_1'] = df['Close'].pct_change(1)
@@ -220,7 +210,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df['Dev_EMA200'] = (df['Close'] - df['EMA_200']) / (df['EMA_200'] + 1e-10)
         df['Vol_Ratio'] = df['ATR'] / (df['Close'] + 1e-10)
 
-        # RSI & RSIの傾き
+        # RSI
         delta = df['Close'].diff()
         gain = delta.where(delta > 0, 0.0).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0.0)).rolling(window=14).mean()
@@ -228,7 +218,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df['RSI'] = 100.0 - (100.0 / (1.0 + rs))
         df['RSI_Diff'] = df['RSI'].diff(1)
 
-        # MACD (相対化)
+        # MACD
         ema12 = df['Close'].ewm(span=12, adjust=False).mean()
         ema26 = df['Close'].ewm(span=26, adjust=False).mean()
         df['MACD'] = ema12 - ema26
@@ -259,8 +249,15 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         dx = 100 * (plus_di - minus_di).abs() / sum_di
         df['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
-        # 正解ラベル定義 (3足以内に+15pips以上の達成)
-        target_pips = 15 * pip_unit_local
+        # タイムフレーム別のTarget動的閾値設定 (改善点3)
+        if "15分" in tf_name or interval == "15m":
+            target_pips_val = 8.0
+        elif "1時間" in tf_name or interval == "1h":
+            target_pips_val = 15.0
+        else:
+            target_pips_val = 25.0
+
+        target_pips = target_pips_val * pip_unit_local
         future_max_up = df['High'].shift(-3).rolling(3).max() - df['Close']
         df['Target'] = np.where(future_max_up >= target_pips, 1, 0)
 
@@ -269,13 +266,18 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception:
         return None
 
-# AIシグナル & 防御重視型フィルター判定関数 (v3.2)
-def analyze_signal(df_current, df_higher):
+# AIシグナル & 防御重視型フィルター判定関数 (v4.0)
+def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
     if df_current is None or len(df_current) < 50:
         return "HOLD", 50.0, None, "不明"
 
     try:
-        features = ['Return_1', 'Return_5', 'Dev_SMA20', 'Dev_EMA200', 'Vol_Ratio', 'RSI', 'RSI_Diff', 'MACD_Hist_Ratio', 'BB_PctB', 'ADX']
+        # 拡張された特徴量リスト
+        features = [
+            'Return_1', 'Return_5', 'Dev_SMA20', 'Dev_EMA200', 'Vol_Ratio', 
+            'RSI', 'RSI_Diff', 'MACD_Hist_Ratio', 'BB_PctB', 'ADX',
+            'ATR_Ratio', 'Upper_Wick_Ratio', 'Lower_Wick_Ratio'
+        ]
         avail = [f for f in features if f in df_current.columns]
         
         X = df_current[avail]
@@ -319,6 +321,21 @@ def analyze_signal(df_current, df_higher):
             elif htf_close < htf_ema:
                 htf_trend = "DOWN"
 
+        # クロス円ストッパー判定 (改善点4)
+        is_cross_jpy = "JPY" in current_symbol and current_symbol != "USDJPY=X"
+        usdjpy_strong_up = False
+        usdjpy_strong_down = False
+        
+        if is_cross_jpy and usdjpy_df is not None and not usdjpy_df.empty and 'EMA_200' in usdjpy_df.columns:
+            uj_close = usdjpy_df['Close'].iloc[-1]
+            uj_ema = usdjpy_df['EMA_200'].iloc[-1]
+            uj_rsi = usdjpy_df['RSI'].iloc[-1] if 'RSI' in usdjpy_df.columns else 50.0
+            
+            if uj_close > uj_ema and uj_rsi > 58:
+                usdjpy_strong_up = True
+            elif uj_close < uj_ema and uj_rsi < 42:
+                usdjpy_strong_down = True
+
         recent_50_high = df_current['High'].iloc[-50:-1].max()
         recent_50_low = df_current['Low'].iloc[-50:-1].min()
 
@@ -333,7 +350,9 @@ def analyze_signal(df_current, df_higher):
         if latest_adx > 22.0:
             market_type = "トレンド相場"
             if prob[1] >= HIGH_THRESHOLD and htf_trend != "DOWN":
-                if latest_price <= latest_ema200:
+                if usdjpy_strong_down:
+                    status = "HOLD (ストッパー: ドル円急落中)"
+                elif latest_price <= latest_ema200:
                     status = "HOLD (逆張り警戒: 200EMA下)"
                 elif is_far_from_sma:
                     status = "HOLD (高値掴み回避)"
@@ -342,7 +361,9 @@ def analyze_signal(df_current, df_higher):
                 else:
                     status = "BUY"
             elif prob[0] >= HIGH_THRESHOLD and htf_trend != "UP":
-                if latest_price >= latest_ema200:
+                if usdjpy_strong_up:
+                    status = "HOLD (ストッパー: ドル円急騰中)"
+                elif latest_price >= latest_ema200:
                     status = "HOLD (逆張り警戒: 200EMA上)"
                 elif is_far_from_sma:
                     status = "HOLD (安値掴み回避)"
@@ -358,9 +379,9 @@ def analyze_signal(df_current, df_higher):
                 status = "HOLD (ブレイクアウト警戒)"
             else:
                 if (latest_price <= lower_band or latest_rsi <= 32.0) and prob[1] >= 0.65:
-                    status = "BUY (レンジ逆張り)"
+                    status = "BUY (レンジ逆張り)" if not usdjpy_strong_down else "HOLD (ストッパー: ドル円逆行)"
                 elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob[0] >= 0.65:
-                    status = "SELL (レンジ逆張り)"
+                    status = "SELL (レンジ逆張り)" if not usdjpy_strong_up else "HOLD (ストッパー: ドル円逆行)"
                 else:
                     status = "HOLD (レンジ内静観)"
 
@@ -368,36 +389,54 @@ def analyze_signal(df_current, df_higher):
     except Exception:
         return "HOLD", 50.0, None, "不明"
 
+# ドル円データの事前読み込み (クロス円ストッパー用)
+usdjpy_data = load_and_process_data("USDJPY=X", tf_config['period'], tf_config['interval'], tf_label)
 data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
 higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足 (スイング・環境認識用)")
 
 # ==========================================
-# 5. 時間帯・週末市場クローズ判定
+# 4. 時間帯・指標・週末市場クローズ判定 (改善点2)
 # ==========================================
 now_datetime = datetime.now()
 current_day = now_datetime.weekday()
 current_hour_jst = now_datetime.hour
+current_minute_jst = now_datetime.minute
 
 is_weekend = (current_day == 5 and current_hour_jst >= 6) or (current_day == 6) or (current_day == 0 and current_hour_jst < 6)
 is_low_liquidity = 3 <= current_hour_jst <= 7
 is_ny_open = 21 <= current_hour_jst <= 23
 
+# 主要指標発表帯 (例: 21:15〜22:45 / NY指標＆雇用統計帯)
+is_econ_indicator_time = (current_hour_jst == 21 and current_minute_jst >= 15) or (current_hour_jst == 22 and current_minute_jst <= 45)
+
 if is_weekend:
     st.error("🛑 **【週末・為替市場クローズ中】**: 現在外国為替市場は休業時間帯です。表示価格は最終クローズ値となります。")
+elif is_econ_indicator_time:
+    st.error("🚨 **【重要経済指標 警戒タイムゾーン】**: 突発的乱高下の危険がある時間帯です（21:15〜22:45）。新規エントリーは自重をお勧めします。")
 elif is_low_liquidity:
     st.warning("⚠️ **【流動性低下タイムゾーン】**: オセアニア時間の早朝です。スプレッド拡大にご注意ください。")
 elif is_ny_open:
     st.info("🔥 **【NY市場オープンタイムゾーン】**: ボラティリティが高まる時間帯です。")
 
 # ==========================================
-# 6. AI学習 & メイン画面表示
+# 5. AI学習 & メイン画面表示
 # ==========================================
 if data is None or len(data) < 10:
     st.error("🚨 リアルタイムデータの取得に失敗しました。「最新データに更新」を押してください。")
 else:
-    market_status, confidence, main_model, market_type = analyze_signal(data, higher_tf_data)
+    market_status, confidence, main_model, market_type = analyze_signal(
+        data, higher_tf_data, usdjpy_df=usdjpy_data, current_symbol=ticker
+    )
 
-    features = ['Return_1', 'Return_5', 'Dev_SMA20', 'Dev_EMA200', 'Vol_Ratio', 'RSI', 'RSI_Diff', 'MACD_Hist_Ratio', 'BB_PctB', 'ADX']
+    # 指標発表帯の場合はAIステータスをオーバーライド
+    if is_econ_indicator_time and ("BUY" in market_status or "SELL" in market_status):
+        market_status = "HOLD (指標発表警戒時間帯)"
+
+    features = [
+        'Return_1', 'Return_5', 'Dev_SMA20', 'Dev_EMA200', 'Vol_Ratio', 
+        'RSI', 'RSI_Diff', 'MACD_Hist_Ratio', 'BB_PctB', 'ADX',
+        'ATR_Ratio', 'Upper_Wick_Ratio', 'Lower_Wick_Ratio'
+    ]
     available_features = [f for f in features if f in data.columns]
     X_bt = data[available_features].iloc[:-3]
     y_bt = data['Target'].iloc[:-3]
@@ -482,7 +521,7 @@ else:
     st.divider()
 
     # ==========================================
-    # 7. タブ機能 (単発・リピート・チャート等)
+    # 6. タブ機能 (単発・リピート・チャート等)
     # ==========================================
     tab_repeat, tab_single, tab_speed, tab_chart, tab_scanner, tab_backtest = st.tabs([
         "📋 リピート注文 (松井証券専用)", 
@@ -501,12 +540,8 @@ else:
         if is_jpy_pair:
             jpy_rate = latest_price
         else:
-            try:
-                usdjpy_data = load_and_process_data("USDJPY=X", "5d", "5m", "ドル円換算用")
-                usdjpy_price = usdjpy_data['Close'].iloc[-1] if usdjpy_data is not None else 155.0
-            except Exception:
-                usdjpy_price = 155.0
-            jpy_rate = latest_price * usdjpy_price
+            uj_price = usdjpy_data['Close'].iloc[-1] if usdjpy_data is not None else 155.0
+            jpy_rate = latest_price * uj_price
 
         margin_per_unit = (jpy_rate * custom_quantity) / leverage
         max_allowable_grids = max(5, int((account_balance * 0.7) / max(margin_per_unit, 1.0)))
@@ -597,7 +632,7 @@ else:
                 st.code(f"{sl_price:{price_fmt}}", language="text")
         else:
             st.warning(f"🟡 **静観フィルター発動中 ({market_status})**")
-            st.info("💡 **解説:** ノイズによる「騙し」を避けるため、確信度が70%に達しない場合や上位足と逆行する場合はAIがエントリーを自動ブロック（HOLD）します。")
+            st.info("💡 **解説:** ノイズ除去・ドル円連動ストッパー・指標発表警戒帯等の安全装置により、騙しリスクが高い場面では自動で「HOLD」判定になります。")
 
     with tab_speed:
         st.subheader("⚡ 松井証券FX アプリ【スピード注文】設定用")
@@ -661,7 +696,9 @@ else:
                     sub_df = load_and_process_data(p_symbol, tf_config['period'], tf_config['interval'], tf_label)
                     sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
                     if sub_df is not None and len(sub_df) > 10:
-                        s_status, s_conf, _, s_mtype = analyze_signal(sub_df, sub_htf)
+                        s_status, s_conf, _, s_mtype = analyze_signal(
+                            sub_df, sub_htf, usdjpy_df=usdjpy_data, current_symbol=p_symbol
+                        )
                         s_adx = sub_df['ADX'].iloc[-1] if 'ADX' in sub_df.columns else 25.0
                         scan_results.append({
                             "通貨ペア": p_label,
