@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.4", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.5", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -70,7 +70,7 @@ if "initialized" not in st.session_state:
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.4)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.5 - ATR動的連動)")
 
 PAIRS = {
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -80,12 +80,13 @@ PAIRS = {
     "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
 }
 
-BASE_SAFE_WIDTHS = {
-    "GBPJPY=X": 25,
-    "USDJPY=X": 20,
-    "EURJPY=X": 20,
-    "AUDJPY=X": 15,
-    "EURUSD=X": 15,
+# ATR掛け率と最低担保値幅の設定
+PAIR_ATR_CONFIG = {
+    "GBPJPY=X": {"atr_mult": 0.25, "min_pips": 20},
+    "USDJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "EURJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "AUDJPY=X": {"atr_mult": 0.18, "min_pips": 12},
+    "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
 TIMEFRAMES = {
@@ -104,7 +105,7 @@ with col_s2:
 
 ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
-base_safe_width = BASE_SAFE_WIDTHS.get(ticker, 20)
+atr_cfg = PAIR_ATR_CONFIG.get(ticker, {"atr_mult": 0.20, "min_pips": 15})
 
 is_jpy_pair = "JPY" in ticker
 pip_unit = 0.01 if is_jpy_pair else 0.0001
@@ -498,7 +499,11 @@ else:
         ai_tp_mult = round(max(1.0, min(2.5, 1.2 * conf_factor + adx_bonus)), 2)
         ai_sl_mult = round(max(0.6, min(1.5, 0.8 / (conf_factor * 0.8))), 2)
 
-    ai_recommended_width = base_safe_width
+    # 【新ロジック】ATR連動型の動的リピート注文値幅計算
+    raw_atr_pips = (latest_atr / pip_unit)
+    calc_dynamic_width = round(raw_atr_pips * atr_cfg["atr_mult"], 1)
+    ai_recommended_width = int(max(calc_dynamic_width, atr_cfg["min_pips"]))
+
     recommended_slippage = round(max(0.5, (latest_atr / pip_unit) * 0.05), 1)
 
     # 単発適正数量計算
@@ -544,7 +549,7 @@ else:
 
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用パラメータ")
-        st.write("💡 **口座資金（20万円）と指定数量（0.2万）から証拠金エラーにならない安全レンジを自動計算しています。**")
+        st.write(f"💡 **直近の相場変動幅 (ATR = {raw_atr_pips:.1f} pips) に連動し、最適値幅を自動選定しています。**")
         
         leverage = 25.0
         if is_jpy_pair:
@@ -585,8 +590,8 @@ else:
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
                 f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
-                f"注文値幅　　: {ai_recommended_width} pips\n"
-                f"益出し幅　　: {ai_recommended_width} pips\n"
+                f"注文値幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
+                f"益出し幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
                 f"運用停止ライン: {rep_buy_stop} (-{buffer_pips}pips)\n"
                 f"----------------------------------------\n"
                 f"【構成案内】最大仕掛け本数: {max_allowable_grids}本 ({total_est_wan}万通貨分)",
@@ -601,8 +606,8 @@ else:
                 f"レンジ下限　: {rep_lower}\n"
                 f"レンジ上限　: {rep_upper}\n"
                 f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
-                f"注文値幅　　: {ai_recommended_width} pips\n"
-                f"益出し幅　　: {ai_recommended_width} pips\n"
+                f"注文値幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
+                f"益出し幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
                 f"運用停止ライン: {rep_sell_stop} (+{buffer_pips}pips)\n"
                 f"----------------------------------------\n"
                 f"【構成案内】最大仕掛け本数: {max_allowable_grids}本 ({total_est_wan}万通貨分)",
