@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.8", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.9", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -92,7 +92,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.8)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.9)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -184,7 +184,8 @@ enable_notify = st.sidebar.checkbox(
 
 if st.sidebar.button("🧪 Discord テスト送信"):
     if discord_url:
-        ok, msg = send_discord_notification(discord_url, "🧪 テスト通知", "Discord連携は正常に動作しています！", color=0x3498db)
+        test_msg = f"選択中の通貨ペア: **{selected_label}**\nDiscord連携は正常に動作しています！"
+        ok, msg = send_discord_notification(discord_url, "🧪 テスト通知成功", test_msg, color=0x3498db)
         if ok:
             st.sidebar.success("テスト通知を送信しました！")
         else:
@@ -648,7 +649,7 @@ else:
                 f"通貨ペア　　: {selected_label}\n"
                 f"売買区分　　: 買\n"
                 f"レンジ下限　: {rep_lower}\n"
-                f"レンジ上限　: {rep_upper}\n"
+                f"レンジ上限{rep_upper}\n"
                 f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
                 f"注文値幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
                 f"益出し幅　　: {ai_recommended_width} pips  (ATR自動連動)\n"
@@ -735,9 +736,11 @@ else:
         sp_col2.metric("益出し幅 (利確)", f"{sp_tp_pips} pips")
         sp_col3.metric("防衛損切り幅 (損切)", f"{sp_sl_pips} pips")
 
+        rec_dir = "買い (ASK)" if "BUY" in market_status else "売り (BID)" if "SELL" in market_status else "様子見 (静観)"
+
         st.code(
             f"通貨ペア: {selected_label}\n"
-            f"推奨エントリー: {'買 (ASK)' if 'BUY' in market_status else '売 (BID)' if 'SELL' in market_status else '様子見'}\n"
+            f"推奨エントリー: {rec_dir}\n"
             f"【推奨安全数量】: {safe_single_wan} 万通貨 ({safe_single_units:,} 通貨)\n"
             f"益出し幅: {sp_tp_pips} pips\n"
             f"損切り幅: {sp_sl_pips} pips\n"
