@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.3", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v4.4", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -70,7 +70,7 @@ if "initialized" not in st.session_state:
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.3)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v4.4)")
 
 PAIRS = {
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -148,7 +148,7 @@ quantity_wan = st.sidebar.number_input(
 custom_quantity = int(round(quantity_wan * 10000))
 
 # ==========================================
-# 3. データ取得 & 高精度インジケーター計算エンジン
+# 3. データ取得 & 高精度インジケーター計算エンジン (エラー保護強化)
 # ==========================================
 @st.cache_data(ttl=60)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -261,6 +261,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         future_max_up = df['High'].shift(-3).rolling(3).max() - df['Close']
         df['Target'] = np.where(future_max_up >= target_pips, 1, 0)
 
+        # 欠損値の厳格穴埋め処理
         df = df.ffill().bfill().fillna(0)
         return df
     except Exception:
@@ -552,18 +553,15 @@ else:
             uj_price = usdjpy_data['Close'].iloc[-1] if usdjpy_data is not None else 155.0
             jpy_rate = latest_price * uj_price
 
-        # 【v4.3 核心修正】口座資金と注文数量から証拠金オーバーにならない最大可能本数（グリッド数）を厳密算出
         margin_per_unit = (jpy_rate * custom_quantity) / leverage
         
         # 安全のために資金の70%までを証拠金として使える計算にする
         max_allowable_grids = max(2, int((account_balance * 0.7) / max(margin_per_unit, 1.0)))
         
-        # 許容本数からカバーできる最大pips幅を逆算（本数 ÷ 2 × 注文値幅）
         max_half_grids = max(1, max_allowable_grids // 2)
         safe_half_range_pips = max_half_grids * ai_recommended_width
         safe_half_range_val = safe_half_range_pips * pip_unit
 
-        # 現在価格を中心に証拠金20万円で確実に収まる範囲（レンジ）を決定
         rep_lower = round(latest_price - safe_half_range_val, 3 if is_jpy_pair else 5)
         rep_upper = round(latest_price + safe_half_range_val, 3 if is_jpy_pair else 5)
         
@@ -572,7 +570,11 @@ else:
         rep_sell_stop = round(rep_upper + buffer_val, 3 if is_jpy_pair else 5)
         buffer_pips = round(buffer_val / pip_unit, 1)
 
-        st.info(f"🛡️ **証拠金管理**: 現在の口座資金 ({account_balance:,}円) で {quantity_wan}万通貨 ({custom_quantity:,}通貨) を運用する場合、最大 **{max_allowable_grids}本** の同時注文が可能です。注文が確実に通る安全レンジ幅を算出しました。")
+        total_est_units = custom_quantity * max_allowable_grids
+        total_est_wan = round(total_est_units / 10000.0, 2)
+        est_margin_needed = int(margin_per_unit * max_allowable_grids)
+
+        st.info(f"🛡️ **証拠金管理**: 口座資金 **{account_balance:,}円** に対し、1本あたり **{quantity_wan}万通貨 ({custom_quantity:,}通貨)** で同時設定できる安全上限は **{max_allowable_grids}本** です。（想定最大必要証拠金: 約{est_margin_needed:,}円）")
 
         rep_c1, rep_c2 = st.columns(2)
         with rep_c1:
@@ -585,7 +587,9 @@ else:
                 f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
-                f"運用停止ライン: {rep_buy_stop} (-{buffer_pips}pips)",
+                f"運用停止ライン: {rep_buy_stop} (-{buffer_pips}pips)\n"
+                f"----------------------------------------\n"
+                f"【構成案内】最大仕掛け本数: {max_allowable_grids}本 ({total_est_wan}万通貨分)",
                 language="text"
             )
 
@@ -599,7 +603,9 @@ else:
                 f"数量（万）　: {quantity_wan}  (※松井アプリ用)\n"
                 f"注文値幅　　: {ai_recommended_width} pips\n"
                 f"益出し幅　　: {ai_recommended_width} pips\n"
-                f"運用停止ライン: {rep_sell_stop} (+{buffer_pips}pips)",
+                f"運用停止ライン: {rep_sell_stop} (+{buffer_pips}pips)\n"
+                f"----------------------------------------\n"
+                f"【構成案内】最大仕掛け本数: {max_allowable_grids}本 ({total_est_wan}万通貨分)",
                 language="text"
             )
 
