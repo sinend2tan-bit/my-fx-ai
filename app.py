@@ -7,7 +7,8 @@ import requests
 import json
 import os
 import streamlit.components.v1 as components
-from datetime import datetime, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo  # タイムゾーン取得用
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -15,7 +16,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7.1", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -98,7 +99,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7.1)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -329,10 +330,40 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         ]
         df['Target'] = np.select(conditions, [1, -1], default=0)
 
-        df = df.ffill().bfill().fillna(0)
+        # 【改善2】 欠損値を0埋めではなく削除し、AIに異常値を学習させない
+        df = df.dropna()
+        if df.empty:
+            return None
         return df
     except Exception:
         return None
+
+# バックテスト処理を関数化してキャッシュ（UX改善）
+@st.cache_data(ttl=300, show_spinner=False)
+def run_backtest(X_bt, y_bt, test_len):
+    cumulative_wins = []
+    trade_count = 0
+    correct_count = 0
+    
+    for i in range(test_len):
+        idx = len(X_bt) - test_len + i
+        train_end = max(1, idx - 2) 
+        
+        sub_model = RandomForestClassifier(n_estimators=100, max_depth=4, min_samples_leaf=10, random_state=42)
+        sub_model.fit(X_bt.iloc[:train_end], y_bt.iloc[:train_end])
+        p = sub_model.predict(X_bt.iloc[[idx]])[0]
+        
+        if p != 0:
+            trade_count += 1
+            if p == y_bt.iloc[idx]:
+                correct_count += 1
+        
+        current_win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
+        cumulative_wins.append((i + 1, current_win_rate))
+            
+    win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
+    return cumulative_wins, win_rate, trade_count, correct_count
+
 
 # AIシグナル & 防御重視型フィルター判定関数
 @st.cache_data(ttl=60, show_spinner=False)
@@ -467,7 +498,8 @@ with st.spinner("データとAIを初期化中..."):
     data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
     higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足 (スイング・環境認識用)")
 
-now_datetime_jst = datetime.utcnow() + timedelta(hours=9)
+# 【改善3】 タイムゾーン取得のモダン化 (zoneinfo)
+now_datetime_jst = datetime.now(ZoneInfo('Asia/Tokyo'))
 current_day = now_datetime_jst.weekday()
 current_hour_jst = now_datetime_jst.hour
 current_minute_jst = now_datetime_jst.minute
@@ -528,40 +560,13 @@ else:
     y_bt = data['Target'].iloc[:-3]
     
     test_len = min(30, len(X_bt) - 10)
-    cumulative_wins = []
     
+    # 【改善1】バックテストの呼び出し処理（キャッシュ利用でフリーズ回避）
     if test_len > 5:
-        trade_count = 0
-        correct_count = 0
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for i in range(test_len):
-            idx = len(X_bt) - test_len + i
-            train_end = max(1, idx - 2) 
-            
-            sub_model = RandomForestClassifier(n_estimators=100, max_depth=4, min_samples_leaf=10, random_state=42)
-            sub_model.fit(X_bt.iloc[:train_end], y_bt.iloc[:train_end])
-            p = sub_model.predict(X_bt.iloc[[idx]])[0]
-            
-            if p != 0:
-                trade_count += 1
-                if p == y_bt.iloc[idx]:
-                    correct_count += 1
-            
-            current_win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
-            cumulative_wins.append((i + 1, current_win_rate))
-            
-            progress_bar.progress((i + 1) / test_len)
-            status_text.text(f"バックテスト実行中... {i+1}/{test_len} 完了")
-            
-        progress_bar.empty()
-        status_text.empty()
-            
-        win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
+        with st.spinner("バックテストを実行中..."):
+            cumulative_wins, win_rate, trade_count, correct_count = run_backtest(X_bt, y_bt, test_len)
     else:
-        win_rate, correct_count, test_len, trade_count = 0.0, 0, 0, 0
+        cumulative_wins, win_rate, correct_count, trade_count = [], 0.0, 0, 0
 
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 25.0
     latest_bb_width = data['BB_Width'].iloc[-1] if 'BB_Width' in data.columns else 0.05
