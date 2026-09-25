@@ -6,6 +6,9 @@ from sklearn.ensemble import RandomForestClassifier
 import requests
 import json
 import os
+import tempfile
+import shutil
+import time
 import streamlit.components.v1 as components
 from datetime import datetime
 from zoneinfo import ZoneInfo  # タイムゾーン取得用
@@ -16,7 +19,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7.1", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7.2", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -63,8 +66,14 @@ def save_user_settings():
         "last_notified_status": st.session_state.get("last_notified_status", DEFAULT_SETTINGS["last_notified_status"]),
     }
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        # 【改善3】一時ファイルに書いてからリネーム（ファイル破損防止のアトミック書き込み）
+        file_dir = os.path.dirname(os.path.abspath(SETTINGS_FILE))
+        if not file_dir:
+            file_dir = "."
+        fd, temp_path = tempfile.mkstemp(dir=file_dir)
+        with os.fdopen(fd, 'w', encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=2)
+        shutil.move(temp_path, SETTINGS_FILE)
     except Exception:
         pass
 
@@ -99,7 +108,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7.1)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7.2)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -218,8 +227,12 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
+        # 【改善1】MultiIndexの階層を動的に判定して確実にOHLCVを取得する
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+            if 'Close' in df.columns.get_level_values(0):
+                df.columns = df.columns.get_level_values(0)
+            else:
+                df.columns = df.columns.get_level_values(1)
     except Exception:
         pass
 
@@ -236,14 +249,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         except Exception:
             pass
 
-    if df.empty or len(df) < 50:
-        try:
-            df = yf.download(symbol, period="3mo", interval="1d", progress=False)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-        except Exception:
-            pass
-
+    # 【改善2】データ不足時はフォールバックで別時間軸を取らずに None を返す
     if df.empty or len(df) < 50:
         return None
 
@@ -330,7 +336,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         ]
         df['Target'] = np.select(conditions, [1, -1], default=0)
 
-        # 【改善2】 欠損値を0埋めではなく削除し、AIに異常値を学習させない
+        # 欠損値を削除し、AIに異常値を学習させない
         df = df.dropna()
         if df.empty:
             return None
@@ -448,7 +454,6 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         is_near_support = space_to_support < (latest_atr * 0.8)
         is_near_resistance = space_to_resistance < (latest_atr * 0.8)
 
-        # 【v5.7改善】高確信度の閾値を 0.70 から 0.62 に緩和し、エントリー頻度を適度に向上
         HIGH_THRESHOLD = 0.62
 
         if latest_adx > 22.0:
@@ -498,7 +503,6 @@ with st.spinner("データとAIを初期化中..."):
     data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
     higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足 (スイング・環境認識用)")
 
-# 【改善3】 タイムゾーン取得のモダン化 (zoneinfo)
 now_datetime_jst = datetime.now(ZoneInfo('Asia/Tokyo'))
 current_day = now_datetime_jst.weekday()
 current_hour_jst = now_datetime_jst.hour
@@ -519,7 +523,7 @@ elif is_ny_open:
     st.info("🔥 **【NY市場オープンタイムゾーン】**: ボラティリティが高まる時間帯です。")
 
 if data is None or len(data) < 10:
-    st.error("🚨 リアルタイムデータの取得に失敗しました。Yahoo Financeのアクセス制限の可能性があります。1〜2分待ってから「最新データに更新」を押してください。")
+    st.error("🚨 リアルタイムデータの取得に失敗しました。時間足を変更するか、1〜2分待ってから「最新データに更新」を押してください。")
 else:
     market_status, confidence, market_type = analyze_signal(
         data, higher_tf_data, usdjpy_df=usdjpy_data, current_symbol=ticker
@@ -561,7 +565,6 @@ else:
     
     test_len = min(30, len(X_bt) - 10)
     
-    # 【改善1】バックテストの呼び出し処理（キャッシュ利用でフリーズ回避）
     if test_len > 5:
         with st.spinner("バックテストを実行中..."):
             cumulative_wins, win_rate, trade_count, correct_count = run_backtest(X_bt, y_bt, test_len)
@@ -830,6 +833,13 @@ else:
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 
+        # 【改善4】 土日の空白（ギャップ）を詰めて表示する
+        fig.update_xaxes(
+            rangebreaks=[
+                dict(bounds=["sat", "mon"])
+            ]
+        )
+
         fig.update_layout(
             xaxis_rangeslider_visible=False,
             height=500,
@@ -903,14 +913,10 @@ else:
     with st.expander("📄 学習データテーブル確認（相対化済みの特徴量）"):
         st.dataframe(data[available_features + ['ATR', 'BB_Width']].tail(10))
 
+# 【改善5】 ストリームリットネイティブの自動更新 (画面の白飛びを防止)
 if auto_refresh:
-    components.html(
-        f"""
-        <script>
-            setTimeout(function(){{
-                window.parent.location.reload();
-            }}, {refresh_interval * 1000});
-        </script>
-        """,
-        height=0
-    )
+    refresh_container = st.empty()
+    for i in range(refresh_interval, 0, -1):
+        refresh_container.caption(f"🔄 次回データ更新まで: {i}秒...")
+        time.sleep(1)
+    st.rerun()
