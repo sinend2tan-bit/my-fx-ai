@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.2", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.3", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -32,6 +32,9 @@ DEFAULT_SETTINGS = {
     "enable_notify": False,
     "auto_refresh": False,
     "refresh_interval": 180,
+    "selected_pair_label": "米ドル / 円 (USD/JPY)",
+    "selected_tf_label": "15分足 (デイトレエントリー用)",
+    "last_notified_status": {}
 }
 
 def load_user_settings():
@@ -54,6 +57,9 @@ def save_user_settings():
         "enable_notify": st.session_state.get("enable_notify", DEFAULT_SETTINGS["enable_notify"]),
         "auto_refresh": st.session_state.get("auto_refresh", DEFAULT_SETTINGS["auto_refresh"]),
         "refresh_interval": st.session_state.get("refresh_interval", DEFAULT_SETTINGS["refresh_interval"]),
+        "selected_pair_label": st.session_state.get("selected_pair_label", DEFAULT_SETTINGS["selected_pair_label"]),
+        "selected_tf_label": st.session_state.get("selected_tf_label", DEFAULT_SETTINGS["selected_tf_label"]),
+        "last_notified_status": st.session_state.get("last_notified_status", DEFAULT_SETTINGS["last_notified_status"]),
     }
     try:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
@@ -92,7 +98,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.2)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.3)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -118,11 +124,22 @@ PAIR_ATR_CONFIG = {
     "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
+# 選択状態が変更されたら保存関数を呼び出す
 col_s1, col_s2 = st.columns(2)
 with col_s1:
-    selected_label = st.selectbox("通貨ペアを選択", list(PAIRS.keys()), key="selected_pair_label")
+    selected_label = st.selectbox(
+        "通貨ペアを選択", 
+        list(PAIRS.keys()), 
+        key="selected_pair_label",
+        on_change=save_user_settings
+    )
 with col_s2:
-    tf_label = st.selectbox("時間軸（タイムフレーム）を選択", list(TIMEFRAMES.keys()), key="selected_tf_label")
+    tf_label = st.selectbox(
+        "時間軸（タイムフレーム）を選択", 
+        list(TIMEFRAMES.keys()), 
+        key="selected_tf_label",
+        on_change=save_user_settings
+    )
 
 ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
@@ -295,7 +312,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         dx = 100 * (plus_di - minus_di).abs() / sum_di
         df['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
-        # 【v5.2 改善】タイムフレーム別のTarget動的閾値設定 (3クラス分類化)
         if "15分" in tf_name or interval == "15m":
             target_pips_val = 8.0
         elif "1時間" in tf_name or interval == "1h":
@@ -315,13 +331,12 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         ]
         df['Target'] = np.select(conditions, [1, -1], default=0)
 
-        # 欠損値の厳格穴埋め処理
         df = df.ffill().bfill().fillna(0)
         return df
     except Exception:
         return None
 
-# AIシグナル & 防御重視型フィルター判定関数 (キャッシュを利用して高速化)
+# AIシグナル & 防御重視型フィルター判定関数
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
     if df_current is None or len(df_current) < 50:
@@ -350,7 +365,6 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         )
         model.fit(X_train, y_train)
 
-        # 【v5.2 改善】3クラス確率の安全な取得
         prob_array = model.predict_proba(X_latest)[0]
         prob_dict = dict(zip(model.classes_, prob_array))
         
@@ -382,7 +396,6 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
             elif htf_close < htf_ema:
                 htf_trend = "DOWN"
 
-        # クロス円ストッパー判定
         is_cross_jpy = "JPY" in current_symbol and current_symbol != "USDJPY=X"
         usdjpy_strong_up = False
         usdjpy_strong_down = False
@@ -459,7 +472,6 @@ with st.spinner("データとAIを初期化中..."):
 # ==========================================
 # 4. 時間帯・指標・週末市場クローズ判定
 # ==========================================
-# 【v5.2 改善】サーバー環境に依存しない完全な日本時間(JST)の取得
 now_datetime_jst = datetime.utcnow() + timedelta(hours=9)
 current_day = now_datetime_jst.weekday()
 current_hour_jst = now_datetime_jst.hour
@@ -468,8 +480,6 @@ current_minute_jst = now_datetime_jst.minute
 is_weekend = (current_day == 5 and current_hour_jst >= 6) or (current_day == 6) or (current_day == 0 and current_hour_jst < 6)
 is_low_liquidity = 3 <= current_hour_jst <= 7
 is_ny_open = 21 <= current_hour_jst <= 23
-
-# 主要指標発表帯 (21:15〜22:45)
 is_econ_indicator_time = (current_hour_jst == 21 and current_minute_jst >= 15) or (current_hour_jst == 22 and current_minute_jst <= 45)
 
 if is_weekend:
@@ -494,13 +504,19 @@ else:
     if is_econ_indicator_time and ("BUY" in market_status or "SELL" in market_status):
         market_status = "HOLD (指標発表警戒時間帯)"
 
-    # Discord 自動通知処理（シグナル発生時）
+    # 【v5.3 修正】Discord 自動通知処理のスパム防止と履歴永続化
     if enable_notify and discord_url and ("BUY" in market_status or "SELL" in market_status):
-        last_sig_key = f"last_notified_{ticker}"
-        if st.session_state.get(last_sig_key) != market_status:
+        if "last_notified_status" not in st.session_state:
+            st.session_state["last_notified_status"] = {}
+            
+        last_sig_key = f"{ticker}_{tf_label}"
+        last_status = st.session_state["last_notified_status"].get(last_sig_key, "")
+        
+        if last_status != market_status:
             color_val = 0x2ecc71 if "BUY" in market_status else 0xe74c3c
             msg_body = (
                 f"**通貨ペア**: {selected_label}\n"
+                f"**時間軸**: {tf_label}\n"
                 f"**現在レート**: {data['Close'].iloc[-1]:{price_fmt}}\n"
                 f"**AIシグナル**: {market_status}\n"
                 f"**確信度**: {confidence:.1f}%\n"
@@ -508,7 +524,8 @@ else:
             )
             ok, _ = send_discord_notification(discord_url, f"🚨 AI FXシグナル通知 [{selected_label}]", msg_body, color=color_val)
             if ok:
-                st.session_state[last_sig_key] = market_status
+                st.session_state["last_notified_status"][last_sig_key] = market_status
+                save_user_settings() # 通知履歴もファイルに保存
 
     features = [
         'Return_1', 'Return_5', 'Dev_SMA20', 'Dev_EMA200', 'Vol_Ratio', 
@@ -529,7 +546,6 @@ else:
             sub_model = RandomForestClassifier(n_estimators=100, max_depth=4, min_samples_leaf=10, random_state=42)
             sub_model.fit(X_bt.iloc[:idx], y_bt.iloc[:idx])
             p = sub_model.predict(X_bt.iloc[[idx]])[0]
-            # 1(-1)が予測され、実際に1(-1)だったかの一致を検証
             if p != 0 and p == y_bt.iloc[idx]:
                 correct_count += 1
             cumulative_wins.append((i + 1, (correct_count / (i + 1)) * 100))
@@ -578,14 +594,12 @@ else:
         ai_tp_mult = round(max(1.0, min(2.5, 1.2 * conf_factor + adx_bonus)), 2)
         ai_sl_mult = round(max(0.6, min(1.5, 0.8 / (conf_factor * 0.8))), 2)
 
-    # ATR連動型の動的リピート注文値幅計算
     raw_atr_pips = (latest_atr / pip_unit)
     calc_dynamic_width = round(raw_atr_pips * atr_cfg["atr_mult"], 1)
     ai_recommended_width = int(max(calc_dynamic_width, atr_cfg["min_pips"]))
 
     recommended_slippage = round(max(0.5, (latest_atr / pip_unit) * 0.05), 1)
 
-    # 単発適正数量計算
     sl_distance_pips = round((latest_atr * ai_sl_mult) / pip_unit, 1)
     if sl_distance_pips <= 0:
         sl_distance_pips = 20.0
@@ -638,8 +652,6 @@ else:
             jpy_rate = latest_price * uj_price
 
         margin_per_unit = (jpy_rate * custom_quantity) / leverage
-        
-        # 安全のために資金の70%までを証拠金として使える計算にする
         max_allowable_grids = max(2, int((account_balance * 0.7) / max(margin_per_unit, 1.0)))
         
         max_half_grids = max(1, max_allowable_grids // 2)
@@ -695,7 +707,6 @@ else:
 
     with tab_single:
         st.subheader("🎯 デイトレ単発トレード（高精度ノイズ除去モデル）")
-        
         st.info(f"🛡️ **口座資金 ({account_balance:,}円) に基づく単発適正数量ガイド**: 1回のリスクを資金2%（{int(allowed_loss_jpy):,}円）以下に抑える推奨注文数量は **`{safe_single_wan}万通貨` ({safe_single_units:,}通貨)** です。")
         
         if market_status == "BUY" or "BUY (" in market_status:
@@ -770,7 +781,6 @@ else:
         st.subheader("📈 Pro仕様 インタラクティブ・ローソク足チャート (Plotly)")
         df_chart = data.tail(60).copy()
         
-        # 【v5.2 改善】チャート横軸の日本時間(JST)対応
         try:
             if df_chart.index.tz is None:
                 df_chart.index = df_chart.index.tz_localize('UTC').tz_convert('Asia/Tokyo')
@@ -841,7 +851,6 @@ else:
     with st.expander("📄 学習データテーブル確認（相対化済みの特徴量）"):
         st.dataframe(data[available_features + ['ATR', 'BB_Width']].tail(10))
 
-# 【v5.2 改善】UIフリーズを防ぐノンブロッキングな自動更新処理
 if auto_refresh:
     components.html(
         f"""
