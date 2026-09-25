@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.3", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.4", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -98,7 +98,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.3)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.4)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -124,7 +124,6 @@ PAIR_ATR_CONFIG = {
     "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
-# 選択状態が変更されたら保存関数を呼び出す
 col_s1, col_s2 = st.columns(2)
 with col_s1:
     selected_label = st.selectbox(
@@ -495,7 +494,7 @@ elif is_ny_open:
 # 5. AI学習 & メイン画面表示
 # ==========================================
 if data is None or len(data) < 10:
-    st.error("🚨 リアルタイムデータの取得に失敗しました。「最新データに更新」を押してください。")
+    st.error("🚨 リアルタイムデータの取得に失敗しました。Yahoo Financeのアクセス制限の可能性があります。1〜2分待ってから「最新データに更新」を押してください。")
 else:
     market_status, confidence, market_type = analyze_signal(
         data, higher_tf_data, usdjpy_df=usdjpy_data, current_symbol=ticker
@@ -504,7 +503,6 @@ else:
     if is_econ_indicator_time and ("BUY" in market_status or "SELL" in market_status):
         market_status = "HOLD (指標発表警戒時間帯)"
 
-    # 【v5.3 修正】Discord 自動通知処理のスパム防止と履歴永続化
     if enable_notify and discord_url and ("BUY" in market_status or "SELL" in market_status):
         if "last_notified_status" not in st.session_state:
             st.session_state["last_notified_status"] = {}
@@ -525,7 +523,7 @@ else:
             ok, _ = send_discord_notification(discord_url, f"🚨 AI FXシグナル通知 [{selected_label}]", msg_body, color=color_val)
             if ok:
                 st.session_state["last_notified_status"][last_sig_key] = market_status
-                save_user_settings() # 通知履歴もファイルに保存
+                save_user_settings()
 
     features = [
         'Return_1', 'Return_5', 'Dev_SMA20', 'Dev_EMA200', 'Vol_Ratio', 
@@ -539,19 +537,28 @@ else:
     test_len = min(30, len(X_bt) - 10)
     cumulative_wins = []
     
+    # 【v5.4修正】純粋なトレード発生時のみの勝率計算
     if test_len > 5:
+        trade_count = 0
         correct_count = 0
         for i in range(test_len):
             idx = len(X_bt) - test_len + i
             sub_model = RandomForestClassifier(n_estimators=100, max_depth=4, min_samples_leaf=10, random_state=42)
             sub_model.fit(X_bt.iloc[:idx], y_bt.iloc[:idx])
             p = sub_model.predict(X_bt.iloc[[idx]])[0]
-            if p != 0 and p == y_bt.iloc[idx]:
-                correct_count += 1
-            cumulative_wins.append((i + 1, (correct_count / (i + 1)) * 100))
-        win_rate = (correct_count / test_len) * 100
+            
+            # AIが「買い(1)」または「売り(-1)」と予測した（取引を実行した）場合のみ評価
+            if p != 0:
+                trade_count += 1
+                if p == y_bt.iloc[idx]:
+                    correct_count += 1
+            
+            current_win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
+            cumulative_wins.append((i + 1, current_win_rate))
+            
+        win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
     else:
-        win_rate, correct_count, test_len = 50.0, 0, 0
+        win_rate, correct_count, test_len, trade_count = 0.0, 0, 0, 0
 
     latest_adx = data['ADX'].iloc[-1] if 'ADX' in data.columns else 25.0
     latest_bb_width = data['BB_Width'].iloc[-1] if 'BB_Width' in data.columns else 0.05
@@ -619,7 +626,12 @@ else:
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("現在レート", f"{latest_price:{price_fmt}}")
     m_col2.metric("AI識別・現在の相場環境", market_type, "🔥トレンド状態" if latest_adx > 22 else "💤レンジ・揉み合い")
-    m_col3.metric("直近AI検証適合率", f"{win_rate:.1f}%", f"({correct_count}/{test_len} 回)")
+    
+    # 【v5.4修正】表示部の更新
+    if trade_count > 0:
+        m_col3.metric("直近AI勝率 (トレード実行時)", f"{win_rate:.1f}%", f"({correct_count}勝 / {trade_count}戦)")
+    else:
+        m_col3.metric("直近AI勝率 (トレード実行時)", "N/A", "直近シグナル発生なし")
 
     m_col4, m_col5, m_col6 = st.columns(3)
     m_col4.metric("RSI (14)", f"{latest_rsi:.1f}")
@@ -842,10 +854,16 @@ else:
 
     with tab_backtest:
         st.subheader("📊 改良型モデルの時系列ウォークフォワード検証")
+        # 【v5.4修正】表示内容のブラッシュアップ
+        st.caption("※AIが相場状況を危険と判断し、「HOLD（静観）」としてエントリーを見送ったステップは分母から除外した『純粋なトレード実行勝率』を表示しています。")
         if cumulative_wins:
             cb_df = pd.DataFrame(cumulative_wins, columns=["検証ステップ", "累積適合率 (%)"]).set_index("検証ステップ")
             st.line_chart(cb_df)
-            st.metric("時系列検証の適合率", f"{win_rate:.1f}%", f"({correct_count}回適合 / {test_len}ステップ)")
+            
+            if trade_count > 0:
+                st.metric("時系列検証の適合率（トレード実行時）", f"{win_rate:.1f}%", f"({correct_count}回適合 / {trade_count}回エントリー)")
+            else:
+                st.metric("時系列検証の適合率", "N/A", "直近の検証期間内にAIがエントリーを許可するシグナルは発生しませんでした")
 
     st.divider()
     with st.expander("📄 学習データテーブル確認（相対化済みの特徴量）"):
