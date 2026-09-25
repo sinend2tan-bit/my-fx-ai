@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.6", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -98,7 +98,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.6)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -323,7 +323,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         future_max_up = df['High'].shift(-3).rolling(3).max() - df['Close']
         future_max_down = df['Close'] - df['Low'].shift(-3).rolling(3).min()
         
-        # 1: 買いチャンス (上昇), -1: 売りチャンス (下降), 0: レンジ
         conditions = [
             (future_max_up >= target_pips) & (future_max_up > future_max_down),
             (future_max_down >= target_pips) & (future_max_down > future_max_up)
@@ -418,7 +417,8 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         is_near_support = space_to_support < (latest_atr * 0.8)
         is_near_resistance = space_to_resistance < (latest_atr * 0.8)
 
-        HIGH_THRESHOLD = 0.70
+        # 【v5.7改善】高確信度の閾値を 0.70 から 0.62 に緩和し、エントリー頻度を適度に向上
+        HIGH_THRESHOLD = 0.62
 
         if latest_adx > 22.0:
             market_type = "トレンド相場"
@@ -451,9 +451,9 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
             if is_squeezed:
                 status = "HOLD (ブレイクアウト警戒)"
             else:
-                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.65:
+                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.58:
                     status = "BUY (レンジ逆張り)" if not usdjpy_strong_down else "HOLD (ストッパー: ドル円逆行)"
-                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.65:
+                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.58:
                     status = "SELL (レンジ逆張り)" if not usdjpy_strong_up else "HOLD (ストッパー: ドル円逆行)"
                 else:
                     status = "HOLD (レンジ内静観)"
@@ -462,15 +462,11 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
     except Exception:
         return "HOLD", 50.0, "不明"
 
-# ドル円データの事前読み込み
 with st.spinner("データとAIを初期化中..."):
     usdjpy_data = load_and_process_data("USDJPY=X", tf_config['period'], tf_config['interval'], tf_label)
     data = load_and_process_data(ticker, tf_config['period'], tf_config['interval'], tf_label)
     higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足 (スイング・環境認識用)")
 
-# ==========================================
-# 4. 時間帯・指標・週末市場クローズ判定
-# ==========================================
 now_datetime_jst = datetime.utcnow() + timedelta(hours=9)
 current_day = now_datetime_jst.weekday()
 current_hour_jst = now_datetime_jst.hour
@@ -490,9 +486,6 @@ elif is_low_liquidity:
 elif is_ny_open:
     st.info("🔥 **【NY市場オープンタイムゾーン】**: ボラティリティが高まる時間帯です。")
 
-# ==========================================
-# 5. AI学習 & メイン画面表示
-# ==========================================
 if data is None or len(data) < 10:
     st.error("🚨 リアルタイムデータの取得に失敗しました。Yahoo Financeのアクセス制限の可能性があります。1〜2分待ってから「最新データに更新」を押してください。")
 else:
@@ -654,9 +647,6 @@ else:
 
     st.divider()
 
-    # ==========================================
-    # 6. タブ機能 (単発・リピート・チャート等)
-    # ==========================================
     tab_repeat, tab_single, tab_speed, tab_chart, tab_scanner, tab_backtest, tab_metrics = st.tabs([
         "📋 リピート注文 (松井証券専用)", 
         "🎯 デイトレ単発 (高精度AI)", 
