@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.4", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.5", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -98,7 +98,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.4)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.5)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -537,17 +537,24 @@ else:
     test_len = min(30, len(X_bt) - 10)
     cumulative_wins = []
     
-    # 【v5.4修正】純粋なトレード発生時のみの勝率計算
+    # 【v5.5修正】バックテストのデータリーク防止とプログレスバー追加
     if test_len > 5:
         trade_count = 0
         correct_count = 0
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
         for i in range(test_len):
             idx = len(X_bt) - test_len + i
+            
+            # 【重要】未来データのリークを防止（idxより3本前までの確定データのみで学習）
+            train_end = max(1, idx - 2) 
+            
             sub_model = RandomForestClassifier(n_estimators=100, max_depth=4, min_samples_leaf=10, random_state=42)
-            sub_model.fit(X_bt.iloc[:idx], y_bt.iloc[:idx])
+            sub_model.fit(X_bt.iloc[:train_end], y_bt.iloc[:train_end])
             p = sub_model.predict(X_bt.iloc[[idx]])[0]
             
-            # AIが「買い(1)」または「売り(-1)」と予測した（取引を実行した）場合のみ評価
             if p != 0:
                 trade_count += 1
                 if p == y_bt.iloc[idx]:
@@ -555,6 +562,12 @@ else:
             
             current_win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
             cumulative_wins.append((i + 1, current_win_rate))
+            
+            progress_bar.progress((i + 1) / test_len)
+            status_text.text(f"バックテスト実行中... {i+1}/{test_len} 完了")
+            
+        progress_bar.empty()
+        status_text.empty()
             
         win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
     else:
@@ -612,8 +625,14 @@ else:
         sl_distance_pips = 20.0
         
     allowed_loss_jpy = account_balance * 0.02
-    pip_value_per_unit = 0.01 if is_jpy_pair else (0.0001 * 155.0)
     
+    # 【v5.5修正】ドル円のリアルタイムレートを使用して正確なリスク計算
+    if is_jpy_pair:
+        pip_value_per_unit = 0.01
+    else:
+        uj_price = usdjpy_data['Close'].iloc[-1] if usdjpy_data is not None else 155.0
+        pip_value_per_unit = 0.0001 * uj_price
+        
     safe_single_units = int(allowed_loss_jpy / (sl_distance_pips * pip_value_per_unit))
     safe_single_units = max(100, min(safe_single_units, 50000))
     safe_single_wan = round(safe_single_units / 10000.0, 4)
@@ -627,7 +646,6 @@ else:
     m_col1.metric("現在レート", f"{latest_price:{price_fmt}}")
     m_col2.metric("AI識別・現在の相場環境", market_type, "🔥トレンド状態" if latest_adx > 22 else "💤レンジ・揉み合い")
     
-    # 【v5.4修正】表示部の更新
     if trade_count > 0:
         m_col3.metric("直近AI勝率 (トレード実行時)", f"{win_rate:.1f}%", f"({correct_count}勝 / {trade_count}戦)")
     else:
@@ -832,8 +850,16 @@ else:
         st.subheader("🔍 全監視通貨ペア AI防衛スキャン")
         if st.button("🚀 全ペアを一括スキャン実行", use_container_width=True):
             scan_results = []
+            
+            # 【v5.5修正】プログレスバーによるUX向上
+            progress_bar_scan = st.progress(0)
+            status_text_scan = st.empty()
+            total_pairs = len(PAIRS)
+            
             with st.spinner("全通貨ペアを分析中... (キャッシングにより高速化されています)"):
-                for p_label, p_symbol in PAIRS.items():
+                for idx_p, (p_label, p_symbol) in enumerate(PAIRS.items()):
+                    status_text_scan.text(f"スキャン中... {p_label}")
+                    
                     sub_df = load_and_process_data(p_symbol, tf_config['period'], tf_config['interval'], tf_label)
                     sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
                     if sub_df is not None and len(sub_df) > 10:
@@ -848,13 +874,18 @@ else:
                             "確信度 (%)": round(s_conf, 1),
                             "ADX (強度)": round(s_adx, 1)
                         })
+                    
+                    progress_bar_scan.progress((idx_p + 1) / total_pairs)
+            
+            progress_bar_scan.empty()
+            status_text_scan.empty()
+            
             if scan_results:
                 res_df = pd.DataFrame(scan_results).sort_values(by="確信度 (%)", ascending=False)
                 st.dataframe(res_df, use_container_width=True)
 
     with tab_backtest:
         st.subheader("📊 改良型モデルの時系列ウォークフォワード検証")
-        # 【v5.4修正】表示内容のブラッシュアップ
         st.caption("※AIが相場状況を危険と判断し、「HOLD（静観）」としてエントリーを見送ったステップは分母から除外した『純粋なトレード実行勝率』を表示しています。")
         if cumulative_wins:
             cb_df = pd.DataFrame(cumulative_wins, columns=["検証ステップ", "累積適合率 (%)"]).set_index("検証ステップ")
