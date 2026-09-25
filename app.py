@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.5", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.6", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -98,7 +98,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.5)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.6)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -537,7 +537,6 @@ else:
     test_len = min(30, len(X_bt) - 10)
     cumulative_wins = []
     
-    # 【v5.5修正】バックテストのデータリーク防止とプログレスバー追加
     if test_len > 5:
         trade_count = 0
         correct_count = 0
@@ -547,8 +546,6 @@ else:
         
         for i in range(test_len):
             idx = len(X_bt) - test_len + i
-            
-            # 【重要】未来データのリークを防止（idxより3本前までの確定データのみで学習）
             train_end = max(1, idx - 2) 
             
             sub_model = RandomForestClassifier(n_estimators=100, max_depth=4, min_samples_leaf=10, random_state=42)
@@ -626,7 +623,6 @@ else:
         
     allowed_loss_jpy = account_balance * 0.02
     
-    # 【v5.5修正】ドル円のリアルタイムレートを使用して正確なリスク計算
     if is_jpy_pair:
         pip_value_per_unit = 0.01
     else:
@@ -661,13 +657,14 @@ else:
     # ==========================================
     # 6. タブ機能 (単発・リピート・チャート等)
     # ==========================================
-    tab_repeat, tab_single, tab_speed, tab_chart, tab_scanner, tab_backtest = st.tabs([
+    tab_repeat, tab_single, tab_speed, tab_chart, tab_scanner, tab_backtest, tab_metrics = st.tabs([
         "📋 リピート注文 (松井証券専用)", 
         "🎯 デイトレ単発 (高精度AI)", 
         "⚡ スピード注文",
         "📈 ローソク足チャート",
         "🔍 全ペアスキャン", 
-        "📊 バックテスト"
+        "📊 バックテスト",
+        "📋 注文履歴・成績サマリー"
     ])
 
     with tab_repeat:
@@ -851,7 +848,6 @@ else:
         if st.button("🚀 全ペアを一括スキャン実行", use_container_width=True):
             scan_results = []
             
-            # 【v5.5修正】プログレスバーによるUX向上
             progress_bar_scan = st.progress(0)
             status_text_scan = st.empty()
             total_pairs = len(PAIRS)
@@ -895,6 +891,18 @@ else:
                 st.metric("時系列検証の適合率（トレード実行時）", f"{win_rate:.1f}%", f"({correct_count}回適合 / {trade_count}回エントリー)")
             else:
                 st.metric("時系列検証の適合率", "N/A", "直近の検証期間内にAIがエントリーを許可するシグナルは発生しませんでした")
+
+    with tab_metrics:
+        st.subheader("📋 運用成績・セッションサマリー")
+        st.info("💡 アプリの稼働状況や、設定されている資金・ロット数のサマリーをここで一元管理できます。")
+        
+        sum_c1, sum_c2 = st.columns(2)
+        with sum_c1:
+            st.metric("現在の口座資金", f"{account_balance:,} 円")
+            st.metric("設定中の注文ロット数", f"{quantity_wan} 万通貨 ({custom_quantity:,} 通貨)")
+        with sum_c2:
+            st.metric("選択中の通貨ペア", selected_label)
+            st.metric("選択中の時間足", tf_label)
 
     st.divider()
     with st.expander("📄 学習データテーブル確認（相対化済みの特徴量）"):
