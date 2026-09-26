@@ -15,13 +15,30 @@ from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 
 # ==========================================
-# 0. 画面基本設定
+# 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7.5",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7.6",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# AIモデルで使用する特徴量リスト（一元管理）
+FEATURE_COLUMNS = [
+    "Return_1",
+    "Return_5",
+    "Dev_SMA20",
+    "Dev_EMA200",
+    "Vol_Ratio",
+    "RSI",
+    "RSI_Diff",
+    "MACD_Hist_Ratio",
+    "BB_PctB",
+    "ADX",
+    "ATR_Ratio",
+    "Upper_Wick_Ratio",
+    "Lower_Wick_Ratio",
+]
 
 # ==========================================
 # 1. 設定ファイルの永続化（保存・読み込み）
@@ -126,7 +143,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00FF00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7.5)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7.6)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -240,8 +257,6 @@ if st.sidebar.button("🧪 Discord テスト送信"):
             st.sidebar.error(f"送信失敗: {msg}")
     else:
         st.sidebar.warning("Webhook URLを入力してください。")
-
-
 # ==========================================
 # 3. データ取得 & 高精度インジケーター計算エンジン
 # ==========================================
@@ -266,10 +281,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         and interval == "1h"
     ):
         try:
-            tz_before = df.index.tz  # タイムゾーン保存
+            tz_before = df.index.tz
             rule = "4h" if "4時間足" in tf_name else "12h"
             df = (
-                df.resample(rule)
+                df.resample(rule, closed="left", label="left")
                 .agg({
                     "Open": "first",
                     "High": "max",
@@ -279,7 +294,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 })
                 .dropna()
             )
-            # タイムゾーンの保持補正
             if tz_before is not None and df.index.tz is None:
                 df.index = df.index.tz_localize(tz_before)
         except Exception:
@@ -322,10 +336,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         )
         df["Vol_Ratio"] = df["ATR"] / (df["Close"] + 1e-10)
 
-        # RSI
+        # RSI (Wilder平滑化)
         delta = df["Close"].diff()
-        gain = delta.where(delta > 0, 0.0).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0.0)).rolling(window=14).mean()
+        gain = delta.where(delta > 0, 0.0).ewm(alpha=1 / 14, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1 / 14, adjust=False).mean()
         rs = gain / (loss + 1e-10)
         df["RSI"] = 100.0 - (100.0 / (1.0 + rs))
         df["RSI_Diff"] = df["RSI"].diff(1)
@@ -386,7 +400,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         dx = 100 * (plus_di - minus_di).abs() / sum_di
         df["ADX"] = dx.ewm(alpha=1 / 14, adjust=False).mean().fillna(25.0)
 
-        # スプレッド考慮のため15分足判定幅を10.0pipsに微調整
+        # 判定幅設定
         if "15分" in tf_name or interval == "15m":
             target_pips_val = 10.0
         elif "1時間" in tf_name or interval == "1h":
@@ -403,7 +417,12 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             (future_max_up >= target_pips) & (future_max_up > future_max_down),
             (future_max_down >= target_pips) & (future_max_down > future_max_up),
         ]
-        df["Target"] = np.select(conditions, [1, -1], default=0)
+        
+        # 末尾3行の未来データリーク防止処理
+        target_series = np.select(conditions, [1, -1], default=0)
+        df["Target"] = np.nan
+        if len(df) > 3:
+            df.iloc[:-3, df.columns.get_loc("Target")] = target_series[:-3]
 
         feature_cols = [c for c in df.columns if c != "Target"]
         df = df.dropna(subset=feature_cols)
@@ -432,7 +451,6 @@ def run_backtest(X_bt, y_bt, test_len):
         if valid_train.sum() < 30:
             continue
 
-        # 単一クラスエラー防衛策
         y_sub = y_bt.iloc[:train_end][valid_train]
         if len(np.unique(y_sub)) < 2:
             continue
@@ -471,22 +489,7 @@ def analyze_signal(
         return "HOLD", 50.0, "不明"
 
     try:
-        features = [
-            "Return_1",
-            "Return_5",
-            "Dev_SMA20",
-            "Dev_EMA200",
-            "Vol_Ratio",
-            "RSI",
-            "RSI_Diff",
-            "MACD_Hist_Ratio",
-            "BB_PctB",
-            "ADX",
-            "ATR_Ratio",
-            "Upper_Wick_Ratio",
-            "Lower_Wick_Ratio",
-        ]
-        avail = [f for f in features if f in df_current.columns]
+        avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
 
         X = df_current[avail]
         y = df_current["Target"]
@@ -506,13 +509,11 @@ def analyze_signal(
             else y_train_full
         )
 
-        # 【防衛策】学習データの単一クラスチェック（クラス数が2未満の場合は分析不可）
         if len(np.unique(y_train)) < 2:
             return "HOLD (分析不可: クラス不足)", 50.0, "判定不可"
 
         X_latest = X.iloc[[-1]]
 
-        # スキャン時などの高速化用引数対応
         trees_count = n_estimators_override if n_estimators_override is not None else 120
 
         model = RandomForestClassifier(
@@ -593,7 +594,6 @@ def analyze_signal(
         usdjpy_strong_up = False
         usdjpy_strong_down = False
 
-        # 【防衛策】usdjpy_df の None かつ empty チェック
         if (
             is_cross_jpy
             and usdjpy_df is not None
@@ -696,7 +696,7 @@ current_day = now_datetime_jst.weekday()
 current_hour_jst = now_datetime_jst.hour
 current_minute_jst = now_datetime_jst.minute
 
-# 【夏時間/冬時間対応】3月〜10月を夏時間、11月〜2月を冬時間として簡易判定
+# 夏時間/冬時間簡易判定
 is_summer_time = 3 <= now_datetime_jst.month <= 10
 
 is_weekend = (
@@ -785,22 +785,7 @@ else:
                 )
                 save_user_settings()
 
-    features = [
-        "Return_1",
-        "Return_5",
-        "Dev_SMA20",
-        "Dev_EMA200",
-        "Vol_Ratio",
-        "RSI",
-        "RSI_Diff",
-        "MACD_Hist_Ratio",
-        "BB_PctB",
-        "ADX",
-        "ATR_Ratio",
-        "Upper_Wick_Ratio",
-        "Lower_Wick_Ratio",
-    ]
-    available_features = [f for f in features if f in data.columns]
+    available_features = [f for f in FEATURE_COLUMNS if f in data.columns]
     X_bt = data[available_features]
     y_bt = data["Target"]
 
@@ -879,7 +864,6 @@ else:
 
     allowed_loss_jpy = account_balance * 0.02
 
-    # 【防衛策】usdjpy_data の空チェックを強化
     if is_jpy_pair:
         pip_value_per_unit = 0.01
     else:
@@ -946,7 +930,6 @@ else:
         )
 
         leverage = 25.0
-        # 【防衛策】usdjpy_data の空チェックを強化
         if is_jpy_pair:
             jpy_rate = latest_price
         else:
@@ -1249,7 +1232,6 @@ else:
                         p_symbol, "1y", "1d", "日足 (スイング・環境認識用)"
                     )
                     if sub_df is not None and len(sub_df) > 10:
-                        # スキャン時は高速化のため n_estimators=40 で実行
                         s_status, s_conf, s_mtype = analyze_signal(
                             sub_df,
                             sub_htf,
@@ -1333,7 +1315,9 @@ if auto_refresh:
         f"""
         <script>
             setTimeout(function(){{
-                window.parent.location.reload();
+                if (window.parent && window.parent.location) {{
+                    window.parent.location.reload();
+                }}
             }}, {refresh_interval * 1000});
         </script>
         """,
