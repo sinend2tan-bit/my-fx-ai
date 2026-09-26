@@ -18,7 +18,7 @@ from sklearn.ensemble import RandomForestClassifier
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7.4",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7.5",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -104,12 +104,14 @@ def send_discord_notification(webhook_url, title, message, color=0x00FF00):
         return False, "URL未設定"
 
     payload = {
-        "embeds": [{
-            "title": title,
-            "description": message,
-            "color": color,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }]
+        "embeds": [
+            {
+                "title": title,
+                "description": message,
+                "color": color,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
     }
     try:
         res = requests.post(webhook_url, json=payload, timeout=5)
@@ -124,7 +126,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00FF00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7.4)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7.5)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -238,8 +240,6 @@ if st.sidebar.button("🧪 Discord テスト送信"):
             st.sidebar.error(f"送信失敗: {msg}")
     else:
         st.sidebar.warning("Webhook URLを入力してください。")
-
-
 # ==========================================
 # 3. データ取得 & 高精度インジケーター計算エンジン
 # ==========================================
@@ -264,6 +264,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         and interval == "1h"
     ):
         try:
+            tz_before = df.index.tz  # タイムゾーン保存
             rule = "4h" if "4時間足" in tf_name else "12h"
             df = (
                 df.resample(rule)
@@ -276,6 +277,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 })
                 .dropna()
             )
+            # タイムゾーンの保持補正
+            if tz_before is not None and df.index.tz is None:
+                df.index = df.index.tz_localize(tz_before)
         except Exception:
             pass
 
@@ -380,8 +384,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         dx = 100 * (plus_di - minus_di).abs() / sum_di
         df["ADX"] = dx.ewm(alpha=1 / 14, adjust=False).mean().fillna(25.0)
 
+        # スプレッド考慮のため15分足判定幅を10.0pipsに微調整
         if "15分" in tf_name or interval == "15m":
-            target_pips_val = 8.0
+            target_pips_val = 10.0
         elif "1時間" in tf_name or interval == "1h":
             target_pips_val = 15.0
         else:
@@ -406,6 +411,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df
     except Exception:
         return None
+
+
 # バックテスト処理
 @st.cache_data(ttl=300, show_spinner=False)
 def run_backtest(X_bt, y_bt, test_len):
@@ -493,7 +500,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         X_latest = X.iloc[[-1]]
 
         model = RandomForestClassifier(
-            n_estimators=150, max_depth=4, min_samples_leaf=10, random_state=42
+            n_estimators=120, max_depth=4, min_samples_leaf=10, random_state=42
         )
         model.fit(X_train, y_train)
 
@@ -653,8 +660,6 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         return status, confidence, market_type
     except Exception:
         return "HOLD", 50.0, "不明"
-
-
 with st.spinner("データとAIを初期化中..."):
     usdjpy_data = load_and_process_data(
         "USDJPY=X", tf_config["period"], tf_config["interval"], tf_label
@@ -777,7 +782,8 @@ else:
                 X_bt, y_bt, test_len
             )
     else:
-        cumulative_wins, win_rate, correct_count, trade_count = [], 0.0, 0, 0
+        # 変数受取順序の修正箇所
+        cumulative_wins, win_rate, trade_count, correct_count = [], 0.0, 0, 0
 
     latest_adx = data["ADX"].iloc[-1] if "ADX" in data.columns else 25.0
     latest_bb_width = (
@@ -1071,7 +1077,6 @@ else:
             f"許容スリッページ: {recommended_slippage} pips",
             language="text",
         )
-
     with tab_chart:
         st.subheader("📈 Pro仕様 インタラクティブ・ローソク足チャート (Plotly)")
         df_chart = data.tail(60).copy()
