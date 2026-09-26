@@ -14,6 +14,9 @@ import yfinance as yf
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 
+# チラつき防止用の自動更新ライブラリ（要 pip install streamlit-autorefresh）
+from streamlit_autorefresh import st_autorefresh
+
 # ==========================================
 # 0. 画面基本設定 & 共通定数
 # ==========================================
@@ -257,8 +260,6 @@ if st.sidebar.button("🧪 Discord テスト送信"):
             st.sidebar.error(f"送信失敗: {msg}")
     else:
         st.sidebar.warning("Webhook URLを入力してください。")
-
-
 # ==========================================
 # 3. データ取得 & 高精度インジケーター計算エンジン
 # ==========================================
@@ -420,11 +421,11 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             (future_max_down >= target_pips) & (future_max_down > future_max_up),
         ]
         
-        # 末尾3行の未来データリーク防止処理
+        # 【修正済み】Pandasダウンキャスト警告回避 & 未来データリーク防止処理
         target_series = np.select(conditions, [1, -1], default=0)
-        df["Target"] = np.nan
+        df["Target"] = target_series.astype(float)
         if len(df) > 3:
-            df.iloc[:-3, df.columns.get_loc("Target")] = target_series[:-3]
+            df.iloc[-3:, df.columns.get_loc("Target")] = np.nan
 
         feature_cols = [c for c in df.columns if c != "Target"]
         df = df.dropna(subset=feature_cols)
@@ -436,7 +437,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return None
 
 
-# バックテスト処理（【修正済み】未来データのリークを防ぐため idx - 3 に修正）
+# バックテスト処理
 @st.cache_data(ttl=300, show_spinner=False)
 def run_backtest(X_bt, y_bt, test_len):
     cumulative_wins = []
@@ -1099,15 +1100,13 @@ else:
         df_chart = data.tail(60).copy()
 
         try:
-            # 【修正済み】より安全なタイムゾーン変換
+            # 【修正済み】タイムゾーン変換の堅牢化
             if df_chart.index.tz is None:
                 df_chart.index = df_chart.index.tz_localize("UTC").tz_convert(
                     "Asia/Tokyo"
                 )
-            else:
-                df_chart.index = df_chart.index.tz_convert("UTC").tz_convert(
-                    "Asia/Tokyo"
-                )
+            elif str(df_chart.index.tz) != "Asia/Tokyo":
+                df_chart.index = df_chart.index.tz_convert("Asia/Tokyo")
         except Exception:
             pass
 
@@ -1134,74 +1133,50 @@ else:
             col=1,
         )
 
-        fig.add_trace(
-            go.Scatter(
-                x=chart_x,
-                y=df_chart["SMA_20"],
-                mode="lines",
-                name="SMA 20",
-                line=dict(color="orange", width=1),
-            ),
-            row=1,
-            col=1,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=chart_x,
-                y=df_chart["SMA_50"],
-                mode="lines",
-                name="SMA 50",
-                line=dict(color="blue", width=1),
-            ),
-            row=1,
-            col=1,
-        )
+        # 【修正済み】チャート描画時の列存在チェック追加
+        if "SMA_20" in df_chart.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=chart_x, y=df_chart["SMA_20"], mode="lines",
+                    name="SMA 20", line=dict(color="orange", width=1),
+                ), row=1, col=1,
+            )
+        if "SMA_50" in df_chart.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=chart_x, y=df_chart["SMA_50"], mode="lines",
+                    name="SMA 50", line=dict(color="blue", width=1),
+                ), row=1, col=1,
+            )
         if "EMA_200" in df_chart.columns:
             fig.add_trace(
                 go.Scatter(
-                    x=chart_x,
-                    y=df_chart["EMA_200"],
-                    mode="lines",
-                    name="EMA 200",
-                    line=dict(color="white", width=1.5),
-                ),
-                row=1,
-                col=1,
+                    x=chart_x, y=df_chart["EMA_200"], mode="lines",
+                    name="EMA 200", line=dict(color="white", width=1.5),
+                ), row=1, col=1,
             )
-        fig.add_trace(
-            go.Scatter(
-                x=chart_x,
-                y=df_chart["Upper_Band"],
-                mode="lines",
-                name="+2σ",
-                line=dict(color="gray", dash="dash", width=1),
-            ),
-            row=1,
-            col=1,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=chart_x,
-                y=df_chart["Lower_Band"],
-                mode="lines",
-                name="-2σ",
-                line=dict(color="gray", dash="dash", width=1),
-            ),
-            row=1,
-            col=1,
-        )
+        if "Upper_Band" in df_chart.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=chart_x, y=df_chart["Upper_Band"], mode="lines",
+                    name="+2σ", line=dict(color="gray", dash="dash", width=1),
+                ), row=1, col=1,
+            )
+        if "Lower_Band" in df_chart.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=chart_x, y=df_chart["Lower_Band"], mode="lines",
+                    name="-2σ", line=dict(color="gray", dash="dash", width=1),
+                ), row=1, col=1,
+            )
+        if "RSI" in df_chart.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=chart_x, y=df_chart["RSI"], mode="lines",
+                    name="RSI(14)", line=dict(color="purple", width=1.5),
+                ), row=2, col=1,
+            )
 
-        fig.add_trace(
-            go.Scatter(
-                x=chart_x,
-                y=df_chart["RSI"],
-                mode="lines",
-                name="RSI(14)",
-                line=dict(color="purple", width=1.5),
-            ),
-            row=2,
-            col=1,
-        )
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 
@@ -1313,18 +1288,7 @@ else:
     with st.expander("📄 学習データテーブル確認（相対化済みの特徴量）"):
         st.dataframe(data[available_features + ["ATR", "BB_Width"]].tail(10))
 
-# 自動更新処理
+# 【修正済み】自動更新処理（st_autorefreshを使用しチラつきを防止）
 if auto_refresh:
     st.caption(f"🔄 自動更新が有効です ({refresh_interval}秒ごと)")
-    components.html(
-        f"""
-        <script>
-            setTimeout(function(){{
-                if (window.parent && window.parent.location) {{
-                    window.parent.location.reload();
-                }}
-            }}, {refresh_interval * 1000});
-        </script>
-        """,
-        height=0,
-    )
+    st_autorefresh(interval=refresh_interval * 1000, limit=100, key="data_refresh")
