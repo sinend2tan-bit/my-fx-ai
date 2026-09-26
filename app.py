@@ -257,6 +257,8 @@ if st.sidebar.button("🧪 Discord テスト送信"):
             st.sidebar.error(f"送信失敗: {msg}")
     else:
         st.sidebar.warning("Webhook URLを入力してください。")
+
+
 # ==========================================
 # 3. データ取得 & 高精度インジケーター計算エンジン
 # ==========================================
@@ -434,7 +436,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return None
 
 
-# バックテスト処理
+# バックテスト処理（【修正済み】未来データのリークを防ぐため idx - 3 に修正）
 @st.cache_data(ttl=300, show_spinner=False)
 def run_backtest(X_bt, y_bt, test_len):
     cumulative_wins = []
@@ -445,7 +447,7 @@ def run_backtest(X_bt, y_bt, test_len):
 
     for i in range(0, test_len, step_size):
         idx = len(X_bt) - test_len + i
-        train_end = max(1, idx - 1)
+        train_end = max(1, idx - 3)
 
         valid_train = ~y_bt.iloc[:train_end].isna()
         if valid_train.sum() < 30:
@@ -1097,12 +1099,15 @@ else:
         df_chart = data.tail(60).copy()
 
         try:
+            # 【修正済み】より安全なタイムゾーン変換
             if df_chart.index.tz is None:
                 df_chart.index = df_chart.index.tz_localize("UTC").tz_convert(
                     "Asia/Tokyo"
                 )
             else:
-                df_chart.index = df_chart.index.tz_convert("Asia/Tokyo")
+                df_chart.index = df_chart.index.tz_convert("UTC").tz_convert(
+                    "Asia/Tokyo"
+                )
         except Exception:
             pass
 
