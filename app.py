@@ -224,7 +224,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
-        # 【修正】MultiIndexの確実な単一階層化処理
         if isinstance(df.columns, pd.MultiIndex):
             if symbol in df.columns.levels[1]:
                 df = df.xs(symbol, axis=1, level=1)
@@ -332,7 +331,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         ]
         df['Target'] = np.select(conditions, [1, -1], default=0)
 
-        # 【致命的バグ修正】Target作成でのNaNで最新足が消えないよう、Target以外の欠損値のみ削除する
         feature_cols = [c for c in df.columns if c != 'Target']
         df = df.dropna(subset=feature_cols)
 
@@ -349,14 +347,12 @@ def run_backtest(X_bt, y_bt, test_len):
     trade_count = 0
     correct_count = 0
     
-    # 処理遅延を防ぐため、一定ステップ毎にモデルを学習・検証
     step_size = max(1, test_len // 15)
     
     for i in range(0, test_len, step_size):
         idx = len(X_bt) - test_len + i
         train_end = max(1, idx - 1)
         
-        # TargetがNaNでない有効な学習データのみに絞り込む
         valid_train = ~y_bt.iloc[:train_end].isna()
         if valid_train.sum() < 30:
             continue
@@ -393,11 +389,9 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         ]
         avail = [f for f in features if f in df_current.columns]
         
-        # 最新行（推論用）と過去の学習用データを正しく分離
         X = df_current[avail]
         y = df_current['Target']
         
-        # 【修正】TargetがNaNでない行だけを抽出して学習データセットを作成
         train_mask = ~y.isna()
         X_train_full = X[train_mask]
         y_train_full = y[train_mask]
@@ -405,7 +399,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         X_train = X_train_full.iloc[-1000:] if len(X_train_full) > 1000 else X_train_full
         y_train = y_train_full.iloc[-1000:] if len(y_train_full) > 1000 else y_train_full
         
-        X_latest = X.iloc[[-1]] # 完全に最新の1行（現在値）
+        X_latest = X.iloc[[-1]]
 
         model = RandomForestClassifier(
             n_estimators=150,
@@ -922,14 +916,14 @@ else:
     with st.expander("📄 学習データテーブル確認（相対化済みの特徴量）"):
         st.dataframe(data[available_features + ['ATR', 'BB_Width']].tail(10))
 
-# 【修正】HTML/JSによるUIをフリーズさせないノンブロッキングな自動更新
+# 修正箇所: 波括弧を二重エスケープ {{...}} に変更
 if auto_refresh:
     st.caption(f"🔄 自動更新が有効です ({refresh_interval}秒ごと)")
     components.html(
         f"""
         <script>
             setTimeout(function(){{
-                window.parent.postMessage({{type: 'streamlit:rerun'}, '*'});
+                window.parent.postMessage({{type: 'streamlit:rerun'}}, '*');
             }}, {refresh_interval * 1000});
         </script>
         """,
