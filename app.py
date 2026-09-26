@@ -240,6 +240,8 @@ if st.sidebar.button("🧪 Discord テスト送信"):
             st.sidebar.error(f"送信失敗: {msg}")
     else:
         st.sidebar.warning("Webhook URLを入力してください。")
+
+
 # ==========================================
 # 3. データ取得 & 高精度インジケーター計算エンジン
 # ==========================================
@@ -430,12 +432,17 @@ def run_backtest(X_bt, y_bt, test_len):
         if valid_train.sum() < 30:
             continue
 
+        # 単一クラスエラー防衛策
+        y_sub = y_bt.iloc[:train_end][valid_train]
+        if len(np.unique(y_sub)) < 2:
+            continue
+
         sub_model = RandomForestClassifier(
             n_estimators=50, max_depth=4, min_samples_leaf=10, random_state=42
         )
         sub_model.fit(
             X_bt.iloc[:train_end][valid_train],
-            y_bt.iloc[:train_end][valid_train],
+            y_sub,
         )
 
         p = sub_model.predict(X_bt.iloc[[idx]])[0]
@@ -457,7 +464,9 @@ def run_backtest(X_bt, y_bt, test_len):
 
 # AIシグナル & 防御重視型フィルター判定関数
 @st.cache_data(ttl=60, show_spinner=False)
-def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
+def analyze_signal(
+    df_current, df_higher, usdjpy_df=None, current_symbol="", n_estimators_override=None
+):
     if df_current is None or len(df_current) < 50:
         return "HOLD", 50.0, "不明"
 
@@ -497,10 +506,17 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
             else y_train_full
         )
 
+        # 【防衛策】学習データの単一クラスチェック（クラス数が2未満の場合は分析不可）
+        if len(np.unique(y_train)) < 2:
+            return "HOLD (分析不可: クラス不足)", 50.0, "判定不可"
+
         X_latest = X.iloc[[-1]]
 
+        # スキャン時などの高速化用引数対応
+        trees_count = n_estimators_override if n_estimators_override is not None else 120
+
         model = RandomForestClassifier(
-            n_estimators=120, max_depth=4, min_samples_leaf=10, random_state=42
+            n_estimators=trees_count, max_depth=4, min_samples_leaf=10, random_state=42
         )
         model.fit(X_train, y_train)
 
@@ -577,6 +593,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         usdjpy_strong_up = False
         usdjpy_strong_down = False
 
+        # 【防衛策】usdjpy_df の None かつ empty チェック
         if (
             is_cross_jpy
             and usdjpy_df is not None
@@ -660,6 +677,9 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         return status, confidence, market_type
     except Exception:
         return "HOLD", 50.0, "不明"
+# ==========================================
+# 4. メインデータロード & タイムゾーン判定
+# ==========================================
 with st.spinner("データとAIを初期化中..."):
     usdjpy_data = load_and_process_data(
         "USDJPY=X", tf_config["period"], tf_config["interval"], tf_label
@@ -676,16 +696,26 @@ current_day = now_datetime_jst.weekday()
 current_hour_jst = now_datetime_jst.hour
 current_minute_jst = now_datetime_jst.minute
 
+# 【夏時間/冬時間対応】3月〜10月を夏時間、11月〜2月を冬時間として簡易判定
+is_summer_time = 3 <= now_datetime_jst.month <= 10
+
 is_weekend = (
     (current_day == 5 and current_hour_jst >= 6)
     or (current_day == 6)
     or (current_day == 0 and current_hour_jst < 6)
 )
 is_low_liquidity = 3 <= current_hour_jst <= 7
-is_ny_open = 21 <= current_hour_jst <= 23
-is_econ_indicator_time = (current_hour_jst == 21 and current_minute_jst >= 15) or (
-    current_hour_jst == 22 and current_minute_jst <= 45
-)
+
+if is_summer_time:
+    is_ny_open = 21 <= current_hour_jst <= 23
+    is_econ_indicator_time = (
+        current_hour_jst == 21 and current_minute_jst >= 15
+    ) or (current_hour_jst == 22 and current_minute_jst <= 45)
+else:
+    is_ny_open = current_hour_jst >= 22 or current_hour_jst == 0
+    is_econ_indicator_time = (
+        current_hour_jst == 22 and current_minute_jst >= 15
+    ) or (current_hour_jst == 23 and current_minute_jst <= 45)
 
 if is_weekend:
     st.error(
@@ -693,7 +723,7 @@ if is_weekend:
     )
 elif is_econ_indicator_time:
     st.error(
-        "🚨 **【重要経済指標 警戒タイムゾーン】**: 突発的乱高下の危険がある時間帯です（21:15〜22:45）。新規エントリーは自重をお勧めします。"
+        "🚨 **【重要経済指標 警戒タイムゾーン】**: 突発的乱高下の危険がある時間帯です。新規エントリーは自重をお勧めします。"
     )
 elif is_low_liquidity:
     st.warning(
@@ -782,7 +812,6 @@ else:
                 X_bt, y_bt, test_len
             )
     else:
-        # 変数受取順序の修正箇所
         cumulative_wins, win_rate, trade_count, correct_count = [], 0.0, 0, 0
 
     latest_adx = data["ADX"].iloc[-1] if "ADX" in data.columns else 25.0
@@ -850,12 +879,13 @@ else:
 
     allowed_loss_jpy = account_balance * 0.02
 
+    # 【防衛策】usdjpy_data の空チェックを強化
     if is_jpy_pair:
         pip_value_per_unit = 0.01
     else:
         uj_price = (
             usdjpy_data["Close"].iloc[-1]
-            if usdjpy_data is not None
+            if (usdjpy_data is not None and not usdjpy_data.empty)
             else 155.0
         )
         pip_value_per_unit = 0.0001 * uj_price
@@ -916,12 +946,13 @@ else:
         )
 
         leverage = 25.0
+        # 【防衛策】usdjpy_data の空チェックを強化
         if is_jpy_pair:
             jpy_rate = latest_price
         else:
             uj_price = (
                 usdjpy_data["Close"].iloc[-1]
-                if usdjpy_data is not None
+                if (usdjpy_data is not None and not usdjpy_data.empty)
                 else 155.0
             )
             jpy_rate = latest_price * uj_price
@@ -1077,6 +1108,7 @@ else:
             f"許容スリッページ: {recommended_slippage} pips",
             language="text",
         )
+
     with tab_chart:
         st.subheader("📈 Pro仕様 インタラクティブ・ローソク足チャート (Plotly)")
         df_chart = data.tail(60).copy()
@@ -1217,11 +1249,13 @@ else:
                         p_symbol, "1y", "1d", "日足 (スイング・環境認識用)"
                     )
                     if sub_df is not None and len(sub_df) > 10:
+                        # スキャン時は高速化のため n_estimators=40 で実行
                         s_status, s_conf, s_mtype = analyze_signal(
                             sub_df,
                             sub_htf,
                             usdjpy_df=usdjpy_data,
                             current_symbol=p_symbol,
+                            n_estimators_override=40,
                         )
                         s_adx = (
                             sub_df["ADX"].iloc[-1]
