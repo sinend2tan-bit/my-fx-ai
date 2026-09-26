@@ -10,8 +10,8 @@ import tempfile
 import shutil
 import time
 import streamlit.components.v1 as components
-from datetime import datetime
-from zoneinfo import ZoneInfo  # タイムゾーン取得用
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -19,7 +19,7 @@ from plotly.subplots import make_subplots
 # 0. 画面基本設定
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7.2", 
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7.3", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -66,10 +66,7 @@ def save_user_settings():
         "last_notified_status": st.session_state.get("last_notified_status", DEFAULT_SETTINGS["last_notified_status"]),
     }
     try:
-        # 【改善3】一時ファイルに書いてからリネーム（ファイル破損防止のアトミック書き込み）
-        file_dir = os.path.dirname(os.path.abspath(SETTINGS_FILE))
-        if not file_dir:
-            file_dir = "."
+        file_dir = os.path.dirname(os.path.abspath(SETTINGS_FILE)) or "."
         fd, temp_path = tempfile.mkstemp(dir=file_dir)
         with os.fdopen(fd, 'w', encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=2)
@@ -83,7 +80,7 @@ if "initialized" not in st.session_state:
         st.session_state[key] = val
     st.session_state["initialized"] = True
 
-# Discord通知関数
+# Discord通知関数 (Python 3.12非推奨回避)
 def send_discord_notification(webhook_url, title, message, color=0x00ff00):
     if not webhook_url:
         return False, "URL未設定"
@@ -93,7 +90,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
             "title": title,
             "description": message,
             "color": color,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }]
     }
     try:
@@ -108,7 +105,7 @@ def send_discord_notification(webhook_url, title, message, color=0x00ff00):
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7.2)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7.3)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -227,12 +224,12 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
-        # 【改善1】MultiIndexの階層を動的に判定して確実にOHLCVを取得する
+        # 【修正】MultiIndexの確実な単一階層化処理
         if isinstance(df.columns, pd.MultiIndex):
-            if 'Close' in df.columns.get_level_values(0):
-                df.columns = df.columns.get_level_values(0)
+            if symbol in df.columns.levels[1]:
+                df = df.xs(symbol, axis=1, level=1)
             else:
-                df.columns = df.columns.get_level_values(1)
+                df.columns = df.columns.get_level_values(0)
     except Exception:
         pass
 
@@ -249,7 +246,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         except Exception:
             pass
 
-    # 【改善2】データ不足時はフォールバックで別時間軸を取らずに None を返す
     if df.empty or len(df) < 50:
         return None
 
@@ -336,32 +332,44 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         ]
         df['Target'] = np.select(conditions, [1, -1], default=0)
 
-        # 欠損値を削除し、AIに異常値を学習させない
-        df = df.dropna()
+        # 【致命的バグ修正】Target作成でのNaNで最新足が消えないよう、Target以外の欠損値のみ削除する
+        feature_cols = [c for c in df.columns if c != 'Target']
+        df = df.dropna(subset=feature_cols)
+
         if df.empty:
             return None
         return df
     except Exception:
         return None
 
-# バックテスト処理を関数化してキャッシュ（UX改善）
+# バックテスト処理（高速化・軽量化版）
 @st.cache_data(ttl=300, show_spinner=False)
 def run_backtest(X_bt, y_bt, test_len):
     cumulative_wins = []
     trade_count = 0
     correct_count = 0
     
-    for i in range(test_len):
+    # 処理遅延を防ぐため、一定ステップ毎にモデルを学習・検証
+    step_size = max(1, test_len // 15)
+    
+    for i in range(0, test_len, step_size):
         idx = len(X_bt) - test_len + i
-        train_end = max(1, idx - 2) 
+        train_end = max(1, idx - 1)
         
-        sub_model = RandomForestClassifier(n_estimators=100, max_depth=4, min_samples_leaf=10, random_state=42)
-        sub_model.fit(X_bt.iloc[:train_end], y_bt.iloc[:train_end])
+        # TargetがNaNでない有効な学習データのみに絞り込む
+        valid_train = ~y_bt.iloc[:train_end].isna()
+        if valid_train.sum() < 30:
+            continue
+
+        sub_model = RandomForestClassifier(n_estimators=50, max_depth=4, min_samples_leaf=10, random_state=42)
+        sub_model.fit(X_bt.iloc[:train_end][valid_train], y_bt.iloc[:train_end][valid_train])
+        
         p = sub_model.predict(X_bt.iloc[[idx]])[0]
+        actual = y_bt.iloc[idx]
         
-        if p != 0:
+        if p != 0 and not pd.isna(actual):
             trade_count += 1
-            if p == y_bt.iloc[idx]:
+            if p == actual:
                 correct_count += 1
         
         current_win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
@@ -385,15 +393,22 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         ]
         avail = [f for f in features if f in df_current.columns]
         
+        # 最新行（推論用）と過去の学習用データを正しく分離
         X = df_current[avail]
         y = df_current['Target']
         
-        X_train = X.iloc[-1000:-3] if len(X) > 1000 else X.iloc[:-3]
-        y_train = y.iloc[-1000:-3] if len(y) > 1000 else y.iloc[:-3]
-        X_latest = X.iloc[[-1]]
+        # 【修正】TargetがNaNでない行だけを抽出して学習データセットを作成
+        train_mask = ~y.isna()
+        X_train_full = X[train_mask]
+        y_train_full = y[train_mask]
+
+        X_train = X_train_full.iloc[-1000:] if len(X_train_full) > 1000 else X_train_full
+        y_train = y_train_full.iloc[-1000:] if len(y_train_full) > 1000 else y_train_full
+        
+        X_latest = X.iloc[[-1]] # 完全に最新の1行（現在値）
 
         model = RandomForestClassifier(
-            n_estimators=200,
+            n_estimators=150,
             max_depth=4,
             min_samples_leaf=10,
             random_state=42
@@ -560,8 +575,8 @@ else:
         'ATR_Ratio', 'Upper_Wick_Ratio', 'Lower_Wick_Ratio'
     ]
     available_features = [f for f in features if f in data.columns]
-    X_bt = data[available_features].iloc[:-3]
-    y_bt = data['Target'].iloc[:-3]
+    X_bt = data[available_features]
+    y_bt = data['Target']
     
     test_len = min(30, len(X_bt) - 10)
     
@@ -833,13 +848,7 @@ else:
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 
-        # 【改善4】 土日の空白（ギャップ）を詰めて表示する
-        fig.update_xaxes(
-            rangebreaks=[
-                dict(bounds=["sat", "mon"])
-            ]
-        )
-
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
         fig.update_layout(
             xaxis_rangeslider_visible=False,
             height=500,
@@ -857,7 +866,7 @@ else:
             status_text_scan = st.empty()
             total_pairs = len(PAIRS)
             
-            with st.spinner("全通貨ペアを分析中... (キャッシングにより高速化されています)"):
+            with st.spinner("全通貨ペアを分析中..."):
                 for idx_p, (p_label, p_symbol) in enumerate(PAIRS.items()):
                     status_text_scan.text(f"スキャン中... {p_label}")
                     
@@ -913,10 +922,16 @@ else:
     with st.expander("📄 学習データテーブル確認（相対化済みの特徴量）"):
         st.dataframe(data[available_features + ['ATR', 'BB_Width']].tail(10))
 
-# 【改善5】 ストリームリットネイティブの自動更新 (画面の白飛びを防止)
+# 【修正】HTML/JSによるUIをフリーズさせないノンブロッキングな自動更新
 if auto_refresh:
-    refresh_container = st.empty()
-    for i in range(refresh_interval, 0, -1):
-        refresh_container.caption(f"🔄 次回データ更新まで: {i}秒...")
-        time.sleep(1)
-    st.rerun()
+    st.caption(f"🔄 自動更新が有効です ({refresh_interval}秒ごと)")
+    components.html(
+        f"""
+        <script>
+            setTimeout(function(){{
+                window.parent.postMessage({{type: 'streamlit:rerun'}, '*'});
+            }}, {refresh_interval * 1000});
+        </script>
+        """,
+        height=0
+    )
