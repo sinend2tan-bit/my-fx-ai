@@ -174,8 +174,6 @@ if st.sidebar.button("🧪 Discord テスト送信"):
             st.sidebar.error(f"送信失敗: {msg}")
     else:
         st.sidebar.warning("Webhook URLを入力してください。")
-
-st.sidebar.caption("※設定はブラウザに保存されます。クラウド運用時、URLを共有すると他の閲覧者と設定ファイルが競合する可能性があります。")
 # ==========================================
 # 3. データ取得 & 高精度インジケーター計算エンジン
 # ==========================================
@@ -184,7 +182,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
-        # 【修正点】YFinanceの列構成変更（MultiIndex）に対する堅牢な平坦化処理
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
     except Exception:
@@ -194,7 +191,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         try:
             tz_before = df.index.tz
             rule = "4h" if "4時間足" in tf_name else "12h"
-            df = df.resample(rule, closed="left", label="left").agg({
+            # NY時間を意識したリサンプルの起点設定
+            df = df.resample(rule, closed="left", label="left", origin="start_day").agg({
                 "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"
             }).dropna()
             if tz_before is not None and df.index.tz is None:
@@ -206,52 +204,52 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return None
 
     try:
-        pip_unit_local = 0.01 if "JPY" in symbol else 0.0001
-
-        df["SMA_20"] = df["Close"].rolling(window=20).mean()
-        df["SMA_50"] = df["Close"].rolling(window=50).mean()
-        df["EMA_200"] = df["Close"].ewm(span=200, adjust=False).mean()
+        # Pandasの断片化警告を防ぐため、計算結果を辞書に格納して一括結合する
+        new_cols = {}
+        
+        new_cols["SMA_20"] = df["Close"].rolling(window=20).mean()
+        new_cols["SMA_50"] = df["Close"].rolling(window=50).mean()
+        new_cols["EMA_200"] = df["Close"].ewm(span=200, adjust=False).mean()
 
         high_low = df["High"] - df["Low"]
-        df["ATR"] = high_low.rolling(window=14).mean()
-        df["ATR_SMA20"] = df["ATR"].rolling(window=20).mean()
-        df["ATR_Ratio"] = df["ATR"] / (df["ATR_SMA20"] + 1e-10)
+        new_cols["ATR"] = high_low.rolling(window=14).mean()
+        new_cols["ATR_SMA20"] = new_cols["ATR"].rolling(window=20).mean()
+        new_cols["ATR_Ratio"] = new_cols["ATR"] / (new_cols["ATR_SMA20"] + 1e-10)
 
-        total_range = df["High"] - df["Low"] + 1e-10
-        df["Upper_Wick_Ratio"] = (df["High"] - df[["Open", "Close"]].max(axis=1)) / total_range
-        df["Lower_Wick_Ratio"] = (df[["Open", "Close"]].min(axis=1) - df["Low"]) / total_range
+        total_range = high_low + 1e-10
+        new_cols["Upper_Wick_Ratio"] = (df["High"] - df[["Open", "Close"]].max(axis=1)) / total_range
+        new_cols["Lower_Wick_Ratio"] = (df[["Open", "Close"]].min(axis=1) - df["Low"]) / total_range
 
-        df["Return_1"] = df["Close"].diff(1) / df["Close"].shift(1)
-        df["Return_5"] = df["Close"].diff(5) / df["Close"].shift(5)
+        new_cols["Return_1"] = df["Close"].diff(1) / df["Close"].shift(1)
+        new_cols["Return_5"] = df["Close"].diff(5) / df["Close"].shift(5)
         
-        df["Dev_SMA20"] = (df["Close"] - df["SMA_20"]) / (df["SMA_20"] + 1e-10)
-        df["Dev_EMA200"] = (df["Close"] - df["EMA_200"]) / (df["EMA_200"] + 1e-10)
-        df["Vol_Ratio"] = df["ATR"] / (df["Close"] + 1e-10)
+        new_cols["Dev_SMA20"] = (df["Close"] - new_cols["SMA_20"]) / (new_cols["SMA_20"] + 1e-10)
+        new_cols["Dev_EMA200"] = (df["Close"] - new_cols["EMA_200"]) / (new_cols["EMA_200"] + 1e-10)
+        new_cols["Vol_Ratio"] = new_cols["ATR"] / (df["Close"] + 1e-10)
 
         delta = df["Close"].diff()
         gain = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean()
         loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean()
         rs = gain / (loss + 1e-10)
-        df["RSI"] = 100.0 - (100.0 / (1.0 + rs))
-        df["RSI_Diff"] = df["RSI"].diff(1)
+        new_cols["RSI"] = 100.0 - (100.0 / (1.0 + rs))
+        new_cols["RSI_Diff"] = new_cols["RSI"].diff(1)
 
         ema12 = df["Close"].ewm(span=12, adjust=False).mean()
         ema26 = df["Close"].ewm(span=26, adjust=False).mean()
-        df["MACD"] = ema12 - ema26
-        df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
-        df["MACD_Hist"] = df["MACD"] - df["MACD_Signal"]
-        df["MACD_Hist_Ratio"] = df["MACD_Hist"] / (df["Close"] + 1e-10)
+        new_cols["MACD"] = ema12 - ema26
+        new_cols["MACD_Signal"] = new_cols["MACD"].ewm(span=9, adjust=False).mean()
+        new_cols["MACD_Hist"] = new_cols["MACD"] - new_cols["MACD_Signal"]
+        new_cols["MACD_Hist_Ratio"] = new_cols["MACD_Hist"] / (df["Close"] + 1e-10)
 
         std20 = df["Close"].rolling(window=20).std()
-        df["Upper_Band"] = df["SMA_20"] + (std20 * 2)
-        df["Lower_Band"] = df["SMA_20"] - (std20 * 2)
-        df["BB_Width"] = (df["Upper_Band"] - df["Lower_Band"]) / (df["SMA_20"] + 1e-10)
-        df["BB_PctB"] = (df["Close"] - df["Lower_Band"]) / ((df["Upper_Band"] - df["Lower_Band"]) + 1e-10)
+        new_cols["Upper_Band"] = new_cols["SMA_20"] + (std20 * 2)
+        new_cols["Lower_Band"] = new_cols["SMA_20"] - (std20 * 2)
+        new_cols["BB_Width"] = (new_cols["Upper_Band"] - new_cols["Lower_Band"]) / (new_cols["SMA_20"] + 1e-10)
+        new_cols["BB_PctB"] = (df["Close"] - new_cols["Lower_Band"]) / ((new_cols["Upper_Band"] - new_cols["Lower_Band"]) + 1e-10)
 
-        high, low, close = df["High"], df["Low"], df["Close"]
-        tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-        up_move = high - high.shift(1)
-        down_move = low.shift(1) - low
+        tr = pd.concat([high_low, (df["High"] - df["Close"].shift(1)).abs(), (df["Low"] - df["Close"].shift(1)).abs()], axis=1).max(axis=1)
+        up_move = df["High"] - df["High"].shift(1)
+        down_move = df["Low"].shift(1) - df["Low"]
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
         atr14 = tr.ewm(alpha=1/14, adjust=False).mean()
@@ -259,9 +257,11 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / (atr14 + 1e-10)
         sum_di = (plus_di + minus_di).replace(0, 1e-10)
         dx = 100 * (plus_di - minus_di).abs() / sum_di
-        df["ADX"] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
+        new_cols["ADX"] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
-        # 【修正点】固定pipsではなく、直近ボラティリティ(ATR)の80%動いたかをAIの正解ラベルにする
+        # 一括結合
+        df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
+
         target_pips = df["ATR"] * 0.8  
         future_max_up = df["High"].shift(-3).rolling(3).max() - df["Close"]
         future_max_down = df["Close"] - df["Low"].shift(-3).rolling(3).min()
@@ -351,9 +351,15 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_e
         upper_band = df_current["Upper_Band"].iloc[-1] if "Upper_Band" in df_current.columns else latest_price
         lower_band = df_current["Lower_Band"].iloc[-1] if "Lower_Band" in df_current.columns else latest_price
         
-        latest_bb_width = df_current["BB_Width"].iloc[-1] if "BB_Width" in df_current.columns else 0.05
-        avg_bb_series = df_current["BB_Width"].rolling(window=20).mean()
-        avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
+        # BB_Width が無い場合のエラー防止
+        if "BB_Width" in df_current.columns:
+            latest_bb_width = df_current["BB_Width"].iloc[-1]
+            avg_bb_series = df_current["BB_Width"].rolling(window=20).mean()
+            avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
+        else:
+            latest_bb_width = 0.05
+            avg_bb_width = 0.05
+        
         is_squeezed = latest_bb_width < (avg_bb_width * 0.75)
 
         htf_trend = "FLAT"
@@ -416,7 +422,10 @@ with st.spinner("データとAIを初期化中..."):
 
 now_datetime_jst = datetime.now(ZoneInfo("Asia/Tokyo"))
 current_day, current_hour_jst, current_minute_jst = now_datetime_jst.weekday(), now_datetime_jst.hour, now_datetime_jst.minute
-is_summer_time = 3 <= now_datetime_jst.month <= 10
+
+# NYタイムゾーンを用いて夏時間(DST)かどうかを正確に判定
+now_datetime_ny = now_datetime_jst.astimezone(ZoneInfo("America/New_York"))
+is_summer_time = now_datetime_ny.dst().total_seconds() != 0 
 
 is_weekend = (current_day == 5 and current_hour_jst >= 6) or (current_day == 6) or (current_day == 0 and current_hour_jst < 6)
 is_low_liquidity = 3 <= current_hour_jst <= 7
@@ -440,17 +449,23 @@ else:
     if is_econ_indicator_time and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         market_status = "HOLD (指標発表警戒時間帯)"
 
-    # 【修正点】Discord通知のチャタリング防止（同じ方向のシグナルは連続通知しない）
     if enable_notify and discord_url and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         if "last_notified_status" not in st.session_state:
             st.session_state["last_notified_status"] = {}
         last_sig_key = f"{ticker}_{tf_label}"
         last_status = st.session_state["last_notified_status"].get(last_sig_key, "")
         
-        # 先頭4文字(BUY , SELL)が前回と異なる場合のみ通知
         if market_status[:4] != last_status[:4]:
             color_val = 0x2ECC71 if market_status.startswith("BUY") else 0xE74C3C
-            msg_body = f"**通貨ペア**: {selected_label}\n**時間軸**: {tf_label}\n**現在レート**: {data['Close'].iloc[-1]:{price_fmt}}\n**AIシグナル**: {market_status}\n**確信度**: {confidence:.1f}%\n**相場環境**: {market_type}"
+            # 見やすさ向上版 Discordメッセージ
+            msg_body = (
+                f"**【{selected_label}】** のAIシグナルが発生しました！\n"
+                f"⏱️ **時間軸**: {tf_label}\n"
+                f"💵 **現在レート**: `{data['Close'].iloc[-1]:{price_fmt}}`\n"
+                f"🤖 **AI判定**: **{market_status}**\n"
+                f"🎯 **確信度**: `{confidence:.1f}%`\n"
+                f"📊 **相場環境**: {market_type}"
+            )
             ok, _ = send_discord_notification(discord_url, f"🚨 AI FXシグナル通知 [{selected_label}]", msg_body, color=color_val)
             if ok:
                 st.session_state["last_notified_status"][last_sig_key] = market_status
@@ -466,12 +481,17 @@ else:
     else:
         cumulative_wins, win_rate, trade_count, correct_count = [], 0.0, 0, 0
 
-    latest_adx = data["ADX"].iloc[-1] if "ADX" in data.columns else 25.0
-    latest_bb_width = data["BB_Width"].iloc[-1] if "BB_Width" in data.columns else 0.05
-    avg_bb_series = data["BB_Width"].rolling(window=20).mean()
-    avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
+    # BB_Width の安全性考慮
+    if "BB_Width" in data.columns:
+        latest_bb_width = data["BB_Width"].iloc[-1]
+        avg_bb_series = data["BB_Width"].rolling(window=20).mean()
+        avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
+    else:
+        latest_bb_width = 0.05
+        avg_bb_width = 0.05
     is_squeezed = latest_bb_width < (avg_bb_width * 0.75)
 
+    latest_adx = data["ADX"].iloc[-1] if "ADX" in data.columns else 25.0
     htf_close, htf_sma50 = data["Close"].iloc[-1], data["SMA_50"].iloc[-1]
     if higher_tf_data is not None and not higher_tf_data.empty and "SMA_50" in higher_tf_data.columns:
         htf_close, htf_sma50 = higher_tf_data["Close"].iloc[-1], higher_tf_data["SMA_50"].iloc[-1]
@@ -529,7 +549,6 @@ else:
         st.write(f"💡 **直近の相場変動幅 (ATR = {raw_atr_pips:.1f} pips) に連動し、値幅 `{ai_recommended_width} pips` を自動設定しました。**")
         jpy_rate = latest_price if is_jpy_pair else latest_price * (usdjpy_data["Close"].iloc[-1] if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0)
         margin_per_unit = (jpy_rate * custom_quantity) / 25.0
-        # 【修正点】仕掛け本数の安全マージンを資金の70%→50%に引き下げ、含み損への耐久力を向上
         max_allowable_grids = max(2, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
         safe_half_range_val = max(1, max_allowable_grids // 2) * ai_recommended_width * pip_unit
 
@@ -628,7 +647,6 @@ else:
                             "通貨ペア": p_label, "相場環境": s_mtype, "AI総合判定": s_status, "確信度 (%)": round(s_conf, 1),
                             "ADX (強度)": round(sub_df["ADX"].iloc[-1] if "ADX" in sub_df.columns else 25.0, 1)
                         })
-                    # 【修正点】1.0超過によるStreamlitクラッシュ防止
                     progress_bar_scan.progress(min(1.0, (idx_p + 1) / len(PAIRS)))
 
             progress_bar_scan.empty(); status_text_scan.empty()
