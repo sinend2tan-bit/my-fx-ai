@@ -18,7 +18,7 @@ from streamlit_autorefresh import st_autorefresh
 # 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.2.0",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.0",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -136,7 +136,7 @@ PAIR_ATR_CONFIG = {
     "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.2.0)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.0)")
 
 col_s1, col_s2 = st.columns(2)
 with col_s1:
@@ -289,6 +289,24 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df
     except Exception:
         return None
+
+# 全時間軸のトレンドを一括取得する関数
+def get_mtf_trends(symbol: str) -> dict:
+    trends = {}
+    for name, params in TIMEFRAMES.items():
+        sub_d = load_and_process_data(symbol, params["period"], params["interval"], name)
+        if sub_d is not None and len(sub_d) >= 20:
+            c_price = sub_d['Close'].iloc[-1]
+            c_ema = sub_d['EMA_200'].iloc[-1] if 'EMA_200' in sub_d.columns else sub_d['SMA_20'].iloc[-1]
+            if c_price > c_ema:
+                trends[name.split(" ")[0]] = "上昇 📈"
+            elif c_price < c_ema:
+                trends[name.split(" ")[0]] = "下降 📉"
+            else:
+                trends[name.split(" ")[0]] = "レンジ ➡️"
+        else:
+            trends[name.split(" ")[0]] = "判定中..."
+    return trends
 
 @st.cache_data(ttl=300, show_spinner=False)
 def run_backtest(X_bt, y_bt, test_len):
@@ -542,6 +560,7 @@ else:
 
     if is_squeezed: st.error("⚡ **【スクイーズ発生】**: ボリンジャーバンドが収縮中です。ブレイクアウトにご注意ください。")
 
+    # メトリクスカード表示
     st.divider()
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("現在レート", f"{latest_price:{price_fmt}}")
@@ -552,6 +571,14 @@ else:
     m_col4.metric("RSI (14)", f"{latest_rsi:.1f}")
     m_col5.metric("ADX (トレンド強度)", f"{latest_adx:.1f}")
     m_col6.metric("上位足 (日足) トレンド", long_term_trend)
+
+    # 各時間軸のトレンド一括パネルの表示
+    st.markdown("##### 🌐 マルチタイムフレーム (MTF) トレンド一覧")
+    mtf_trends = get_mtf_trends(ticker)
+    mtf_cols = st.columns(len(TIMEFRAMES))
+    for idx, (tf_name_key, t_val) in enumerate(mtf_trends.items()):
+        mtf_cols[idx].metric(label=tf_name_key, value=t_val)
+
     st.divider()
 
     tab_repeat, tab_single, tab_speed, tab_chart, tab_scanner, tab_backtest, tab_metrics = st.tabs([
