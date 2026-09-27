@@ -184,11 +184,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
+        # 【修正点】YFinanceの列構成変更（MultiIndex）に対する堅牢な平坦化処理
         if isinstance(df.columns, pd.MultiIndex):
-            if symbol in df.columns.levels[1]:
-                df = df.xs(symbol, axis=1, level=1)
-            else:
-                df.columns = df.columns.get_level_values(0)
+            df.columns = df.columns.get_level_values(0)
     except Exception:
         pass
 
@@ -263,14 +261,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         dx = 100 * (plus_di - minus_di).abs() / sum_di
         df["ADX"] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
-        if "15分" in tf_name or interval == "15m":
-            target_pips_val = 10.0
-        elif "1時間" in tf_name or interval == "1h":
-            target_pips_val = 15.0
-        else:
-            target_pips_val = 25.0
-
-        target_pips = target_pips_val * pip_unit_local
+        # 【修正点】固定pipsではなく、直近ボラティリティ(ATR)の80%動いたかをAIの正解ラベルにする
+        target_pips = df["ATR"] * 0.8  
         future_max_up = df["High"].shift(-3).rolling(3).max() - df["Close"]
         future_max_down = df["Close"] - df["Low"].shift(-3).rolling(3).min()
 
@@ -292,6 +284,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df
     except Exception:
         return None
+
 @st.cache_data(ttl=300, show_spinner=False)
 def run_backtest(X_bt, y_bt, test_len):
     cumulative_wins = []
@@ -447,11 +440,15 @@ else:
     if is_econ_indicator_time and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         market_status = "HOLD (指標発表警戒時間帯)"
 
+    # 【修正点】Discord通知のチャタリング防止（同じ方向のシグナルは連続通知しない）
     if enable_notify and discord_url and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         if "last_notified_status" not in st.session_state:
             st.session_state["last_notified_status"] = {}
         last_sig_key = f"{ticker}_{tf_label}"
-        if st.session_state["last_notified_status"].get(last_sig_key, "") != market_status:
+        last_status = st.session_state["last_notified_status"].get(last_sig_key, "")
+        
+        # 先頭4文字(BUY , SELL)が前回と異なる場合のみ通知
+        if market_status[:4] != last_status[:4]:
             color_val = 0x2ECC71 if market_status.startswith("BUY") else 0xE74C3C
             msg_body = f"**通貨ペア**: {selected_label}\n**時間軸**: {tf_label}\n**現在レート**: {data['Close'].iloc[-1]:{price_fmt}}\n**AIシグナル**: {market_status}\n**確信度**: {confidence:.1f}%\n**相場環境**: {market_type}"
             ok, _ = send_discord_notification(discord_url, f"🚨 AI FXシグナル通知 [{selected_label}]", msg_body, color=color_val)
@@ -532,7 +529,8 @@ else:
         st.write(f"💡 **直近の相場変動幅 (ATR = {raw_atr_pips:.1f} pips) に連動し、値幅 `{ai_recommended_width} pips` を自動設定しました。**")
         jpy_rate = latest_price if is_jpy_pair else latest_price * (usdjpy_data["Close"].iloc[-1] if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0)
         margin_per_unit = (jpy_rate * custom_quantity) / 25.0
-        max_allowable_grids = max(2, int((account_balance * 0.7) / max(margin_per_unit, 1.0)))
+        # 【修正点】仕掛け本数の安全マージンを資金の70%→50%に引き下げ、含み損への耐久力を向上
+        max_allowable_grids = max(2, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
         safe_half_range_val = max(1, max_allowable_grids // 2) * ai_recommended_width * pip_unit
 
         rep_lower, rep_upper = round(latest_price - safe_half_range_val, 3 if is_jpy_pair else 5), round(latest_price + safe_half_range_val, 3 if is_jpy_pair else 5)
@@ -571,6 +569,7 @@ else:
         else:
             st.warning(f"🟡 **静観フィルター発動中 ({market_status})**")
             st.info("💡 **解説:** ノイズ除去・ドル円連動ストッパー・指標発表警戒帯等の安全装置により、騙しリスクが高い場面では自動で「HOLD」判定になります。")
+    
     with tab_speed:
         st.subheader("⚡ 松井証券FX アプリ【スピード注文】設定用")
         sp_tp_pips = round(latest_atr * ai_tp_mult / pip_unit, 1)
@@ -629,7 +628,8 @@ else:
                             "通貨ペア": p_label, "相場環境": s_mtype, "AI総合判定": s_status, "確信度 (%)": round(s_conf, 1),
                             "ADX (強度)": round(sub_df["ADX"].iloc[-1] if "ADX" in sub_df.columns else 25.0, 1)
                         })
-                    progress_bar_scan.progress((idx_p + 1) / len(PAIRS))
+                    # 【修正点】1.0超過によるStreamlitクラッシュ防止
+                    progress_bar_scan.progress(min(1.0, (idx_p + 1) / len(PAIRS)))
 
             progress_bar_scan.empty(); status_text_scan.empty()
             if scan_results:
