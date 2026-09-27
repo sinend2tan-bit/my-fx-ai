@@ -1,320 +1,420 @@
+import json
+import os
+import time
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import requests
 import streamlit as st
 import yfinance as yf
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
-from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 
 # ==========================================
-# 1. ページ設定・定数定義
+# 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="FX AI Assistant (Simple Edition)",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.2.0",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# 主要時間軸（5分、15分、1時間、4時間、日足）
-TIMEFRAMES = {
-    "15分足 (デイトレ用)": {"period": "1mo", "interval": "15m"},
-    "5分足 (超短期)": {"period": "7d", "interval": "5m"},
-    "1時間足 (メイン)": {"period": "6mo", "interval": "1h"},
-    "4時間足 (中期)": {"period": "2y", "interval": "1h"},
-    "日足 (長期)": {"period": "2y", "interval": "1d"},
-}
+FEATURE_COLUMNS = [
+    "Return_1", "Return_5", "Dev_SMA20", "Dev_EMA200", "Vol_Ratio",
+    "RSI", "RSI_Diff", "MACD_Hist_Ratio", "BB_PctB", "ADX",
+    "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio",
+]
 
-PAIR_MAP = {
-    "USD/JPY": "JPY=X",
-    "EUR/JPY": "EURJPY=X",
-    "GBP/JPY": "GBPJPY=X",
-    "AUD/JPY": "AUDJPY=X",
-    "EUR/USD": "EURUSD=X"
+SETTINGS_FILE = "user_settings.json"
+
+DEFAULT_SETTINGS = {
+    "account_balance": 200000,
+    "quantity_wan": 0.20,
+    "discord_url": "",
+    "enable_notify": False,
+    "auto_refresh": False,
+    "refresh_interval": 180,
+    "selected_pair_label": "米ドル / 円 (USD/JPY)",
+    "selected_tf_label": "15分足 (デイトレエントリー用)",
+    "last_notified_status": {},
 }
 
 # ==========================================
-# 2. データ取得 & テクニカル指標計算
+# 1. 設定ファイルの永続化 & 補助関数
 # ==========================================
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_stock_data(symbol: str, period: str, interval: str) -> pd.DataFrame:
+def load_user_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                merged = DEFAULT_SETTINGS.copy()
+                merged.update(saved)
+                return merged
+        except Exception:
+            return DEFAULT_SETTINGS.copy()
+    return DEFAULT_SETTINGS.copy()
+
+def save_user_settings():
+    settings = {
+        "account_balance": st.session_state.get("account_balance", DEFAULT_SETTINGS["account_balance"]),
+        "quantity_wan": st.session_state.get("quantity_wan", DEFAULT_SETTINGS["quantity_wan"]),
+        "discord_url": st.session_state.get("discord_url", DEFAULT_SETTINGS["discord_url"]),
+        "enable_notify": st.session_state.get("enable_notify", DEFAULT_SETTINGS["enable_notify"]),
+        "auto_refresh": st.session_state.get("auto_refresh", DEFAULT_SETTINGS["auto_refresh"]),
+        "refresh_interval": st.session_state.get("refresh_interval", DEFAULT_SETTINGS["refresh_interval"]),
+        "selected_pair_label": st.session_state.get("selected_pair_label", DEFAULT_SETTINGS["selected_pair_label"]),
+        "selected_tf_label": st.session_state.get("selected_tf_label", DEFAULT_SETTINGS["selected_tf_label"]),
+        "last_notified_status": st.session_state.get("last_notified_status", DEFAULT_SETTINGS["last_notified_status"]),
+    }
     try:
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period=period, interval=interval)
-        if df.empty:
-            return pd.DataFrame()
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
-        if df.index.tz is None:
-            df.index = df.index.tz_localize('UTC').tz_convert('Asia/Tokyo')
+if "initialized" not in st.session_state:
+    saved_settings = load_user_settings()
+    for key, val in saved_settings.items():
+        st.session_state[key] = val
+    st.session_state["initialized"] = True
+
+def send_discord_notification(webhook_url, title, message, color=0x00FF00):
+    if not webhook_url:
+        return False, "URL未設定"
+    payload = {
+        "embeds": [{
+            "title": title,
+            "description": message,
+            "color": color,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }]
+    }
+    try:
+        res = requests.post(webhook_url, json=payload, timeout=5)
+        if res.status_code in [200, 204]:
+            return True, "送信成功"
         else:
-            df.index = df.index.tz_convert('Asia/Tokyo')
+            return False, f"ステータスコード: {res.status_code}"
+    except Exception as e:
+        return False, str(e)
 
-        if interval == "1h" and period == "2y":
-            df = df.resample('4h').agg({
-                'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+def get_signal_type(status_str):
+    if status_str.startswith("BUY"):
+        return "BUY"
+    elif status_str.startswith("SELL"):
+        return "SELL"
+    return "HOLD"
+
+# ==========================================
+# 2. 通貨ペア & 時間軸設定
+# ==========================================
+PAIRS = {
+    "米ドル / 円 (USD/JPY)": "USDJPY=X",
+    "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
+    "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
+    "豪ドル / 円 (AUD/JPY)": "AUDJPY=X",
+    "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
+}
+
+# 12時間足を廃止し、スキャル〜デイトレに便利な5分足を最適配置
+TIMEFRAMES = {
+    "5分足 (超短期スキャル用)": {"period": "7d", "interval": "5m"},
+    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
+    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
+    "4時間足 (中期トレンド用)": {"period": "2y", "interval": "1h"},
+    "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
+}
+
+PAIR_ATR_CONFIG = {
+    "USDJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "GBPJPY=X": {"atr_mult": 0.25, "min_pips": 20},
+    "EURJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "AUDJPY=X": {"atr_mult": 0.18, "min_pips": 12},
+    "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
+}
+
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.2.0)")
+
+col_s1, col_s2 = st.columns(2)
+with col_s1:
+    selected_label = st.selectbox("通貨ペアを選択", list(PAIRS.keys()), key="selected_pair_label", on_change=save_user_settings)
+with col_s2:
+    tf_label = st.selectbox("時間軸を選択", list(TIMEFRAMES.keys()), key="selected_tf_label", on_change=save_user_settings)
+
+ticker = PAIRS[selected_label]
+tf_config = TIMEFRAMES[tf_label]
+atr_cfg = PAIR_ATR_CONFIG.get(ticker, {"atr_mult": 0.20, "min_pips": 15})
+
+is_jpy_pair = "JPY" in ticker
+pip_unit = 0.01 if is_jpy_pair else 0.0001
+price_fmt = ".3f" if is_jpy_pair else ".5f"
+
+st.sidebar.header("⚙️ システム設定 & 口座管理")
+if st.sidebar.button("🔄 今すぐ最新データに更新", use_container_width=True):
+    st.cache_data.clear()
+    st.rerun()
+
+auto_refresh = st.sidebar.checkbox("自動更新を有効にする", key="auto_refresh", on_change=save_user_settings)
+refresh_interval = st.sidebar.selectbox(
+    "更新間隔を選択", options=[60, 180, 300], format_func=lambda x: f"{x // 60}分ごと", key="refresh_interval", on_change=save_user_settings
+)
+
+st.sidebar.subheader("📋 松井証券トレード資金設定（基本入力）")
+account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, step=50000, key="account_balance", on_change=save_user_settings)
+quantity_wan = st.sidebar.number_input("注文数量 (万通貨)", min_value=0.0001, max_value=10.0, step=0.01, format="%.4f", key="quantity_wan", on_change=save_user_settings)
+custom_quantity = int(round(quantity_wan * 10000))
+
+st.sidebar.subheader("🔔 Discord 通知設定")
+discord_url = st.sidebar.text_input("Webhook URL", type="password", key="discord_url", on_change=save_user_settings)
+enable_notify = st.sidebar.checkbox("AI売買シグナル時に通知する", key="enable_notify", on_change=save_user_settings)
+
+if st.sidebar.button("🧪 Discord テスト送信"):
+    if discord_url:
+        ok, msg = send_discord_notification(discord_url, "🧪 テスト通知成功", f"選択中の通貨ペア: **{selected_label}**\n連携は正常です！", color=0x3498DB)
+        if ok:
+            st.sidebar.success("テスト通知を送信しました！")
+        else:
+            st.sidebar.error(f"送信失敗: {msg}")
+    else:
+        st.sidebar.warning("Webhook URLを入力してください。")
+
+# ==========================================
+# 3. データ取得 & インジケーター計算エンジン
+# ==========================================
+@st.cache_data(ttl=60, show_spinner=False)
+def load_and_process_data(symbol, period, interval, tf_name=""):
+    df = pd.DataFrame()
+    try:
+        df = yf.download(symbol, period=period, interval=interval, progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+    except Exception:
+        pass
+
+    if not df.empty and "4時間足" in tf_name and interval == "1h":
+        try:
+            tz_before = df.index.tz
+            df = df.resample("4h", closed="left", label="left", origin="start_day").agg({
+                "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"
             }).dropna()
+            if tz_before is not None and df.index.tz is None:
+                df.index = df.index.tz_localize(tz_before)
+        except Exception:
+            pass
 
+    if df.empty or len(df) < 50:
+        return None
+
+    try:
+        new_cols = {}
+        new_cols["SMA_20"] = df["Close"].rolling(window=20).mean()
+        new_cols["SMA_50"] = df["Close"].rolling(window=50).mean()
+        new_cols["EMA_200"] = df["Close"].ewm(span=200, adjust=False).mean()
+
+        high_low = df["High"] - df["Low"]
+        new_cols["ATR"] = high_low.rolling(window=14).mean()
+        new_cols["ATR_SMA20"] = new_cols["ATR"].rolling(window=20).mean()
+        new_cols["ATR_Ratio"] = new_cols["ATR"] / (new_cols["ATR_SMA20"] + 1e-10)
+
+        total_range = high_low + 1e-10
+        new_cols["Upper_Wick_Ratio"] = (df["High"] - df[["Open", "Close"]].max(axis=1)) / total_range
+        new_cols["Lower_Wick_Ratio"] = (df[["Open", "Close"]].min(axis=1) - df["Low"]) / total_range
+
+        new_cols["Return_1"] = df["Close"].diff(1) / df["Close"].shift(1)
+        new_cols["Return_5"] = df["Close"].diff(5) / df["Close"].shift(5)
+        
+        new_cols["Dev_SMA20"] = (df["Close"] - new_cols["SMA_20"]) / (new_cols["SMA_20"] + 1e-10)
+        new_cols["Dev_EMA200"] = (df["Close"] - new_cols["EMA_200"]) / (new_cols["EMA_200"] + 1e-10)
+        new_cols["Vol_Ratio"] = new_cols["ATR"] / (df["Close"] + 1e-10)
+
+        delta = df["Close"].diff()
+        gain = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean()
+        rs = gain / (loss + 1e-10)
+        new_cols["RSI"] = 100.0 - (100.0 / (1.0 + rs))
+        new_cols["RSI_Diff"] = new_cols["RSI"].diff(1)
+
+        ema12 = df["Close"].ewm(span=12, adjust=False).mean()
+        ema26 = df["Close"].ewm(span=26, adjust=False).mean()
+        new_cols["MACD"] = ema12 - ema26
+        new_cols["MACD_Signal"] = new_cols["MACD"].ewm(span=9, adjust=False).mean()
+        new_cols["MACD_Hist"] = new_cols["MACD"] - new_cols["MACD_Signal"]
+        new_cols["MACD_Hist_Ratio"] = new_cols["MACD_Hist"] / (df["Close"] + 1e-10)
+
+        std20 = df["Close"].rolling(window=20).std()
+        new_cols["Upper_Band"] = new_cols["SMA_20"] + (std20 * 2)
+        new_cols["Lower_Band"] = new_cols["SMA_20"] - (std20 * 2)
+        new_cols["BB_Width"] = (new_cols["Upper_Band"] - new_cols["Lower_Band"]) / (new_cols["SMA_20"] + 1e-10)
+        new_cols["BB_PctB"] = (df["Close"] - new_cols["Lower_Band"]) / ((new_cols["Upper_Band"] - new_cols["Lower_Band"]) + 1e-10)
+
+        tr = pd.concat([high_low, (df["High"] - df["Close"].shift(1)).abs(), (df["Low"] - df["Close"].shift(1)).abs()], axis=1).max(axis=1)
+        up_move = df["High"] - df["High"].shift(1)
+        down_move = df["Low"].shift(1) - df["Low"]
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+        atr14 = tr.ewm(alpha=1/14, adjust=False).mean()
+        plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / (atr14 + 1e-10)
+        minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / (atr14 + 1e-10)
+        sum_di = (plus_di + minus_di).replace(0, 1e-10)
+        dx = 100 * (plus_di - minus_di).abs() / sum_di
+        new_cols["ADX"] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
+
+        df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
+
+        # 未来1~3期間の最大・最小値を正確に取得
+        f_high = pd.concat([df["High"].shift(-1), df["High"].shift(-2), df["High"].shift(-3)], axis=1)
+        f_low = pd.concat([df["Low"].shift(-1), df["Low"].shift(-2), df["Low"].shift(-3)], axis=1)
+
+        target_pips = df["ATR"] * 0.8  
+        future_max_up = f_high.max(axis=1) - df["Close"]
+        future_max_down = df["Close"] - f_low.min(axis=1)
+
+        conditions = [
+            (future_max_up >= target_pips) & (future_max_up > future_max_down),
+            (future_max_down >= target_pips) & (future_max_down > future_max_up),
+        ]
+        
+        target_series = np.select(conditions, [1, -1], default=0)
+        df["Target"] = target_series.astype(float)
+        if len(df) > 3:
+            df.iloc[-3:, df.columns.get_loc("Target")] = np.nan
+
+        feature_cols = [c for c in df.columns if c != "Target"]
+        df = df.dropna(subset=feature_cols)
+
+        if df.empty:
+            return None
         return df
     except Exception:
-        return pd.DataFrame()
+        return None
 
-def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    if len(df) < 50:
-        return df
-    
-    df = df.copy()
-    close, high, low = df['Close'], df['High'], df['Low']
+@st.cache_data(ttl=300, show_spinner=False)
+def run_backtest(X_bt, y_bt, test_len):
+    cumulative_wins = []
+    trade_count, correct_count = 0, 0
+    step_size = max(1, test_len // 15)
 
-    df['EMA_20'] = close.ewm(span=20, adjust=False).mean()
-    df['EMA_50'] = close.ewm(span=50, adjust=False).mean()
+    for i in range(0, test_len, step_size):
+        idx = len(X_bt) - test_len + i
+        train_end = max(1, idx - 3)
+        valid_train = ~y_bt.iloc[:train_end].isna()
+        if valid_train.sum() < 30:
+            continue
+        y_sub = y_bt.iloc[:train_end][valid_train]
+        if len(np.unique(y_sub)) < 2:
+            continue
+        sub_model = RandomForestClassifier(n_estimators=50, max_depth=4, min_samples_leaf=10, random_state=42)
+        sub_model.fit(X_bt.iloc[:train_end][valid_train], y_sub)
+        p = sub_model.predict(X_bt.iloc[[idx]])[0]
+        actual = y_bt.iloc[idx]
 
-    # RSI
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    df['RSI_14'] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
+        if p != 0 and not pd.isna(actual):
+            trade_count += 1
+            if p == actual:
+                correct_count += 1
+        current_win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
+        cumulative_wins.append((i + 1, current_win_rate))
 
-    # MACD
-    ema12, ema26 = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
-    df['MACD'] = ema12 - ema26
-    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+    win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
+    return cumulative_wins, win_rate, trade_count, correct_count
 
-    # ボリンジャーバンド
-    std20 = close.rolling(20).std()
-    df['BB_Upper'] = df['EMA_20'] + (std20 * 2)
-    df['BB_Lower'] = df['EMA_20'] - (std20 * 2)
+@st.cache_data(ttl=60, show_spinner=False)
+def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_estimators_override=None):
+    if df_current is None or len(df_current) < 50:
+        return "HOLD", 50.0, "不明"
+    try:
+        avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
+        X = df_current[avail]
+        y = df_current["Target"]
+        train_mask = ~y.isna()
+        X_train_full = X[train_mask]
+        y_train_full = y[train_mask]
+        X_train = X_train_full.iloc[-1000:] if len(X_train_full) > 1000 else X_train_full
+        y_train = y_train_full.iloc[-1000:] if len(y_train_full) > 1000 else y_train_full
 
-    # ATR (14) - ボラティリティ自動算出用
-    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-    df['ATR_14'] = tr.rolling(14).mean()
+        if len(np.unique(y_train)) < 2:
+            return "HOLD (分析不可: クラス不足)", 50.0, "判定不可"
 
-    return df.dropna()
+        trees_count = n_estimators_override if n_estimators_override is not None else 120
+        model = RandomForestClassifier(n_estimators=trees_count, max_depth=4, min_samples_leaf=10, random_state=42)
+        model.fit(X_train, y_train)
 
-# ==========================================
-# 3. AI分析 & マルチタイムフレーム判定
-# ==========================================
-def predict_signal(df: pd.DataFrame):
-    if len(df) < 100:
-        return "HOLD", 0.5
+        X_latest = X.iloc[[-1]]
+        prob_array = model.predict_proba(X_latest)[0]
+        prob_dict = dict(zip(model.classes_, prob_array))
+        prob_up, prob_down = prob_dict.get(1, 0.0), prob_dict.get(-1, 0.0)
+        confidence = max(prob_up, prob_down) * 100
 
-    df_ml = df.copy()
-    df_ml['Target'] = np.where(df_ml['Close'].shift(-3) > df_ml['Close'], 1, 0)
-    features = ['EMA_20', 'EMA_50', 'RSI_14', 'MACD', 'MACD_Hist', 'ATR_14']
-    
-    X = df_ml[features].iloc[:-3]
-    y = df_ml['Target'].iloc[:-3]
-
-    if len(X) < 50:
-        return "HOLD", 0.5
-
-    model = RandomForestClassifier(n_estimators=50, random_state=42)
-    model.fit(X, y)
-
-    prob = model.predict_proba(df_ml[features].iloc[[-1]])[0][1]
-    
-    if prob >= 0.58:
-        return "BUY", prob
-    elif prob <= 0.42:
-        return "SELL", prob
-    else:
-        return "HOLD", prob
-
-def get_mtf_summary(symbol: str) -> dict:
-    summary = {}
-    for name, params in TIMEFRAMES.items():
-        d = fetch_stock_data(symbol, params["period"], params["interval"])
-        if len(d) >= 50:
-            d = add_indicators(d)
-            last = d.iloc[-1]
-            if last['Close'] > last['EMA_20'] and last['EMA_20'] > last['EMA_50']:
-                summary[name.split(" ")[0]] = "上昇 📈"
-            elif last['Close'] < last['EMA_20'] and last['EMA_20'] < last['EMA_50']:
-                summary[name.split(" ")[0]] = "下降 📉"
-            else:
-                summary[name.split(" ")[0]] = "レンジ ➡️"
-        else:
-            summary[name.split(" ")[0]] = "-"
-    return summary
-
-# ==========================================
-# 4. サイドバー（最小限の入力画面）
-# ==========================================
-st.sidebar.title("⚙️ 設定 (入力は2つだけ)")
-
-selected_pair = st.sidebar.selectbox("通貨ペア", list(PAIR_MAP.keys()), index=0)
-selected_tf = st.sidebar.selectbox("時間軸", list(TIMEFRAMES.keys()), index=0)
-
-st.sidebar.markdown("---")
-account_balance = st.sidebar.number_input("① 口座資金 (円)", min_value=10000, value=1000000, step=50000)
-order_lots = st.sidebar.number_input("② 注文ロット (Lot)", min_value=0.01, value=0.10, step=0.01, help="1.0 Lot = 10万通貨 / 0.1 Lot = 1万通貨")
-
-symbol = PAIR_MAP[selected_pair]
-tf_params = TIMEFRAMES[selected_tf]
-
-# データ取得
-df = fetch_stock_data(symbol, tf_params["period"], tf_params["interval"])
-
-if df.empty or len(df) < 50:
-    st.error("データの取得に失敗しました。しばらく待ってから再読み込みしてください。")
-    st.stop()
-
-df = add_indicators(df)
-
-# ==========================================
-# 5. メイン画面表示
-# ==========================================
-st.title(f"🤖 FX AI 自動最適化アシスタント ({selected_pair})")
-
-# トレンド一括パネル
-mtf_data = get_mtf_summary(symbol)
-cols_mtf = st.columns(len(mtf_data))
-for idx, (tf_k, trend_v) in enumerate(mtf_data.items()):
-    cols_mtf[idx].metric(tf_k, trend_v)
-
-st.markdown("---")
-
-tab_main, tab_repeat, tab_scan = st.tabs(["🎯 自動判定・最適値", "🔄 松井証券リピート自動算出", "🔍 全ペア一括スキャン"])
-
-# ------------------------------------------
-# タブ 1: AI分析 & 自動算出
-# ------------------------------------------
-with tab_main:
-    col_chart, col_ai = st.columns([2, 1])
-
-    with col_chart:
-        # チャート描画
-        is_daily = "日足" in selected_tf
-        chart_x = df.index.strftime("%Y-%m-%d" if is_daily else "%m-%d %H:%M")
-
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.05)
-        fig.add_trace(go.Candlestick(x=chart_x, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="価格"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=chart_x, y=df['EMA_20'], line=dict(color='orange', width=1), name="EMA20"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=chart_x, y=df['EMA_50'], line=dict(color='blue', width=1), name="EMA50"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=chart_x, y=df['RSI_14'], line=dict(color='purple', width=1), name="RSI"), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
-        fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
-        fig.update_layout(height=550, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col_ai:
-        st.subheader("💡 AI判定 & 自動算出結果")
-
-        # 1. AI判定
-        signal, buy_prob = predict_signal(df)
-        if signal == "BUY":
-            st.success(f"### 判定: 買 (BUY) 📈\n上昇確率: **{buy_prob*100:.1f}%**")
-        elif signal == "SELL":
-            st.error(f"### 判定: 売 (SELL) 📉\n上昇確率: **{buy_prob*100:.1f}%**")
-        else:
-            st.info(f"### 判定: 静観 (HOLD) ⏸️\n上昇確率: **{buy_prob*100:.1f}%**")
-
-        st.markdown("---")
-
-        # 2. ボラティリティ(ATR)から損切・利確を自動計算
-        latest_close = df['Close'].iloc[-1]
-        latest_atr = df['ATR_14'].iloc[-1]
-
-        # 対円通貨とドルストレートの単位調整
-        is_jpy = "JPY" in selected_pair
-        pip_unit = 100.0 if is_jpy else 10000.0
-
-        sl_pips = latest_atr * 1.5 * pip_unit  # 1.5 ATR
-        tp_pips = sl_pips * 2.0                 # リスクリワード 1:2
-
-        # 注文ロットから損失額とリスク比率を自動逆算
-        units = order_lots * 100000.0
-        max_loss_yen = (sl_pips / pip_unit) * units
-        risk_pct = (max_loss_yen / account_balance) * 100.0
-
-        st.markdown("#### 🛡️ 入力ロットでのリスク判定")
-        st.write(f"* 想定最大損失額: **{max_loss_yen:,.0f} 円**")
-        st.write(f"* 口座資金リスク率: **{risk_pct:.1f} %**")
-
-        # リスク度の自動警告表示
-        if risk_pct <= 2.5:
-            st.success("安心サイズ: 適切なリスク管理ができています（2.5%以下）")
-        elif risk_pct <= 5.0:
-            st.warning("注意サイズ: ややリスクが高めです（2.5%〜5%）")
-        else:
-            st.error("危険サイズ: ロットが大きすぎます。数量を減らすことを推奨します")
-
-        st.markdown("---")
-        st.markdown("#### 🎯 AI推奨の自動目安値")
-        st.write(f"* **現在価格:** `{latest_close:.3f}`")
-        st.write(f"* **推奨 損切り幅 (SL):** `{sl_pips:.1f} pips` ({latest_close - (sl_pips/pip_unit):.3f})")
-        st.write(f"* **推奨 利確幅 (TP):** `{tp_pips:.1f} pips` ({latest_close + (tp_pips/pip_unit):.3f})")
-
-# ------------------------------------------
-# タブ 2: 松井証券リピート注文（完全自動算出）
-# ------------------------------------------
-with tab_repeat:
-    st.subheader("🔄 松井証券 リピート設定 (AI自動提案)")
-    st.write("直近の価格範囲とボラティリティから、最適なリピート設定を自動計算しました。")
-
-    latest_close = df['Close'].iloc[-1]
-    latest_atr = df['ATR_14'].iloc[-1]
-    is_jpy = "JPY" in selected_pair
-
-    # AIが最適なレンジ上限・下限、本数、利確幅を自動計算
-    auto_range_margin = latest_atr * 20.0  # 過去の変動から広めのレンジを設定
-    auto_range_min = round(latest_close - auto_range_margin, 1)
-    auto_range_max = round(latest_close + auto_range_margin, 1)
-    
-    # ロット数に応じた1本あたりの通貨数 (入力を生かす)
-    auto_quantity = max(int((order_lots * 100000) / 20), 100) # 20分割
-    auto_tp_width = round(latest_atr * 2.0, 1) if is_jpy else round(latest_atr * 2.0, 4)
-    auto_grids = 20
-
-    col_r1, col_r2 = col1, col2 = st.columns(2)
-    with col_r1:
-        st.markdown("#### 🤖 AIが弾き出した最適パラメータ")
-        st.write(f"* **想定レンジ下限:** `{auto_range_min}`")
-        st.write(f"* **想定レンジ上限:** `{auto_range_max}`")
-        st.write(f"* **仕掛け本数:** `{auto_grids} 本`")
-        st.write(f"* **1本あたりの注文数量:** `{auto_quantity:,} 通貨`")
-        st.write(f"* **推奨 利確幅:** `{auto_tp_width} 円`")
-
-    with col_r2:
-        st.markdown("#### 💰 資金・収益目安")
-        total_units = auto_quantity * auto_grids
-        req_margin = (latest_close * total_units) / 25.0
-        profit_per_hit = auto_quantity * auto_tp_width
-
-        st.write(f"* **合計運用数量:** `{total_units:,} 通貨`")
-        st.write(f"* **概算必要証拠金:** `{req_margin:,.0f} 円`")
-        st.write(f"* **1回リピートあたりの利益:** `{profit_per_hit:,.0f} 円`")
+        latest_price = df_current["Close"].iloc[-1]
+        latest_ema200 = df_current["EMA_200"].iloc[-1] if "EMA_200" in df_current.columns else latest_price
+        latest_sma20 = df_current["SMA_20"].iloc[-1] if "SMA_20" in df_current.columns else latest_price
+        latest_adx = df_current["ADX"].iloc[-1] if "ADX" in df_current.columns else 25.0
+        latest_rsi = df_current["RSI"].iloc[-1] if "RSI" in df_current.columns else 50.0
+        latest_atr = df_current["ATR"].iloc[-1] if "ATR" in df_current.columns else 0.1
+        upper_band = df_current["Upper_Band"].iloc[-1] if "Upper_Band" in df_current.columns else latest_price
+        lower_band = df_current["Lower_Band"].iloc[-1] if "Lower_Band" in df_current.columns else latest_price
         
-        if req_margin > account_balance:
-            st.error("⚠️ 証拠金が資金を超えています。サイドバーの「注文ロット」を下げてください。")
+        if "BB_Width" in df_current.columns:
+            latest_bb_width = df_current["BB_Width"].iloc[-1]
+            avg_bb_series = df_current["BB_Width"].rolling(window=20).mean()
+            avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
         else:
-            st.success("✅ 口座資金の範囲内で運用可能な設定です。")
+            latest_bb_width = 0.05
+            avg_bb_width = 0.05
+        
+        is_squeezed = latest_bb_width < (avg_bb_width * 0.75)
 
-# ------------------------------------------
-# タブ 3: 全ペア一括スキャン
-# ------------------------------------------
-with tab_scan:
-    st.subheader("🔍 全ペア AI一括スキャン")
-    st.write("設定された資金とロットに基づき、全通貨ペアをスキャンします。")
+        htf_trend = "FLAT"
+        if df_higher is not None and not df_higher.empty and "EMA_200" in df_higher.columns:
+            htf_trend = "UP" if df_higher["Close"].iloc[-1] > df_higher["EMA_200"].iloc[-1] else "DOWN" if df_higher["Close"].iloc[-1] < df_higher["EMA_200"].iloc[-1] else "FLAT"
 
-    if st.button("全通貨ペアをスキャン"):
-        results = []
-        bar = st.progress(0)
-        for idx, (p_name, p_sym) in enumerate(PAIR_MAP.items()):
-            p_df = fetch_stock_data(p_sym, tf_params["period"], tf_params["interval"])
-            if len(p_df) >= 50:
-                p_df = add_indicators(p_df)
-                sig, prob = predict_signal(p_df)
-                price = p_df['Close'].iloc[-1]
+        is_cross_jpy = "JPY" in current_symbol and current_symbol != "USDJPY=X"
+        usdjpy_strong_up = usdjpy_strong_down = False
+        if is_cross_jpy and usdjpy_df is not None and not usdjpy_df.empty and "EMA_200" in usdjpy_df.columns:
+            uj_close, uj_ema = usdjpy_df["Close"].iloc[-1], usdjpy_df["EMA_200"].iloc[-1]
+            uj_rsi = usdjpy_df["RSI"].iloc[-1] if "RSI" in usdjpy_df.columns else 50.0
+            if uj_close > uj_ema and uj_rsi > 58: usdjpy_strong_up = True
+            elif uj_close < uj_ema and uj_rsi < 42: usdjpy_strong_down = True
+
+        recent_50_high = df_current["High"].iloc[-50:-1].max()
+        recent_50_low = df_current["Low"].iloc[-50:-1].min()
+        is_far_from_sma = abs(latest_price - latest_sma20) > (latest_atr * 1.5)
+        is_near_support = (latest_price - recent_50_low) < (latest_atr * 0.8)
+        is_near_resistance = (recent_50_high - latest_price) < (latest_atr * 0.8)
+
+        HIGH_THRESHOLD = 0.62
+
+        if latest_adx > 22.0:
+            market_type = "トレンド相場"
+            if prob_up >= HIGH_THRESHOLD and htf_trend != "DOWN":
+                if usdjpy_strong_down: status = "HOLD (ストッパー: ドル円急落中)"
+                elif latest_price <= latest_ema200: status = "HOLD (逆張り警戒: 200EMA下)"
+                elif is_far_from_sma: status = "HOLD (高値掴み回避)"
+                elif is_near_resistance: status = "HOLD (抵抗線直前)"
+                else: status = "BUY"
+            elif prob_down >= HIGH_THRESHOLD and htf_trend != "UP":
+                if usdjpy_strong_up: status = "HOLD (ストッパー: ドル円急騰中)"
+                elif latest_price >= latest_ema200: status = "HOLD (逆張り警戒: 200EMA上)"
+                elif is_far_from_sma: status = "HOLD (安値掴み回避)"
+                elif is_near_support: status = "HOLD (支持線直前)"
+                else: status = "SELL"
+            else: status = f"HOLD (確信度不足: {confidence:.1f}%)"
+        else:
+            market_type = "レンジ相場"
+            if is_squeezed:
+                status = "HOLD (ブレイクアウト警戒)"
             else:
-                sig, prob, price = "-", 0.5, 0.0
+                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.58:
+                    status = "BUY (レンジ逆張り)" if not usdjpy_strong_down else "HOLD (ストッパー: ドル円逆行)"
+                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.58:
+                    status = "SELL (レンジ逆張り)" if not usdjpy_strong_up else "HOLD (ストッパー: ドル円逆行)"
+                else:
+                    status = "HOLD (レンジ内静観)"
 
-            results.append({
-                "通貨ペア": p_name,
-                "現在価格": f"{price:.3f}",
-                "AI判定": sig,
-                "上昇確率": f"{prob*100:.1f}%"
-            })
-            bar.progress((idx + 1) / len(PAIR_MAP))
-
-        st.dataframe(pd.DataFrame(results), use_container_width=True)
+        return status, confidence, market_type
+    except Exception:
+        return "HOLD", 50.0, "不明"
