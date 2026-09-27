@@ -18,7 +18,7 @@ from streamlit_autorefresh import st_autorefresh
 # 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.0",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.1",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -136,7 +136,7 @@ PAIR_ATR_CONFIG = {
     "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.0)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.1)")
 
 col_s1, col_s2 = st.columns(2)
 with col_s1:
@@ -290,7 +290,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception:
         return None
 
-# 全時間軸のトレンドを一括取得する関数
+# 高速化キャッシュ対応の全時間軸トレンド一括取得関数
+@st.cache_data(ttl=60, show_spinner=False)
 def get_mtf_trends(symbol: str) -> dict:
     trends = {}
     for name, params in TIMEFRAMES.items():
@@ -572,7 +573,7 @@ else:
     m_col5.metric("ADX (トレンド強度)", f"{latest_adx:.1f}")
     m_col6.metric("上位足 (日足) トレンド", long_term_trend)
 
-    # 各時間軸のトレンド一括パネルの表示
+    # マルチタイムフレーム (MTF) トレンド一覧パネル（高速化キャッシュ対応）
     st.markdown("##### 🌐 マルチタイムフレーム (MTF) トレンド一覧")
     mtf_trends = get_mtf_trends(ticker)
     mtf_cols = st.columns(len(TIMEFRAMES))
