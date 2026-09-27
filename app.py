@@ -19,7 +19,7 @@ from streamlit_autorefresh import st_autorefresh
 # 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.7.6",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v5.8.0",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -30,9 +30,6 @@ FEATURE_COLUMNS = [
     "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio",
 ]
 
-# ==========================================
-# 1. 設定ファイルの永続化（保存・読み込み）
-# ==========================================
 SETTINGS_FILE = "user_settings.json"
 
 DEFAULT_SETTINGS = {
@@ -47,6 +44,9 @@ DEFAULT_SETTINGS = {
     "last_notified_status": {},
 }
 
+# ==========================================
+# 1. 設定ファイルの永続化 & 補助関数
+# ==========================================
 def load_user_settings():
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -103,10 +103,18 @@ def send_discord_notification(webhook_url, title, message, color=0x00FF00):
     except Exception as e:
         return False, str(e)
 
+def get_signal_type(status_str):
+    """シグナル文字列からコアの売買種別（BUY / SELL / HOLD）を判定"""
+    if status_str.startswith("BUY"):
+        return "BUY"
+    elif status_str.startswith("SELL"):
+        return "SELL"
+    return "HOLD"
+
 # ==========================================
 # 2. メイン画面 & サイドバー設定
 # ==========================================
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.7.6)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v5.8.0)")
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -116,11 +124,12 @@ PAIRS = {
     "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
 }
 
+# 4h, 12hなどの上位足はデータ不足を防ぐためperiodを拡張
 TIMEFRAMES = {
     "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
     "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
-    "4時間足 (中期トレンド用)": {"period": "6mo", "interval": "1h"},
-    "12時間足 (長期トレンド用)": {"period": "1y", "interval": "1h"},
+    "4時間足 (中期トレンド用)": {"period": "2y", "interval": "1h"},
+    "12時間足 (長期トレンド用)": {"period": "2y", "interval": "1h"},
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
 
@@ -174,6 +183,7 @@ if st.sidebar.button("🧪 Discord テスト送信"):
             st.sidebar.error(f"送信失敗: {msg}")
     else:
         st.sidebar.warning("Webhook URLを入力してください。")
+
 # ==========================================
 # 3. データ取得 & 高精度インジケーター計算エンジン
 # ==========================================
@@ -191,7 +201,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         try:
             tz_before = df.index.tz
             rule = "4h" if "4時間足" in tf_name else "12h"
-            # NY時間を意識したリサンプルの起点設定
             df = df.resample(rule, closed="left", label="left", origin="start_day").agg({
                 "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"
             }).dropna()
@@ -204,7 +213,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return None
 
     try:
-        # Pandasの断片化警告を防ぐため、計算結果を辞書に格納して一括結合する
         new_cols = {}
         
         new_cols["SMA_20"] = df["Close"].rolling(window=20).mean()
@@ -259,12 +267,17 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         dx = 100 * (plus_di - minus_di).abs() / sum_di
         new_cols["ADX"] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
-        # 一括結合
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
+        # ----------------------------------------------------
+        # 【修正①】未来1~3期間の最大・最小値を正確に抽出
+        # ----------------------------------------------------
+        f_high = pd.concat([df["High"].shift(-1), df["High"].shift(-2), df["High"].shift(-3)], axis=1)
+        f_low = pd.concat([df["Low"].shift(-1), df["Low"].shift(-2), df["Low"].shift(-3)], axis=1)
+
         target_pips = df["ATR"] * 0.8  
-        future_max_up = df["High"].shift(-3).rolling(3).max() - df["Close"]
-        future_max_down = df["Close"] - df["Low"].shift(-3).rolling(3).min()
+        future_max_up = f_high.max(axis=1) - df["Close"]
+        future_max_down = df["Close"] - f_low.min(axis=1)
 
         conditions = [
             (future_max_up >= target_pips) & (future_max_up > future_max_down),
@@ -351,7 +364,6 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_e
         upper_band = df_current["Upper_Band"].iloc[-1] if "Upper_Band" in df_current.columns else latest_price
         lower_band = df_current["Lower_Band"].iloc[-1] if "Lower_Band" in df_current.columns else latest_price
         
-        # BB_Width が無い場合のエラー防止
         if "BB_Width" in df_current.columns:
             latest_bb_width = df_current["BB_Width"].iloc[-1]
             avg_bb_series = df_current["BB_Width"].rolling(window=20).mean()
@@ -423,7 +435,6 @@ with st.spinner("データとAIを初期化中..."):
 now_datetime_jst = datetime.now(ZoneInfo("Asia/Tokyo"))
 current_day, current_hour_jst, current_minute_jst = now_datetime_jst.weekday(), now_datetime_jst.hour, now_datetime_jst.minute
 
-# NYタイムゾーンを用いて夏時間(DST)かどうかを正確に判定
 now_datetime_ny = now_datetime_jst.astimezone(ZoneInfo("America/New_York"))
 is_summer_time = now_datetime_ny.dst().total_seconds() != 0 
 
@@ -449,15 +460,20 @@ else:
     if is_econ_indicator_time and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         market_status = "HOLD (指標発表警戒時間帯)"
 
+    # ----------------------------------------------------
+    # 【修正②】Discord通知の重複判定ロジックの改善
+    # ----------------------------------------------------
     if enable_notify and discord_url and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         if "last_notified_status" not in st.session_state:
             st.session_state["last_notified_status"] = {}
         last_sig_key = f"{ticker}_{tf_label}"
         last_status = st.session_state["last_notified_status"].get(last_sig_key, "")
         
-        if market_status[:4] != last_status[:4]:
-            color_val = 0x2ECC71 if market_status.startswith("BUY") else 0xE74C3C
-            # 見やすさ向上版 Discordメッセージ
+        current_sig_type = get_signal_type(market_status)
+        last_sig_type = get_signal_type(last_status)
+
+        if current_sig_type != last_sig_type and current_sig_type != "HOLD":
+            color_val = 0x2ECC71 if current_sig_type == "BUY" else 0xE74C3C
             msg_body = (
                 f"**【{selected_label}】** のAIシグナルが発生しました！\n"
                 f"⏱️ **時間軸**: {tf_label}\n"
@@ -481,7 +497,6 @@ else:
     else:
         cumulative_wins, win_rate, trade_count, correct_count = [], 0.0, 0, 0
 
-    # BB_Width の安全性考慮
     if "BB_Width" in data.columns:
         latest_bb_width = data["BB_Width"].iloc[-1]
         avg_bb_series = data["BB_Width"].rolling(window=20).mean()
@@ -514,6 +529,17 @@ else:
     else:
         ai_tp_mult = round(max(1.0, min(2.5, 1.2 * conf_factor + adx_bonus)), 2)
         ai_sl_mult = round(max(0.6, min(1.5, 0.8 / (conf_factor * 0.8))), 2)
+
+    # TP / SL の具体的な計算
+    if market_status.startswith("BUY"):
+        calc_tp = latest_price + (latest_atr * ai_tp_mult)
+        calc_sl = min(latest_price - (latest_atr * ai_sl_mult), structural_buy_sl)
+    elif market_status.startswith("SELL"):
+        calc_tp = latest_price - (latest_atr * ai_tp_mult)
+        calc_sl = max(latest_price + (latest_atr * ai_sl_mult), structural_sell_sl)
+    else:
+        calc_tp = latest_price + (latest_atr * ai_tp_mult)
+        calc_sl = latest_price - (latest_atr * ai_sl_mult)
 
     raw_atr_pips = latest_atr / pip_unit
     ai_recommended_width = int(max(round(raw_atr_pips * atr_cfg["atr_mult"], 1), atr_cfg["min_pips"]))
@@ -571,28 +597,32 @@ else:
     with tab_single:
         st.subheader("🎯 デイトレ単発トレード（高精度ノイズ除去モデル）")
         st.info(f"🛡️ **口座資金 ({account_balance:,}円) に基づく単発適正数量ガイド**: 1回のリスクを資金2%（{int(allowed_loss_jpy):,}円）以下に抑える推奨注文数量は **`{safe_single_wan}万通貨` ({safe_single_units:,}通貨)** です。")
+        
+        # リスクリワード比の算出
+        tp_pips_val = abs(calc_tp - latest_price) / pip_unit
+        sl_pips_val = abs(latest_price - calc_sl) / pip_unit
+        rr_ratio = (tp_pips_val / sl_pips_val) if sl_pips_val > 0 else 0.0
+
         if market_status.startswith("BUY"):
-            tp_price, sl_price = latest_price + (latest_atr * ai_tp_mult), min(latest_price - (latest_atr * ai_sl_mult), structural_buy_sl)
-            st.success(f"🟢 **高確信 買いシグナル確定 ({market_status})** （確信度: {confidence:.1f}% | 厳格基準クリア）")
+            st.success(f"🟢 **高確信 買いシグナル確定 ({market_status})** （確信度: {confidence:.1f}% | RR比: {rr_ratio:.2f}）")
             t_col1, t_col2, t_col3 = st.columns(3)
             t_col1.metric("新規買い目安", f"{latest_price:{price_fmt}}"); t_col1.code(f"{latest_price:{price_fmt}}", language="text")
-            t_col2.metric("利確目標", f"{tp_price:{price_fmt}}", f"+{(tp_price - latest_price) / pip_unit:.1f} pips"); t_col2.code(f"{tp_price:{price_fmt}}", language="text")
-            t_col3.metric("防衛SL", f"{sl_price:{price_fmt}}", f"-{(latest_price - sl_price) / pip_unit:.1f} pips"); t_col3.code(f"{sl_price:{price_fmt}}", language="text")
+            t_col2.metric("利確目標 (TP)", f"{calc_tp:{price_fmt}}", f"+{tp_pips_val:.1f} pips"); t_col2.code(f"{calc_tp:{price_fmt}}", language="text")
+            t_col3.metric("防衛SL", f"{calc_sl:{price_fmt}}", f"-{sl_pips_val:.1f} pips"); t_col3.code(f"{calc_sl:{price_fmt}}", language="text")
         elif market_status.startswith("SELL"):
-            tp_price, sl_price = latest_price - (latest_atr * ai_tp_mult), max(latest_price + (latest_atr * ai_sl_mult), structural_sell_sl)
-            st.error(f"🔴 **高確信 売りシグナル確定 ({market_status})** （確信度: {confidence:.1f}% | 厳格基準クリア）")
+            st.error(f"🔴 **高確信 売りシグナル確定 ({market_status})** （確信度: {confidence:.1f}% | RR比: {rr_ratio:.2f}）")
             t_col1, t_col2, t_col3 = st.columns(3)
             t_col1.metric("新規売り目安", f"{latest_price:{price_fmt}}"); t_col1.code(f"{latest_price:{price_fmt}}", language="text")
-            t_col2.metric("利確目標", f"{tp_price:{price_fmt}}", f"-{(latest_price - tp_price) / pip_unit:.1f} pips"); t_col2.code(f"{tp_price:{price_fmt}}", language="text")
-            t_col3.metric("防衛SL", f"{sl_price:{price_fmt}}", f"+{(sl_price - latest_price) / pip_unit:.1f} pips"); t_col3.code(f"{sl_price:{price_fmt}}", language="text")
+            t_col2.metric("利確目標 (TP)", f"{calc_tp:{price_fmt}}", f"-{tp_pips_val:.1f} pips"); t_col2.code(f"{calc_tp:{price_fmt}}", language="text")
+            t_col3.metric("防衛SL", f"{calc_sl:{price_fmt}}", f"+{sl_pips_val:.1f} pips"); t_col3.code(f"{calc_sl:{price_fmt}}", language="text")
         else:
             st.warning(f"🟡 **静観フィルター発動中 ({market_status})**")
             st.info("💡 **解説:** ノイズ除去・ドル円連動ストッパー・指標発表警戒帯等の安全装置により、騙しリスクが高い場面では自動で「HOLD」判定になります。")
     
     with tab_speed:
         st.subheader("⚡ 松井証券FX アプリ【スピード注文】設定用")
-        sp_tp_pips = round(latest_atr * ai_tp_mult / pip_unit, 1)
-        sp_sl_pips = round((structural_sell_sl - latest_price) / pip_unit, 1) if market_status.startswith("SELL") else round((latest_price - structural_buy_sl) / pip_unit, 1) if market_status.startswith("BUY") else round(latest_atr * ai_sl_mult / pip_unit, 1)
+        sp_tp_pips = round(abs(calc_tp - latest_price) / pip_unit, 1)
+        sp_sl_pips = round(abs(latest_price - calc_sl) / pip_unit, 1)
         
         sp_col1, sp_col2, sp_col3 = st.columns(3)
         sp_col1.metric("資金ベース推奨数量 (万)", f"{safe_single_wan}万 ({safe_single_units:,}通貨)")
@@ -621,6 +651,13 @@ else:
             if col in df_chart.columns:
                 fig.add_trace(go.Scatter(x=chart_x, y=df_chart[col], mode="lines", name=col, line=dict(color=color, width=width, dash=dash)), row=1, col=1)
         
+        # ----------------------------------------------------
+        # 【機能追加】シグナル発生時にTP/SLの水平線を描画
+        # ----------------------------------------------------
+        if market_status.startswith("BUY") or market_status.startswith("SELL"):
+            fig.add_hline(y=calc_tp, line_dash="dash", line_color="#2ECC71", annotation_text="TP (利確目安)", row=1, col=1)
+            fig.add_hline(y=calc_sl, line_dash="dash", line_color="#E74C3C", annotation_text="SL (損切目安)", row=1, col=1)
+
         if "RSI" in df_chart.columns:
             fig.add_trace(go.Scatter(x=chart_x, y=df_chart["RSI"], mode="lines", name="RSI(14)", line=dict(color="purple", width=1.5)), row=2, col=1)
 
