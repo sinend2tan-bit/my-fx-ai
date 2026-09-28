@@ -18,7 +18,7 @@ from streamlit_autorefresh import st_autorefresh
 # 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.1",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.2",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -136,7 +136,7 @@ PAIR_ATR_CONFIG = {
     "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.1)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.2)")
 
 col_s1, col_s2 = st.columns(2)
 with col_s1:
@@ -324,7 +324,7 @@ def run_backtest(X_bt, y_bt, test_len):
         y_sub = y_bt.iloc[:train_end][valid_train]
         if len(np.unique(y_sub)) < 2:
             continue
-        sub_model = RandomForestClassifier(n_estimators=50, max_depth=4, min_samples_leaf=10, random_state=42)
+        sub_model = RandomForestClassifier(n_estimators=120, max_depth=4, min_samples_leaf=10, random_state=42)
         sub_model.fit(X_bt.iloc[:train_end][valid_train], y_sub)
         p = sub_model.predict(X_bt.iloc[[idx]])[0]
         actual = y_bt.iloc[idx]
@@ -340,7 +340,7 @@ def run_backtest(X_bt, y_bt, test_len):
     return cumulative_wins, win_rate, trade_count, correct_count
 
 @st.cache_data(ttl=60, show_spinner=False)
-def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_estimators_override=None):
+def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
     if df_current is None or len(df_current) < 50:
         return "HOLD", 50.0, "不明"
     try:
@@ -356,8 +356,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_e
         if len(np.unique(y_train)) < 2:
             return "HOLD (分析不可: クラス不足)", 50.0, "判定不可"
 
-        trees_count = n_estimators_override if n_estimators_override is not None else 120
-        model = RandomForestClassifier(n_estimators=trees_count, max_depth=4, min_samples_leaf=10, random_state=42)
+        model = RandomForestClassifier(n_estimators=120, max_depth=4, min_samples_leaf=10, random_state=42)
         model.fit(X_train, y_train)
 
         X_latest = X.iloc[[-1]]
@@ -515,7 +514,7 @@ else:
     is_squeezed = latest_bb_width < (avg_bb_width * 0.75)
 
     latest_adx = data["ADX"].iloc[-1] if "ADX" in data.columns else 25.0
-    htf_close, htf_sma50 = data["Close"].iloc[-1], data["SMA_50"].iloc[-1]
+    htf_close, htf_sma50 = data["Close"].iloc[-1], data["SMA_50"].iloc[-1] if "SMA_50" in data.columns else data["Close"].iloc[-1]
     if higher_tf_data is not None and not higher_tf_data.empty and "SMA_50" in higher_tf_data.columns:
         htf_close, htf_sma50 = higher_tf_data["Close"].iloc[-1], higher_tf_data["SMA_50"].iloc[-1]
 
@@ -693,7 +692,7 @@ else:
                     sub_df = load_and_process_data(p_symbol, tf_config["period"], tf_config["interval"], tf_label)
                     sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
                     if sub_df is not None and len(sub_df) > 10:
-                        s_status, s_conf, s_mtype = analyze_signal(sub_df, sub_htf, usdjpy_df=usdjpy_data, current_symbol=p_symbol, n_estimators_override=40)
+                        s_status, s_conf, s_mtype = analyze_signal(sub_df, sub_htf, usdjpy_df=usdjpy_data, current_symbol=p_symbol)
                         scan_results.append({
                             "通貨ペア": p_label, "相場環境": s_mtype, "AI総合判定": s_status, "確信度 (%)": round(s_conf, 1),
                             "ADX (強度)": round(sub_df["ADX"].iloc[-1] if "ADX" in sub_df.columns else 25.0, 1)
