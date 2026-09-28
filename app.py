@@ -18,15 +18,15 @@ from streamlit_autorefresh import st_autorefresh
 # 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.4",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.5",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 FEATURE_COLUMNS = [
-    "Return_1", "Return_5", "Dev_SMA20", "Dev_EMA200", "Vol_Ratio",
+    "Return_1", "Return_5", "Dev_SMA20", "Dev_EMA200", "Dev_EMA20_200", "Vol_Ratio",
     "RSI", "RSI_Diff", "MACD_Hist_Ratio", "BB_PctB", "ADX",
-    "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio",
+    "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio", "Stoch_K"
 ]
 
 SETTINGS_FILE = "user_settings.json"
@@ -142,7 +142,7 @@ PAIR_ATR_CONFIG = {
     "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.4)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.5)")
 
 col_s1, col_s2 = st.columns(2)
 with col_s1:
@@ -215,7 +215,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return None
 
     try:
-        # 型安全性確保のためにSeriesを取り出す
         c_series = clean_series(df["Close"])
         h_series = clean_series(df["High"])
         l_series = clean_series(df["Low"])
@@ -224,6 +223,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols = {}
         new_cols["SMA_20"] = c_series.rolling(window=20).mean()
         new_cols["SMA_50"] = c_series.rolling(window=50).mean()
+        new_cols["EMA_20"] = c_series.ewm(span=20, adjust=False).mean()
         new_cols["EMA_200"] = c_series.ewm(span=200, adjust=False).mean()
 
         high_low = h_series - l_series
@@ -242,6 +242,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         
         new_cols["Dev_SMA20"] = (c_series - new_cols["SMA_20"]) / (new_cols["SMA_20"] + 1e-10)
         new_cols["Dev_EMA200"] = (c_series - new_cols["EMA_200"]) / (new_cols["EMA_200"] + 1e-10)
+        new_cols["Dev_EMA20_200"] = (new_cols["EMA_20"] - new_cols["EMA_200"]) / (new_cols["EMA_200"] + 1e-10)
         new_cols["Vol_Ratio"] = new_cols["ATR"] / (c_series + 1e-10)
 
         delta = c_series.diff()
@@ -250,6 +251,11 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         rs = gain / (loss + 1e-10)
         new_cols["RSI"] = 100.0 - (100.0 / (1.0 + rs))
         new_cols["RSI_Diff"] = new_cols["RSI"].diff(1)
+
+        # ストキャスティクス %K
+        low_14 = l_series.rolling(window=14).min()
+        high_14 = h_series.rolling(window=14).max()
+        new_cols["Stoch_K"] = 100.0 * (c_series - low_14) / ((high_14 - low_14) + 1e-10)
 
         ema12 = c_series.ewm(span=12, adjust=False).mean()
         ema26 = c_series.ewm(span=26, adjust=False).mean()
@@ -304,7 +310,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception:
         return None
 
-# 高速化キャッシュ対応の全時間軸トレンド一括取得関数
 @st.cache_data(ttl=60, show_spinner=False)
 def get_mtf_trends(symbol: str) -> dict:
     trends = {}
@@ -329,7 +334,6 @@ def run_backtest(X_bt, y_bt, test_len):
     cumulative_wins = []
     trade_count, correct_count = 0, 0
     
-    # 直近3本のTarget=NaN行を除外した安全な最大インデックス値
     max_valid_idx = len(X_bt) - 3
     if max_valid_idx <= 30:
         return [], 0.0, 0, 0
@@ -346,7 +350,7 @@ def run_backtest(X_bt, y_bt, test_len):
         y_sub = y_bt.iloc[:train_end][valid_train]
         if len(np.unique(y_sub)) < 2:
             continue
-        sub_model = RandomForestClassifier(n_estimators=120, max_depth=4, min_samples_leaf=10, random_state=42)
+        sub_model = RandomForestClassifier(n_estimators=120, max_depth=5, min_samples_leaf=5, class_weight="balanced", random_state=42)
         sub_model.fit(X_bt.iloc[:train_end][valid_train], y_sub)
         p = sub_model.predict(X_bt.iloc[[idx]])[0]
         actual = y_bt.iloc[idx]
@@ -364,7 +368,7 @@ def run_backtest(X_bt, y_bt, test_len):
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
     if df_current is None or len(df_current) < 50:
-        return "HOLD", 50.0, "不明"
+        return "HOLD", 50.0, "不明", {}
     try:
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
         X = df_current[avail]
@@ -376,10 +380,13 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         y_train = y_train_full.iloc[-1000:] if len(y_train_full) > 1000 else y_train_full
 
         if len(np.unique(y_train)) < 2:
-            return "HOLD (分析不可: クラス不足)", 50.0, "判定不可"
+            return "HOLD (分析不可: クラス不足)", 50.0, "判定不可", {}
 
-        model = RandomForestClassifier(n_estimators=120, max_depth=4, min_samples_leaf=10, random_state=42)
+        model = RandomForestClassifier(n_estimators=120, max_depth=5, min_samples_leaf=5, class_weight="balanced", random_state=42)
         model.fit(X_train, y_train)
+
+        # AIの判断根拠（特徴量重要度）の取得
+        importances = dict(zip(avail, model.feature_importances_))
 
         X_latest = X.iloc[[-1]]
         prob_array = model.predict_proba(X_latest)[0]
@@ -431,7 +438,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         is_near_support = (latest_price - recent_50_low) < (latest_atr * 0.8)
         is_near_resistance = (recent_50_high - latest_price) < (latest_atr * 0.8)
 
-        HIGH_THRESHOLD = 0.62
+        HIGH_THRESHOLD = 0.60  # バランス型調整に合わせて感度を最適化
 
         if latest_adx > 22.0:
             market_type = "トレンド相場"
@@ -453,16 +460,16 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
             if is_squeezed:
                 status = "HOLD (ブレイクアウト警戒)"
             else:
-                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.58:
+                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.56:
                     status = "BUY (レンジ逆張り)" if not usdjpy_strong_down else "HOLD (ストッパー: ドル円逆行)"
-                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.58:
+                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.56:
                     status = "SELL (レンジ逆張り)" if not usdjpy_strong_up else "HOLD (ストッパー: ドル円逆行)"
                 else:
                     status = "HOLD (レンジ内静観)"
 
-        return status, confidence, market_type
+        return status, confidence, market_type, importances
     except Exception:
-        return "HOLD", 50.0, "不明"
+        return "HOLD", 50.0, "不明", {}
 # ==========================================
 # 4. メインデータロード & 画面描画処理
 # ==========================================
@@ -495,23 +502,27 @@ elif is_ny_open: st.info("🔥 **【NY市場オープンタイムゾーン】**:
 if data is None or len(data) < 10:
     st.error("🚨 リアルタイムデータの取得に失敗しました。時間足を変更するか、1〜2分待ってから「最新データに更新」を押してください。")
 else:
-    market_status, confidence, market_type = analyze_signal(data, higher_tf_data, usdjpy_df=usdjpy_data, current_symbol=ticker)
+    market_status, confidence, market_type, importances = analyze_signal(data, higher_tf_data, usdjpy_df=usdjpy_data, current_symbol=ticker)
     if is_econ_indicator_time and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         market_status = "HOLD (指標発表警戒時間帯)"
 
     c_close = clean_series(data["Close"])
     latest_price = float(c_close.iloc[-1])
+    latest_bar_time = str(data.index[-1])
 
+    # 同一足での重複通知防止ロジックの強化
     if enable_notify and discord_url and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         if "last_notified_status" not in st.session_state:
             st.session_state["last_notified_status"] = {}
-        last_sig_key = f"{ticker}_{tf_label}"
-        last_status = st.session_state["last_notified_status"].get(last_sig_key, "")
         
+        notify_key = f"{ticker}_{tf_label}"
+        last_notified_bar = st.session_state["last_notified_status"].get(f"{notify_key}_time", "")
+        last_status = st.session_state["last_notified_status"].get(f"{notify_key}_status", "")
+
         current_sig_type = get_signal_type(market_status)
         last_sig_type = get_signal_type(last_status)
 
-        if current_sig_type != last_sig_type and current_sig_type != "HOLD":
+        if (last_notified_bar != latest_bar_time) or (current_sig_type != last_sig_type and current_sig_type != "HOLD"):
             color_val = 0x2ECC71 if current_sig_type == "BUY" else 0xE74C3C
             msg_body = (
                 f"**【{selected_label}】** のAIシグナルが発生しました！\n"
@@ -523,7 +534,8 @@ else:
             )
             ok, _ = send_discord_notification(discord_url, f"🚨 AI FXシグナル通知 [{selected_label}]", msg_body, color=color_val)
             if ok:
-                st.session_state["last_notified_status"][last_sig_key] = market_status
+                st.session_state["last_notified_status"][f"{notify_key}_time"] = latest_bar_time
+                st.session_state["last_notified_status"][f"{notify_key}_status"] = market_status
                 save_user_settings()
 
     available_features = [f for f in FEATURE_COLUMNS if f in data.columns]
@@ -670,7 +682,13 @@ else:
         else:
             st.warning(f"🟡 **静観フィルター発動中 ({market_status})**")
             st.info("💡 **解説:** ノイズ除去・ドル円連動ストッパー・指標発表警戒帯等の安全装置により、騙しリスクが高い場面では自動で「HOLD」判定になります。")
-    
+
+        # AIの判断根拠（特徴量重要度 Top 5）の可視化
+        if importances:
+            st.markdown("##### 🧠 AIが重視したインジケーター指標 (Top 5)")
+            imp_df = pd.DataFrame(list(importances.items()), columns=["特徴量", "重要度"]).sort_values(by="重要度", ascending=False).head(5)
+            st.dataframe(imp_df.reset_index(drop=True), use_container_width=True)
+
     with tab_speed:
         st.subheader("⚡ 松井証券FX アプリ【スピード注文】設定用")
         sp_tp_pips = round(abs(calc_tp - latest_price) / pip_unit, 1)
@@ -738,7 +756,7 @@ else:
                     sub_df = load_and_process_data(p_symbol, tf_config["period"], tf_config["interval"], tf_label)
                     sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
                     if sub_df is not None and len(sub_df) > 10:
-                        s_status, s_conf, s_mtype = analyze_signal(sub_df, sub_htf, usdjpy_df=sub_usdjpy_df, current_symbol=p_symbol)
+                        s_status, s_conf, s_mtype, _ = analyze_signal(sub_df, sub_htf, usdjpy_df=sub_usdjpy_df, current_symbol=p_symbol)
                         scan_results.append({
                             "通貨ペア": p_label,
                             "相場環境": s_mtype,
