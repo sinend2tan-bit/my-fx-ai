@@ -18,7 +18,7 @@ from streamlit_autorefresh import st_autorefresh
 # 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.3",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.4",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -109,6 +109,12 @@ def get_signal_type(status_str):
         return "SELL"
     return "HOLD"
 
+def clean_series(s):
+    """DataFrame化してしまったカラムを安全に1次元Seriesへ平坦化する補助関数"""
+    if isinstance(s, pd.DataFrame):
+        return s.iloc[:, 0]
+    return s
+
 # ==========================================
 # 2. 通貨ペア & 時間軸設定
 # ==========================================
@@ -136,7 +142,7 @@ PAIR_ATR_CONFIG = {
     "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.3)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.4)")
 
 col_s1, col_s2 = st.columns(2)
 with col_s1:
@@ -209,50 +215,58 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return None
 
     try:
-        new_cols = {}
-        new_cols["SMA_20"] = df["Close"].rolling(window=20).mean()
-        new_cols["SMA_50"] = df["Close"].rolling(window=50).mean()
-        new_cols["EMA_200"] = df["Close"].ewm(span=200, adjust=False).mean()
+        # 型安全性確保のためにSeriesを取り出す
+        c_series = clean_series(df["Close"])
+        h_series = clean_series(df["High"])
+        l_series = clean_series(df["Low"])
+        o_series = clean_series(df["Open"])
 
-        high_low = df["High"] - df["Low"]
+        new_cols = {}
+        new_cols["SMA_20"] = c_series.rolling(window=20).mean()
+        new_cols["SMA_50"] = c_series.rolling(window=50).mean()
+        new_cols["EMA_200"] = c_series.ewm(span=200, adjust=False).mean()
+
+        high_low = h_series - l_series
         new_cols["ATR"] = high_low.rolling(window=14).mean()
         new_cols["ATR_SMA20"] = new_cols["ATR"].rolling(window=20).mean()
         new_cols["ATR_Ratio"] = new_cols["ATR"] / (new_cols["ATR_SMA20"] + 1e-10)
 
         total_range = high_low + 1e-10
-        new_cols["Upper_Wick_Ratio"] = (df["High"] - df[["Open", "Close"]].max(axis=1)) / total_range
-        new_cols["Lower_Wick_Ratio"] = (df[["Open", "Close"]].min(axis=1) - df["Low"]) / total_range
+        open_close_max = pd.concat([o_series, c_series], axis=1).max(axis=1)
+        open_close_min = pd.concat([o_series, c_series], axis=1).min(axis=1)
+        new_cols["Upper_Wick_Ratio"] = (h_series - open_close_max) / total_range
+        new_cols["Lower_Wick_Ratio"] = (open_close_min - l_series) / total_range
 
-        new_cols["Return_1"] = df["Close"].diff(1) / df["Close"].shift(1)
-        new_cols["Return_5"] = df["Close"].diff(5) / df["Close"].shift(5)
+        new_cols["Return_1"] = c_series.diff(1) / (c_series.shift(1) + 1e-10)
+        new_cols["Return_5"] = c_series.diff(5) / (c_series.shift(5) + 1e-10)
         
-        new_cols["Dev_SMA20"] = (df["Close"] - new_cols["SMA_20"]) / (new_cols["SMA_20"] + 1e-10)
-        new_cols["Dev_EMA200"] = (df["Close"] - new_cols["EMA_200"]) / (new_cols["EMA_200"] + 1e-10)
-        new_cols["Vol_Ratio"] = new_cols["ATR"] / (df["Close"] + 1e-10)
+        new_cols["Dev_SMA20"] = (c_series - new_cols["SMA_20"]) / (new_cols["SMA_20"] + 1e-10)
+        new_cols["Dev_EMA200"] = (c_series - new_cols["EMA_200"]) / (new_cols["EMA_200"] + 1e-10)
+        new_cols["Vol_Ratio"] = new_cols["ATR"] / (c_series + 1e-10)
 
-        delta = df["Close"].diff()
+        delta = c_series.diff()
         gain = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean()
         loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean()
         rs = gain / (loss + 1e-10)
         new_cols["RSI"] = 100.0 - (100.0 / (1.0 + rs))
         new_cols["RSI_Diff"] = new_cols["RSI"].diff(1)
 
-        ema12 = df["Close"].ewm(span=12, adjust=False).mean()
-        ema26 = df["Close"].ewm(span=26, adjust=False).mean()
+        ema12 = c_series.ewm(span=12, adjust=False).mean()
+        ema26 = c_series.ewm(span=26, adjust=False).mean()
         new_cols["MACD"] = ema12 - ema26
         new_cols["MACD_Signal"] = new_cols["MACD"].ewm(span=9, adjust=False).mean()
         new_cols["MACD_Hist"] = new_cols["MACD"] - new_cols["MACD_Signal"]
-        new_cols["MACD_Hist_Ratio"] = new_cols["MACD_Hist"] / (df["Close"] + 1e-10)
+        new_cols["MACD_Hist_Ratio"] = new_cols["MACD_Hist"] / (c_series + 1e-10)
 
-        std20 = df["Close"].rolling(window=20).std()
+        std20 = c_series.rolling(window=20).std()
         new_cols["Upper_Band"] = new_cols["SMA_20"] + (std20 * 2)
         new_cols["Lower_Band"] = new_cols["SMA_20"] - (std20 * 2)
         new_cols["BB_Width"] = (new_cols["Upper_Band"] - new_cols["Lower_Band"]) / (new_cols["SMA_20"] + 1e-10)
-        new_cols["BB_PctB"] = (df["Close"] - new_cols["Lower_Band"]) / ((new_cols["Upper_Band"] - new_cols["Lower_Band"]) + 1e-10)
+        new_cols["BB_PctB"] = (c_series - new_cols["Lower_Band"]) / ((new_cols["Upper_Band"] - new_cols["Lower_Band"]) + 1e-10)
 
-        tr = pd.concat([high_low, (df["High"] - df["Close"].shift(1)).abs(), (df["Low"] - df["Close"].shift(1)).abs()], axis=1).max(axis=1)
-        up_move = df["High"] - df["High"].shift(1)
-        down_move = df["Low"].shift(1) - df["Low"]
+        tr = pd.concat([high_low, (h_series - c_series.shift(1)).abs(), (l_series - c_series.shift(1)).abs()], axis=1).max(axis=1)
+        up_move = h_series - h_series.shift(1)
+        down_move = l_series.shift(1) - l_series
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
         atr14 = tr.ewm(alpha=1/14, adjust=False).mean()
@@ -264,12 +278,12 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
-        f_high = pd.concat([df["High"].shift(-1), df["High"].shift(-2), df["High"].shift(-3)], axis=1)
-        f_low = pd.concat([df["Low"].shift(-1), df["Low"].shift(-2), df["Low"].shift(-3)], axis=1)
+        f_high = pd.concat([h_series.shift(-1), h_series.shift(-2), h_series.shift(-3)], axis=1)
+        f_low = pd.concat([l_series.shift(-1), l_series.shift(-2), l_series.shift(-3)], axis=1)
 
-        target_pips = df["ATR"] * 0.8  
-        future_max_up = f_high.max(axis=1) - df["Close"]
-        future_max_down = df["Close"] - f_low.min(axis=1)
+        target_pips = new_cols["ATR"] * 0.8  
+        future_max_up = f_high.max(axis=1) - c_series
+        future_max_down = c_series - f_low.min(axis=1)
 
         conditions = [
             (future_max_up >= target_pips) & (future_max_up > future_max_down),
@@ -297,8 +311,9 @@ def get_mtf_trends(symbol: str) -> dict:
     for name, params in TIMEFRAMES.items():
         sub_d = load_and_process_data(symbol, params["period"], params["interval"], name)
         if sub_d is not None and len(sub_d) >= 20:
-            c_price = sub_d['Close'].iloc[-1]
-            c_ema = sub_d['EMA_200'].iloc[-1] if 'EMA_200' in sub_d.columns else sub_d['SMA_20'].iloc[-1]
+            c_price = float(clean_series(sub_d['Close']).iloc[-1])
+            ema_series = clean_series(sub_d['EMA_200']) if 'EMA_200' in sub_d.columns else clean_series(sub_d['SMA_20'])
+            c_ema = float(ema_series.iloc[-1])
             if c_price > c_ema:
                 trends[name.split(" ")[0]] = "上昇 📈"
             elif c_price < c_ema:
@@ -313,10 +328,17 @@ def get_mtf_trends(symbol: str) -> dict:
 def run_backtest(X_bt, y_bt, test_len):
     cumulative_wins = []
     trade_count, correct_count = 0, 0
-    step_size = max(1, test_len // 15)
+    
+    # 直近3本のTarget=NaN行を除外した安全な最大インデックス値
+    max_valid_idx = len(X_bt) - 3
+    if max_valid_idx <= 30:
+        return [], 0.0, 0, 0
 
-    for i in range(0, test_len, step_size):
-        idx = len(X_bt) - test_len + i
+    valid_test_len = min(test_len, max_valid_idx - 10)
+    step_size = max(1, valid_test_len // 15)
+
+    for i in range(0, valid_test_len, step_size):
+        idx = max_valid_idx - valid_test_len + i
         train_end = max(1, idx - 3)
         valid_train = ~y_bt.iloc[:train_end].isna()
         if valid_train.sum() < 30:
@@ -365,19 +387,21 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         prob_up, prob_down = prob_dict.get(1, 0.0), prob_dict.get(-1, 0.0)
         confidence = max(prob_up, prob_down) * 100
 
-        latest_price = df_current["Close"].iloc[-1]
-        latest_ema200 = df_current["EMA_200"].iloc[-1] if "EMA_200" in df_current.columns else latest_price
-        latest_sma20 = df_current["SMA_20"].iloc[-1] if "SMA_20" in df_current.columns else latest_price
-        latest_adx = df_current["ADX"].iloc[-1] if "ADX" in df_current.columns else 25.0
-        latest_rsi = df_current["RSI"].iloc[-1] if "RSI" in df_current.columns else 50.0
-        latest_atr = df_current["ATR"].iloc[-1] if "ATR" in df_current.columns else 0.1
-        upper_band = df_current["Upper_Band"].iloc[-1] if "Upper_Band" in df_current.columns else latest_price
-        lower_band = df_current["Lower_Band"].iloc[-1] if "Lower_Band" in df_current.columns else latest_price
+        c_series = clean_series(df_current["Close"])
+        latest_price = float(c_series.iloc[-1])
+        latest_ema200 = float(clean_series(df_current["EMA_200"]).iloc[-1]) if "EMA_200" in df_current.columns else latest_price
+        latest_sma20 = float(clean_series(df_current["SMA_20"]).iloc[-1]) if "SMA_20" in df_current.columns else latest_price
+        latest_adx = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 25.0
+        latest_rsi = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
+        latest_atr = float(clean_series(df_current["ATR"]).iloc[-1]) if "ATR" in df_current.columns else 0.1
+        upper_band = float(clean_series(df_current["Upper_Band"]).iloc[-1]) if "Upper_Band" in df_current.columns else latest_price
+        lower_band = float(clean_series(df_current["Lower_Band"]).iloc[-1]) if "Lower_Band" in df_current.columns else latest_price
         
         if "BB_Width" in df_current.columns:
-            latest_bb_width = df_current["BB_Width"].iloc[-1]
-            avg_bb_series = df_current["BB_Width"].rolling(window=20).mean()
-            avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
+            bb_w_series = clean_series(df_current["BB_Width"])
+            latest_bb_width = float(bb_w_series.iloc[-1])
+            avg_bb_series = bb_w_series.rolling(window=20).mean()
+            avg_bb_width = float(avg_bb_series.iloc[-1]) if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
         else:
             latest_bb_width = 0.05
             avg_bb_width = 0.05
@@ -386,18 +410,23 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
 
         htf_trend = "FLAT"
         if df_higher is not None and not df_higher.empty and "EMA_200" in df_higher.columns:
-            htf_trend = "UP" if df_higher["Close"].iloc[-1] > df_higher["EMA_200"].iloc[-1] else "DOWN" if df_higher["Close"].iloc[-1] < df_higher["EMA_200"].iloc[-1] else "FLAT"
+            h_close = float(clean_series(df_higher["Close"]).iloc[-1])
+            h_ema200 = float(clean_series(df_higher["EMA_200"]).iloc[-1])
+            htf_trend = "UP" if h_close > h_ema200 else "DOWN" if h_close < h_ema200 else "FLAT"
 
         is_cross_jpy = "JPY" in current_symbol and current_symbol != "USDJPY=X"
         usdjpy_strong_up = usdjpy_strong_down = False
         if is_cross_jpy and usdjpy_df is not None and not usdjpy_df.empty and "EMA_200" in usdjpy_df.columns:
-            uj_close, uj_ema = usdjpy_df["Close"].iloc[-1], usdjpy_df["EMA_200"].iloc[-1]
-            uj_rsi = usdjpy_df["RSI"].iloc[-1] if "RSI" in usdjpy_df.columns else 50.0
+            uj_close = float(clean_series(usdjpy_df["Close"]).iloc[-1])
+            uj_ema = float(clean_series(usdjpy_df["EMA_200"]).iloc[-1])
+            uj_rsi = float(clean_series(usdjpy_df["RSI"]).iloc[-1]) if "RSI" in usdjpy_df.columns else 50.0
             if uj_close > uj_ema and uj_rsi > 58: usdjpy_strong_up = True
             elif uj_close < uj_ema and uj_rsi < 42: usdjpy_strong_down = True
 
-        recent_50_high = df_current["High"].iloc[-50:-1].max()
-        recent_50_low = df_current["Low"].iloc[-50:-1].min()
+        h_series_curr = clean_series(df_current["High"])
+        l_series_curr = clean_series(df_current["Low"])
+        recent_50_high = float(h_series_curr.iloc[-50:-1].max())
+        recent_50_low = float(l_series_curr.iloc[-50:-1].min())
         is_far_from_sma = abs(latest_price - latest_sma20) > (latest_atr * 1.5)
         is_near_support = (latest_price - recent_50_low) < (latest_atr * 0.8)
         is_near_resistance = (recent_50_high - latest_price) < (latest_atr * 0.8)
@@ -470,6 +499,9 @@ else:
     if is_econ_indicator_time and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         market_status = "HOLD (指標発表警戒時間帯)"
 
+    c_close = clean_series(data["Close"])
+    latest_price = float(c_close.iloc[-1])
+
     if enable_notify and discord_url and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         if "last_notified_status" not in st.session_state:
             st.session_state["last_notified_status"] = {}
@@ -484,7 +516,7 @@ else:
             msg_body = (
                 f"**【{selected_label}】** のAIシグナルが発生しました！\n"
                 f"⏱️ **時間軸**: {tf_label}\n"
-                f"💵 **現在レート**: `{data['Close'].iloc[-1]:{price_fmt}}`\n"
+                f"💵 **現在レート**: `{latest_price:{price_fmt}}`\n"
                 f"🤖 **AI判定**: **{market_status}**\n"
                 f"🎯 **確信度**: `{confidence:.1f}%`\n"
                 f"📊 **相場環境**: {market_type}"
@@ -505,30 +537,34 @@ else:
         cumulative_wins, win_rate, trade_count, correct_count = [], 0.0, 0, 0
 
     if "BB_Width" in data.columns:
-        latest_bb_width = data["BB_Width"].iloc[-1]
-        avg_bb_series = data["BB_Width"].rolling(window=20).mean()
-        avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
+        bb_w_series = clean_series(data["BB_Width"])
+        latest_bb_width = float(bb_w_series.iloc[-1])
+        avg_bb_series = bb_w_series.rolling(window=20).mean()
+        avg_bb_width = float(avg_bb_series.iloc[-1]) if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
     else:
         latest_bb_width = 0.05
         avg_bb_width = 0.05
     is_squeezed = latest_bb_width < (avg_bb_width * 0.75)
 
-    latest_adx = data["ADX"].iloc[-1] if "ADX" in data.columns else 25.0
-    htf_close, htf_sma50 = data["Close"].iloc[-1], data["SMA_50"].iloc[-1] if "SMA_50" in data.columns else data["Close"].iloc[-1]
+    latest_adx = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 25.0
+    htf_close = latest_price
+    htf_sma50 = float(clean_series(data["SMA_50"]).iloc[-1]) if "SMA_50" in data.columns else latest_price
     if higher_tf_data is not None and not higher_tf_data.empty and "SMA_50" in higher_tf_data.columns:
-        htf_close, htf_sma50 = higher_tf_data["Close"].iloc[-1], higher_tf_data["SMA_50"].iloc[-1]
+        htf_close = float(clean_series(higher_tf_data["Close"]).iloc[-1])
+        htf_sma50 = float(clean_series(higher_tf_data["SMA_50"]).iloc[-1])
 
     if htf_close > htf_sma50 * 1.002: long_term_trend = "📈 強気上昇"
     elif htf_close < htf_sma50 * 0.998: long_term_trend = "📉 弱気下降"
     else: long_term_trend = "➡️ レンジ相場"
 
-    latest_price = data["Close"].iloc[-1]
-    latest_rsi = data["RSI"].iloc[-1] if "RSI" in data.columns else 50.0
-    latest_atr = data["ATR"].iloc[-1] if "ATR" in data.columns else 0.1
+    latest_rsi = float(clean_series(data["RSI"]).iloc[-1]) if "RSI" in data.columns else 50.0
+    latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns else 0.1
 
+    c_low = clean_series(data["Low"])
+    c_high = clean_series(data["High"])
     buffer_margin = 10 * pip_unit
-    structural_buy_sl = round(data["Low"].iloc[-20:].min() - buffer_margin, 3 if is_jpy_pair else 5)
-    structural_sell_sl = round(data["High"].iloc[-20:].max() + buffer_margin, 3 if is_jpy_pair else 5)
+    structural_buy_sl = round(float(c_low.iloc[-20:].min()) - buffer_margin, 3 if is_jpy_pair else 5)
+    structural_sell_sl = round(float(c_high.iloc[-20:].max()) + buffer_margin, 3 if is_jpy_pair else 5)
 
     conf_factor, adx_bonus = confidence / 50.0, 0.2 if latest_adx > 25 else 0.0
     if "レンジ" in market_type:
@@ -553,7 +589,9 @@ else:
 
     sl_distance_pips = max(20.0, round((latest_atr * ai_sl_mult) / pip_unit, 1))
     allowed_loss_jpy = account_balance * 0.02
-    pip_value_per_unit = 0.01 if is_jpy_pair else 0.0001 * (usdjpy_data["Close"].iloc[-1] if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0)
+    
+    uj_rate = float(clean_series(usdjpy_data["Close"]).iloc[-1]) if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0
+    pip_value_per_unit = 0.01 if is_jpy_pair else 0.0001 * uj_rate
 
     safe_single_units = max(100, min(int(allowed_loss_jpy / (sl_distance_pips * pip_value_per_unit)), 50000))
     safe_single_wan = round(safe_single_units / 10000.0, 4)
@@ -588,7 +626,7 @@ else:
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）入力用パラメータ")
         st.write(f"💡 **直近の相場変動幅 (ATR = {raw_atr_pips:.1f} pips) に連動し、値幅 `{ai_recommended_width} pips` を自動設定しました。**")
-        jpy_rate = latest_price if is_jpy_pair else latest_price * (usdjpy_data["Close"].iloc[-1] if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0)
+        jpy_rate = latest_price if is_jpy_pair else latest_price * uj_rate
         margin_per_unit = (jpy_rate * custom_quantity) / 25.0
         max_allowable_grids = max(2, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
         safe_half_range_val = max(1, max_allowable_grids // 2) * ai_recommended_width * pip_unit
@@ -661,18 +699,25 @@ else:
         chart_x = df_chart.index.strftime("%Y-%m-%d" if is_daily else "%m-%d %H:%M")
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
-        fig.add_trace(go.Candlestick(x=chart_x, open=df_chart["Open"], high=df_chart["High"], low=df_chart["Low"], close=df_chart["Close"], name="ローソク足"), row=1, col=1)
+        fig.add_trace(go.Candlestick(
+            x=chart_x,
+            open=clean_series(df_chart["Open"]),
+            high=clean_series(df_chart["High"]),
+            low=clean_series(df_chart["Low"]),
+            close=clean_series(df_chart["Close"]),
+            name="ローソク足"
+        ), row=1, col=1)
 
         for col, color, width, dash in [("SMA_20", "orange", 1, "solid"), ("SMA_50", "blue", 1, "solid"), ("EMA_200", "white", 1.5, "solid"), ("Upper_Band", "gray", 1, "dash"), ("Lower_Band", "gray", 1, "dash")]:
             if col in df_chart.columns:
-                fig.add_trace(go.Scatter(x=chart_x, y=df_chart[col], mode="lines", name=col, line=dict(color=color, width=width, dash=dash)), row=1, col=1)
+                fig.add_trace(go.Scatter(x=chart_x, y=clean_series(df_chart[col]), mode="lines", name=col, line=dict(color=color, width=width, dash=dash)), row=1, col=1)
         
         if market_status.startswith("BUY") or market_status.startswith("SELL"):
             fig.add_hline(y=calc_tp, line_dash="dash", line_color="#2ECC71", annotation_text="TP (利確目安)", row=1, col=1)
             fig.add_hline(y=calc_sl, line_dash="dash", line_color="#E74C3C", annotation_text="SL (損切目安)", row=1, col=1)
 
         if "RSI" in df_chart.columns:
-            fig.add_trace(go.Scatter(x=chart_x, y=df_chart["RSI"], mode="lines", name="RSI(14)", line=dict(color="purple", width=1.5)), row=2, col=1)
+            fig.add_trace(go.Scatter(x=chart_x, y=clean_series(df_chart["RSI"]), mode="lines", name="RSI(14)", line=dict(color="purple", width=1.5)), row=2, col=1)
 
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
@@ -687,7 +732,6 @@ else:
             progress_bar_scan, status_text_scan = st.progress(0), st.empty()
             
             with st.spinner("全通貨ペアを分析中..."):
-                # 各クロス円スキャン時に正確なドル円データを個別に取得するよう最適化
                 sub_usdjpy_df = load_and_process_data("USDJPY=X", tf_config["period"], tf_config["interval"], tf_label)
                 for idx_p, (p_label, p_symbol) in enumerate(PAIRS.items()):
                     status_text_scan.text(f"スキャン中... {p_label}")
@@ -696,8 +740,11 @@ else:
                     if sub_df is not None and len(sub_df) > 10:
                         s_status, s_conf, s_mtype = analyze_signal(sub_df, sub_htf, usdjpy_df=sub_usdjpy_df, current_symbol=p_symbol)
                         scan_results.append({
-                            "通貨ペア": p_label, "相場環境": s_mtype, "AI総合判定": s_status, "確信度 (%)": round(s_conf, 1),
-                            "ADX (強度)": round(sub_df["ADX"].iloc[-1] if "ADX" in sub_df.columns else 25.0, 1)
+                            "通貨ペア": p_label,
+                            "相場環境": s_mtype,
+                            "AI総合判定": s_status,
+                            "確信度 (%)": round(s_conf, 1),
+                            "ADX (強度)": round(float(clean_series(sub_df["ADX"]).iloc[-1]) if "ADX" in sub_df.columns else 25.0, 1)
                         })
                     progress_bar_scan.progress(min(1.0, (idx_p + 1) / len(PAIRS)))
 
