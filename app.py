@@ -18,7 +18,7 @@ from streamlit_autorefresh import st_autorefresh
 # 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.4.0",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.4.1",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -136,7 +136,7 @@ PAIR_ATR_CONFIG = {
     "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.4.0)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.4.1)")
 
 col_s1, col_s2 = st.columns(2)
 with col_s1:
@@ -264,7 +264,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
-        # 【改善1】未来5本先まで監視期間を延ばし、トレンド発生データを捉えやすく変更
+        # 未来5本先まで監視期間を延ばして傾向を把握
         f_high = pd.concat([df["High"].shift(-i) for i in range(1, 6)], axis=1)
         f_low = pd.concat([df["Low"].shift(-i) for i in range(1, 6)], axis=1)
 
@@ -280,7 +280,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         target_series = np.select(conditions, [1, -1], default=0)
         df["Target"] = target_series.astype(float)
         
-        # 監視期間5本に合わせて末尾5行を学習から除外
         if len(df) > 5:
             df.iloc[-5:, df.columns.get_loc("Target")] = np.nan
 
@@ -293,7 +292,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception:
         return None
 
-# 高速化キャッシュ対応の全時間軸トレンド一括取得関数
+# MTFトレンド取得関数
 @st.cache_data(ttl=60, show_spinner=False)
 def get_mtf_trends(symbol: str) -> dict:
     trends = {}
@@ -327,7 +326,6 @@ def run_backtest(X_bt, y_bt, test_len):
         y_sub = y_bt.iloc[:train_end][valid_train]
         if len(np.unique(y_sub)) < 2:
             continue
-        # 【改善3】バックテスト用モデルも深さ6・クラス不均衡補正を適用
         sub_model = RandomForestClassifier(
             n_estimators=50, 
             max_depth=6, 
@@ -367,7 +365,6 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_e
             return "HOLD (分析不可: クラス不足)", 50.0, "判定不可"
 
         trees_count = n_estimators_override if n_estimators_override is not None else 120
-        # 【改善2】モデルの表現力を上げ、レンジ過多なデータバランスを自動調整
         model = RandomForestClassifier(
             n_estimators=trees_count, 
             max_depth=6, 
@@ -385,7 +382,6 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_e
 
         latest_price = df_current["Close"].iloc[-1]
         latest_ema200 = df_current["EMA_200"].iloc[-1] if "EMA_200" in df_current.columns else latest_price
-        latest_sma20 = df_current["SMA_20"].iloc[-1] if "SMA_20" in df_current.columns else latest_price
         latest_adx = df_current["ADX"].iloc[-1] if "ADX" in df_current.columns else 25.0
         latest_rsi = df_current["RSI"].iloc[-1] if "RSI" in df_current.columns else 50.0
         latest_atr = df_current["ATR"].iloc[-1] if "ATR" in df_current.columns else 0.1
@@ -416,25 +412,23 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_e
 
         recent_50_high = df_current["High"].iloc[-50:-1].max()
         recent_50_low = df_current["Low"].iloc[-50:-1].min()
-        is_far_from_sma = abs(latest_price - latest_sma20) > (latest_atr * 1.5)
         is_near_support = (latest_price - recent_50_low) < (latest_atr * 0.8)
         is_near_resistance = (recent_50_high - latest_price) < (latest_atr * 0.8)
 
-        # 【改善2】確信度閾値を実用的な55%に最適化（エントリー発生頻度の向上）
         HIGH_THRESHOLD = 0.55
+        # スキャン時など軽量実行(trees_count <= 80)の際は自動で確信度閾値を0.48に補正
+        current_threshold = 0.48 if trees_count <= 80 else HIGH_THRESHOLD
 
         if latest_adx > 22.0:
             market_type = "トレンド相場"
-            if prob_up >= HIGH_THRESHOLD and htf_trend != "DOWN":
+            if prob_up >= current_threshold and htf_trend != "DOWN":
                 if usdjpy_strong_down: status = "HOLD (ストッパー: ドル円急落中)"
                 elif latest_price <= latest_ema200: status = "HOLD (逆張り警戒: 200EMA下)"
-                elif is_far_from_sma: status = "HOLD (高値掴み回避)"
                 elif is_near_resistance: status = "HOLD (抵抗線直前)"
                 else: status = "BUY"
-            elif prob_down >= HIGH_THRESHOLD and htf_trend != "UP":
+            elif prob_down >= current_threshold and htf_trend != "UP":
                 if usdjpy_strong_up: status = "HOLD (ストッパー: ドル円急騰中)"
                 elif latest_price >= latest_ema200: status = "HOLD (逆張り警戒: 200EMA上)"
-                elif is_far_from_sma: status = "HOLD (安値掴み回避)"
                 elif is_near_support: status = "HOLD (支持線直前)"
                 else: status = "SELL"
             else: status = f"HOLD (確信度不足: {confidence:.1f}%)"
@@ -443,9 +437,9 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_e
             if is_squeezed:
                 status = "HOLD (ブレイクアウト警戒)"
             else:
-                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.52:
+                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.50:
                     status = "BUY (レンジ逆張り)" if not usdjpy_strong_down else "HOLD (ストッパー: ドル円逆行)"
-                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.52:
+                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.50:
                     status = "SELL (レンジ逆張り)" if not usdjpy_strong_up else "HOLD (ストッパー: ドル円逆行)"
                 else:
                     status = "HOLD (レンジ内静観)"
@@ -711,7 +705,8 @@ else:
                     sub_df = load_and_process_data(p_symbol, tf_config["period"], tf_config["interval"], tf_label)
                     sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
                     if sub_df is not None and len(sub_df) > 10:
-                        s_status, s_conf, s_mtype = analyze_signal(sub_df, sub_htf, usdjpy_df=usdjpy_data, current_symbol=p_symbol, n_estimators_override=40)
+                        # スキャン精度向上のため、学習の深さを80本に引き上げ
+                        s_status, s_conf, s_mtype = analyze_signal(sub_df, sub_htf, usdjpy_df=usdjpy_data, current_symbol=p_symbol, n_estimators_override=80)
                         scan_results.append({
                             "通貨ペア": p_label, "相場環境": s_mtype, "AI総合判定": s_status, "確信度 (%)": round(s_conf, 1),
                             "ADX (強度)": round(sub_df["ADX"].iloc[-1] if "ADX" in sub_df.columns else 25.0, 1)
