@@ -1,383 +1,447 @@
-import os
 import json
-import warnings
-from datetime import datetime, timedelta
+import os
+import time
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-import requests
+
 import numpy as np
 import pandas as pd
-import yfinance as yf
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import requests
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+import yfinance as yf
+from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
-
-warnings.filterwarnings("ignore")
+from streamlit_autorefresh import st_autorefresh
 
 # ==========================================
-# 1. ページ設定 & 設定永続化 (JSON)
+# 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ仕様 FX AI売買シグナル & 松井証券自動売買ナビ",
-    page_icon="📈",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.1",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
+
+FEATURE_COLUMNS = [
+    "Return_1", "Return_5", "Dev_SMA20", "Dev_EMA200", "Vol_Ratio",
+    "RSI", "RSI_Diff", "MACD_Hist_Ratio", "BB_PctB", "ADX",
+    "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio",
+]
 
 SETTINGS_FILE = "user_settings.json"
 
+DEFAULT_SETTINGS = {
+    "account_balance": 200000,
+    "quantity_wan": 0.20,
+    "discord_url": "",
+    "enable_notify": False,
+    "auto_refresh": False,
+    "refresh_interval": 180,
+    "selected_pair_label": "米ドル / 円 (USD/JPY)",
+    "selected_tf_label": "15分足 (デイトレエントリー用)",
+    "last_notified_status": {},
+}
+
+# ==========================================
+# 1. 設定ファイルの永続化 & 補助関数
+# ==========================================
 def load_user_settings():
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                saved = json.load(f)
+                merged = DEFAULT_SETTINGS.copy()
+                merged.update(saved)
+                return merged
         except Exception:
-            pass
-    return {"account_balance": 220000, "custom_quantity": 2000, "discord_url": "", "enable_notify": False}
+            return DEFAULT_SETTINGS.copy()
+    return DEFAULT_SETTINGS.copy()
 
 def save_user_settings():
     settings = {
-        "account_balance": st.session_state.get("account_balance", 220000),
-        "custom_quantity": st.session_state.get("custom_quantity", 2000),
-        "discord_url": st.session_state.get("discord_url", ""),
-        "enable_notify": st.session_state.get("enable_notify", False)
+        "account_balance": st.session_state.get("account_balance", DEFAULT_SETTINGS["account_balance"]),
+        "quantity_wan": st.session_state.get("quantity_wan", DEFAULT_SETTINGS["quantity_wan"]),
+        "discord_url": st.session_state.get("discord_url", DEFAULT_SETTINGS["discord_url"]),
+        "enable_notify": st.session_state.get("enable_notify", DEFAULT_SETTINGS["enable_notify"]),
+        "auto_refresh": st.session_state.get("auto_refresh", DEFAULT_SETTINGS["auto_refresh"]),
+        "refresh_interval": st.session_state.get("refresh_interval", DEFAULT_SETTINGS["refresh_interval"]),
+        "selected_pair_label": st.session_state.get("selected_pair_label", DEFAULT_SETTINGS["selected_pair_label"]),
+        "selected_tf_label": st.session_state.get("selected_tf_label", DEFAULT_SETTINGS["selected_tf_label"]),
+        "last_notified_status": st.session_state.get("last_notified_status", DEFAULT_SETTINGS["last_notified_status"]),
     }
     try:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(settings, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        st.error(f"設定保存エラー: {e}")
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
-saved_settings = load_user_settings()
+if "initialized" not in st.session_state:
+    saved_settings = load_user_settings()
+    for key, val in saved_settings.items():
+        st.session_state[key] = val
+    st.session_state["initialized"] = True
 
-# サイドバー設定
-st.sidebar.title("⚙️ システム設定 & 口座管理")
-if st.sidebar.button("🔄 今すぐ最新データに更新", use_container_width=True):
-    st.cache_data.clear()
-    st.rerun()
-
-auto_refresh = st.sidebar.checkbox("自動更新を有効にする", value=True)
-refresh_interval = st.sidebar.selectbox("更新間隔を選択", [60, 180, 300], index=1, format_func=lambda x: f"{x // 60}分ごと")
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("📱 松井証券トレード資金設定 (基本入力)")
-
-account_balance = st.sidebar.number_input(
-    "口座資金 (円)",
-    min_value=10000, max_value=100000000,
-    value=saved_settings.get("account_balance", 220000), step=10000,
-    key="account_balance", on_change=save_user_settings
-)
-
-default_wan = saved_settings.get("custom_quantity", 2000) / 10000.0
-quantity_wan = st.sidebar.number_input(
-    "注文数量 (万通貨)",
-    min_value=0.0100, max_value=100.0000,
-    value=float(default_wan), step=0.0100, format="%.4f",
-    key="quantity_wan"
-)
-custom_quantity = int(round(quantity_wan * 10000))
-st.session_state["custom_quantity"] = custom_quantity
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔔 Discord 通知設定")
-discord_url = st.sidebar.text_input(
-    "Webhook URL",
-    value=saved_settings.get("discord_url", ""),
-    type="password", key="discord_url", on_change=save_user_settings
-)
-enable_notify = st.sidebar.checkbox(
-    "AI売買シグナル時に通知する",
-    value=saved_settings.get("enable_notify", False),
-    key="enable_notify", on_change=save_user_settings
-)
-
-def send_discord_notification(webhook_url, title, message, color=0x3498DB):
+def send_discord_notification(webhook_url, title, message, color=0x00FF00):
     if not webhook_url:
-        return False, "Webhook URLが設定されていません。"
+        return False, "URL未設定"
     payload = {
         "embeds": [{
             "title": title,
             "description": message,
             "color": color,
-            "timestamp": datetime.now(ZoneInfo("Asia/Tokyo")).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }]
     }
     try:
         res = requests.post(webhook_url, json=payload, timeout=5)
-        return (True, "送信成功") if res.status_code == 204 else (False, f"エラー: Status {res.status_code}")
+        if res.status_code in [200, 204]:
+            return True, "送信成功"
+        else:
+            return False, f"ステータスコード: {res.status_code}"
     except Exception as e:
         return False, str(e)
 
-if st.sidebar.button("🧪 Discord テスト送信"):
-    ok, msg = send_discord_notification(discord_url, "🧪 テスト通知", "これはテスト通知です。")
-    if ok: st.sidebar.success("✅ 送信成功！")
-    else: st.sidebar.error(f"❌ 送信失敗: {msg}")
+def get_signal_type(status_str):
+    if status_str.startswith("BUY"):
+        return "BUY"
+    elif status_str.startswith("SELL"):
+        return "SELL"
+    return "HOLD"
 
-# メインコントロール部
+# ==========================================
+# 2. 通貨ペア & 時間軸設定
+# ==========================================
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
-    "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
+    "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
     "豪ドル / 円 (AUD/JPY)": "AUDJPY=X",
-    "ユーロ / 米ドル (EUR/USD)": "EURUSD=X"
+    "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
 }
 
 TIMEFRAMES = {
-    "5分足": {"interval": "5m", "period": "5d"},
-    "15分足": {"interval": "15m", "period": "15d"},
-    "1時間足": {"interval": "1h", "period": "1mo"},
-    "4時間足": {"interval": "1h", "period": "3mo"},
-    "日足": {"interval": "1d", "period": "1y"}
+    "5分足 (超短期スキャル用)": {"period": "7d", "interval": "5m"},
+    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
+    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
+    "4時間足 (中期トレンド用)": {"period": "2y", "interval": "1h"},
+    "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
 
-col_sel1, col_sel2 = st.columns(2)
-with col_sel1:
-    selected_label = st.selectbox("🎯 監視通貨ペアを選択", list(PAIRS.keys()), index=0)
-    ticker = PAIRS[selected_label]
-with col_sel2:
-    tf_label = st.selectbox("⏱️ 時間足を選択", list(TIMEFRAMES.keys()), index=1)
-    tf_config = TIMEFRAMES[tf_label]
+PAIR_ATR_CONFIG = {
+    "USDJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "GBPJPY=X": {"atr_mult": 0.25, "min_pips": 20},
+    "EURJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "AUDJPY=X": {"atr_mult": 0.18, "min_pips": 12},
+    "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
+}
+
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.1)")
+
+col_s1, col_s2 = st.columns(2)
+with col_s1:
+    selected_label = st.selectbox("通貨ペアを選択", list(PAIRS.keys()), key="selected_pair_label", on_change=save_user_settings)
+with col_s2:
+    tf_label = st.selectbox("時間軸を選択", list(TIMEFRAMES.keys()), key="selected_tf_label", on_change=save_user_settings)
+
+ticker = PAIRS[selected_label]
+tf_config = TIMEFRAMES[tf_label]
+atr_cfg = PAIR_ATR_CONFIG.get(ticker, {"atr_mult": 0.20, "min_pips": 15})
 
 is_jpy_pair = "JPY" in ticker
 pip_unit = 0.01 if is_jpy_pair else 0.0001
 price_fmt = ".3f" if is_jpy_pair else ".5f"
 
-atr_params = {
-    "5分足": {"atr_mult": 1.5, "min_pips": 5},
-    "15分足": {"atr_mult": 2.0, "min_pips": 10},
-    "1時間足": {"atr_mult": 2.5, "min_pips": 20},
-    "4時間足": {"atr_mult": 3.0, "min_pips": 40},
-    "日足": {"atr_mult": 3.5, "min_pips": 80}
-}
-atr_cfg = atr_params.get(tf_label, {"atr_mult": 2.0, "min_pips": 10})
+st.sidebar.header("⚙️ システム設定 & 口座管理")
+if st.sidebar.button("🔄 今すぐ最新データに更新", use_container_width=True):
+    st.cache_data.clear()
+    st.rerun()
 
-FEATURE_COLUMNS = [
-    "Dist_SMA_20", "Dist_SMA_50", "Dist_EMA_200", "RSI", "RSI_Diff",
-    "MACD_Norm", "MACD_Hist_Norm", "BB_Pos", "BB_Width", "ADX", "USDJPY_ROC_20"
-]
+auto_refresh = st.sidebar.checkbox("自動更新を有効にする", key="auto_refresh", on_change=save_user_settings)
+refresh_interval = st.sidebar.selectbox(
+    "更新間隔を選択", options=[60, 180, 300], format_func=lambda x: f"{x // 60}分ごと", key="refresh_interval", on_change=save_user_settings
+)
+
+st.sidebar.subheader("📋 松井証券トレード資金設定（基本入力）")
+account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, step=50000, key="account_balance", on_change=save_user_settings)
+quantity_wan = st.sidebar.number_input("注文数量 (万通貨)", min_value=0.0001, max_value=10.0, step=0.01, format="%.4f", key="quantity_wan", on_change=save_user_settings)
+custom_quantity = int(round(quantity_wan * 10000))
+
+st.sidebar.subheader("🔔 Discord 通知設定")
+discord_url = st.sidebar.text_input("Webhook URL", type="password", key="discord_url", on_change=save_user_settings)
+enable_notify = st.sidebar.checkbox("AI売買シグナル時に通知する", key="enable_notify", on_change=save_user_settings)
+
+if st.sidebar.button("🧪 Discord テスト送信"):
+    if discord_url:
+        ok, msg = send_discord_notification(discord_url, "🧪 テスト通知成功", f"選択中の通貨ペア: **{selected_label}**\n連携は正常です！", color=0x3498DB)
+        if ok:
+            st.sidebar.success("テスト通知を送信しました！")
+        else:
+            st.sidebar.error(f"送信失敗: {msg}")
+    else:
+        st.sidebar.warning("Webhook URLを入力してください。")
 
 # ==========================================
-# 2. データ取得 & 特徴量生成 (キャッシュ対応)
+# 3. データ取得 & インジケーター計算エンジン
 # ==========================================
-@st.cache_data(ttl=60)
-def load_and_process_data(symbol, period, interval, tf_name="15分足"):
+@st.cache_data(ttl=60, show_spinner=False)
+def load_and_process_data(symbol, period, interval, tf_name=""):
+    df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
-        if df.empty:
-            return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
+    except Exception:
+        pass
 
-        df = df.dropna(subset=["Close"]).copy()
-        if len(df) < 50:
-            return None
+    if not df.empty and "4時間足" in tf_name and interval == "1h":
+        try:
+            tz_before = df.index.tz
+            df = df.resample("4h", closed="left", label="left", origin="start_day").agg({
+                "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"
+            }).dropna()
+            if tz_before is not None and df.index.tz is None:
+                df.index = df.index.tz_localize(tz_before)
+        except Exception:
+            pass
 
-        close = df["Close"]
-        high = df["High"]
-        low = df["Low"]
+    if df.empty or len(df) < 50:
+        return None
 
-        df["SMA_20"] = close.rolling(20).mean()
-        df["SMA_50"] = close.rolling(50).mean()
-        df["EMA_200"] = close.ewm(span=200, adjust=False).mean()
+    try:
+        new_cols = {}
+        new_cols["SMA_20"] = df["Close"].rolling(window=20).mean()
+        new_cols["SMA_50"] = df["Close"].rolling(window=50).mean()
+        new_cols["EMA_200"] = df["Close"].ewm(span=200, adjust=False).mean()
 
-        df["Dist_SMA_20"] = (close - df["SMA_20"]) / df["SMA_20"]
-        df["Dist_SMA_50"] = (close - df["SMA_50"]) / df["SMA_50"]
-        df["Dist_EMA_200"] = (close - df["EMA_200"]) / df["EMA_200"]
+        high_low = df["High"] - df["Low"]
+        new_cols["ATR"] = high_low.rolling(window=14).mean()
+        new_cols["ATR_SMA20"] = new_cols["ATR"].rolling(window=20).mean()
+        new_cols["ATR_Ratio"] = new_cols["ATR"] / (new_cols["ATR_SMA20"] + 1e-10)
 
-        delta = close.diff()
-        gain = delta.clip(lower=0).rolling(14).mean()
-        loss = -delta.clip(upper=0).rolling(14).mean()
-        rs = gain / (loss + 1e-9)
-        df["RSI"] = 100 - (100 / (1 + rs))
-        df["RSI_Diff"] = df["RSI"].diff()
+        total_range = high_low + 1e-10
+        new_cols["Upper_Wick_Ratio"] = (df["High"] - df[["Open", "Close"]].max(axis=1)) / total_range
+        new_cols["Lower_Wick_Ratio"] = (df[["Open", "Close"]].min(axis=1) - df["Low"]) / total_range
 
-        ema12 = close.ewm(span=12, adjust=False).mean()
-        ema26 = close.ewm(span=26, adjust=False).mean()
-        macd = ema12 - ema26
-        macd_signal = macd.ewm(span=9, adjust=False).mean()
-        df["MACD_Norm"] = macd / close
-        df["MACD_Hist_Norm"] = (macd - macd_signal) / close
+        new_cols["Return_1"] = df["Close"].diff(1) / df["Close"].shift(1)
+        new_cols["Return_5"] = df["Close"].diff(5) / df["Close"].shift(5)
+        
+        new_cols["Dev_SMA20"] = (df["Close"] - new_cols["SMA_20"]) / (new_cols["SMA_20"] + 1e-10)
+        new_cols["Dev_EMA200"] = (df["Close"] - new_cols["EMA_200"]) / (new_cols["EMA_200"] + 1e-10)
+        new_cols["Vol_Ratio"] = new_cols["ATR"] / (df["Close"] + 1e-10)
 
-        std20 = close.rolling(20).std()
-        df["Upper_Band"] = df["SMA_20"] + (std20 * 2)
-        df["Lower_Band"] = df["SMA_20"] - (std20 * 2)
-        df["BB_Pos"] = (close - df["Lower_Band"]) / ((df["Upper_Band"] - df["Lower_Band"]) + 1e-9)
-        df["BB_Width"] = (df["Upper_Band"] - df["Lower_Band"]) / df["SMA_20"]
+        delta = df["Close"].diff()
+        gain = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean()
+        rs = gain / (loss + 1e-10)
+        new_cols["RSI"] = 100.0 - (100.0 / (1.0 + rs))
+        new_cols["RSI_Diff"] = new_cols["RSI"].diff(1)
 
-        tr1 = high - low
-        tr2 = (high - close.shift(1)).abs()
-        tr3 = (low - close.shift(1)).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        df["ATR"] = tr.rolling(14).mean()
+        ema12 = df["Close"].ewm(span=12, adjust=False).mean()
+        ema26 = df["Close"].ewm(span=26, adjust=False).mean()
+        new_cols["MACD"] = ema12 - ema26
+        new_cols["MACD_Signal"] = new_cols["MACD"].ewm(span=9, adjust=False).mean()
+        new_cols["MACD_Hist"] = new_cols["MACD"] - new_cols["MACD_Signal"]
+        new_cols["MACD_Hist_Ratio"] = new_cols["MACD_Hist"] / (df["Close"] + 1e-10)
 
-        up_move = high - high.shift(1)
-        down_move = low.shift(1) - low
+        std20 = df["Close"].rolling(window=20).std()
+        new_cols["Upper_Band"] = new_cols["SMA_20"] + (std20 * 2)
+        new_cols["Lower_Band"] = new_cols["SMA_20"] - (std20 * 2)
+        new_cols["BB_Width"] = (new_cols["Upper_Band"] - new_cols["Lower_Band"]) / (new_cols["SMA_20"] + 1e-10)
+        new_cols["BB_PctB"] = (df["Close"] - new_cols["Lower_Band"]) / ((new_cols["Upper_Band"] - new_cols["Lower_Band"]) + 1e-10)
+
+        tr = pd.concat([high_low, (df["High"] - df["Close"].shift(1)).abs(), (df["Low"] - df["Close"].shift(1)).abs()], axis=1).max(axis=1)
+        up_move = df["High"] - df["High"].shift(1)
+        down_move = df["Low"].shift(1) - df["Low"]
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+        atr14 = tr.ewm(alpha=1/14, adjust=False).mean()
+        plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / (atr14 + 1e-10)
+        minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / (atr14 + 1e-10)
+        sum_di = (plus_di + minus_di).replace(0, 1e-10)
+        dx = 100 * (plus_di - minus_di).abs() / sum_di
+        new_cols["ADX"] = dx.ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
-        atr_s = df["ATR"] + 1e-9
-        plus_di = 100 * (pd.Series(plus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / atr_s)
-        minus_di = 100 * (pd.Series(minus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean() / atr_s)
-        dx = 100 * (plus_di - minus_di).abs() / ((plus_di + minus_di) + 1e-9)
-        df["ADX"] = dx.ewm(alpha=1/14, adjust=False).mean()
+        df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
-        if symbol != "USDJPY=X":
-            usdjpy = yf.download("USDJPY=X", period=period, interval=interval, progress=False)
-            if isinstance(usdjpy.columns, pd.MultiIndex):
-                usdjpy.columns = usdjpy.columns.get_level_values(0)
-            df["USDJPY_ROC_20"] = usdjpy["Close"].pct_change(20).reindex(df.index).fillna(0)
-        else:
-            df["USDJPY_ROC_20"] = close.pct_change(20).fillna(0)
+        f_high = pd.concat([df["High"].shift(-1), df["High"].shift(-2), df["High"].shift(-3)], axis=1)
+        f_low = pd.concat([df["Low"].shift(-1), df["Low"].shift(-2), df["Low"].shift(-3)], axis=1)
 
-        if "4時間" in tf_name or "日足" in tf_name:
-            future_diff = close.shift(-3) - close
-        else:
-            future_diff = close.shift(-6) - close
+        target_pips = df["ATR"] * 0.8  
+        future_max_up = f_high.max(axis=1) - df["Close"]
+        future_max_down = df["Close"] - f_low.min(axis=1)
 
-        threshold = df["ATR"] * 0.5
-        df["Target"] = 0
-        df.loc[future_diff > threshold, "Target"] = 1
-        df.loc[future_diff < -threshold, "Target"] = -1
+        conditions = [
+            (future_max_up >= target_pips) & (future_max_up > future_max_down),
+            (future_max_down >= target_pips) & (future_max_down > future_max_up),
+        ]
+        
+        target_series = np.select(conditions, [1, -1], default=0)
+        df["Target"] = target_series.astype(float)
+        if len(df) > 3:
+            df.iloc[-3:, df.columns.get_loc("Target")] = np.nan
 
-        return df.dropna(subset=FEATURE_COLUMNS + ["Target"])
+        feature_cols = [c for c in df.columns if c != "Target"]
+        df = df.dropna(subset=feature_cols)
+
+        if df.empty:
+            return None
+        return df
     except Exception:
         return None
 
-# ==========================================
-# 3. AI判定・バックテスト関数 (シード完全固定)
-# ==========================================
-def analyze_signal(df, higher_df=None, usdjpy_df=None, current_symbol="USDJPY=X"):
-    if df is None or len(df) < 30:
-        return "HOLD (データ不足)", 0.0, "不明"
-
-    available_features = [f for f in FEATURE_COLUMNS if f in df.columns]
-    X, y = df[available_features], df["Target"]
-
-    # 乱数シード (random_state=42) を完全に固定し、判定の不一致を排除
-    clf = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
-    clf.fit(X.iloc[:-1], y.iloc[:-1])
-
-    latest_X = X.iloc[[-1]]
-    probs = clf.predict_proba(latest_X)[0]
-    classes = list(clf.classes_)
-
-    prob_buy = probs[classes.index(1)] if 1 in classes else 0.0
-    prob_sell = probs[classes.index(-1)] if -1 in classes else 0.0
-
-    raw_status = "HOLD"
-    confidence = 0.0
-    if prob_buy > prob_sell and prob_buy > 0.40:
-        raw_status = "BUY"
-        confidence = prob_buy * 100
-    elif prob_sell > prob_buy and prob_sell > 0.40:
-        raw_status = "SELL"
-        confidence = prob_sell * 100
-
-    latest_close = df["Close"].iloc[-1]
-    latest_adx = df["ADX"].iloc[-1] if "ADX" in df.columns else 25.0
-    latest_rsi = df["RSI"].iloc[-1] if "RSI" in df.columns else 50.0
-
-    if higher_df is not None and not higher_df.empty and "SMA_50" in higher_df.columns:
-        htf_close = higher_df["Close"].iloc[-1]
-        htf_sma50 = higher_df["SMA_50"].iloc[-1]
-        if htf_close > htf_sma50 * 1.002: htf_trend = "UP"
-        elif htf_close < htf_sma50 * 0.998: htf_trend = "DOWN"
-        else: htf_trend = "RANGE"
-    else:
-        htf_trend = "RANGE"
-
-    if latest_adx > 22.0:
-        market_type = "トレンド相場"
-    else:
-        market_type = "レンジ・揉み合い相場"
-
-    final_status = raw_status
-
-    # 安全フィルター群
-    if confidence < 50.0:
-        final_status = f"HOLD (確信度不足: {confidence:.1f}%)"
-    elif raw_status == "BUY" and htf_trend == "DOWN":
-        final_status = "HOLD (上位足逆行・上昇力不十分)"
-    elif raw_status == "SELL" and htf_trend == "UP":
-        final_status = "HOLD (上位足逆行・下降力不十分)"
-    elif raw_status == "BUY" and latest_rsi > 70.0:
-        final_status = "HOLD (買われすぎ警戒)"
-    elif raw_status == "SELL" and latest_rsi < 30.0:
-        final_status = "HOLD (売られすぎ警戒)"
-
-    if usdjpy_df is not None and not usdjpy_df.empty and current_symbol != "USDJPY=X":
-        uj_roc = usdjpy_df["Close"].pct_change(5).iloc[-1]
-        if current_symbol in ["EURJPY=X", "GBPJPY=X", "AUDJPY=X"]:
-            if raw_status == "BUY" and uj_roc < -0.003:
-                final_status = "HOLD (ドル円急落連動ストッパー)"
-            elif raw_status == "SELL" and uj_roc > 0.003:
-                final_status = "HOLD (ドル円急騰連動ストッパー)"
-
-    recent_low = df["Low"].iloc[-10:].min()
-    recent_high = df["High"].iloc[-10:].max()
-    pip = 0.01 if "JPY" in current_symbol else 0.0001
-    if raw_status == "BUY" and (latest_close - recent_low) < (5 * pip):
-        final_status = "HOLD (支持線直近)"
-    elif raw_status == "SELL" and (recent_high - latest_close) < (5 * pip):
-        final_status = "HOLD (抵抗線直近)"
-
-    return final_status, confidence, market_type
-
-def get_signal_type(status_str):
-    if status_str.startswith("BUY"): return "BUY"
-    if status_str.startswith("SELL"): return "SELL"
-    return "HOLD"
-
-def run_backtest(X, y, test_len=30):
-    correct, total = 0, 0
-    cumulative = []
-    for i in range(len(X) - test_len, len(X) - 1):
-        X_train, y_train = X.iloc[:i], y.iloc[:i]
-        X_test, y_test = X.iloc[[i]], y.iloc[i]
-        
-        clf = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
-        clf.fit(X_train, y_train)
-
-        probs = clf.predict_proba(X_test)[0]
-        classes = list(clf.classes_)
-        prob_buy = probs[classes.index(1)] if 1 in classes else 0.0
-        prob_sell = probs[classes.index(-1)] if -1 in classes else 0.0
-
-        pred = 0
-        if prob_buy > prob_sell and prob_buy > 0.50: pred = 1
-        elif prob_sell > prob_buy and prob_sell > 0.50: pred = -1
-
-        actual = y_test
-        if pred != 0:
-            total += 1
-            if pred == actual: correct += 1
-            cumulative.append((total, round((correct / total) * 100, 1)))
-
-    win_rate = (correct / total * 100) if total > 0 else 0.0
-    return cumulative, win_rate, total, correct
-
-@st.cache_data(ttl=120)
-def get_mtf_trends(symbol):
-    results = {}
-    for tf_k, tf_v in TIMEFRAMES.items():
-        df_tf = load_and_process_data(symbol, tf_v["period"], tf_v["interval"], tf_k)
-        if df_tf is not None and not df_tf.empty and "SMA_50" in df_tf.columns:
-            c, s = df_tf["Close"].iloc[-1], df_tf["SMA_50"].iloc[-1]
-            if c > s * 1.001: results[tf_k] = "上昇 📈"
-            elif c < s * 0.999: results[tf_k] = "下降 📉"
-            else: results[tf_k] = "レンジ ➡️"
+# 高速化キャッシュ対応の全時間軸トレンド一括取得関数
+@st.cache_data(ttl=60, show_spinner=False)
+def get_mtf_trends(symbol: str) -> dict:
+    trends = {}
+    for name, params in TIMEFRAMES.items():
+        sub_d = load_and_process_data(symbol, params["period"], params["interval"], name)
+        if sub_d is not None and len(sub_d) >= 20:
+            c_price = sub_d['Close'].iloc[-1]
+            c_ema = sub_d['EMA_200'].iloc[-1] if 'EMA_200' in sub_d.columns else sub_d['SMA_20'].iloc[-1]
+            if c_price > c_ema:
+                trends[name.split(" ")[0]] = "上昇 📈"
+            elif c_price < c_ema:
+                trends[name.split(" ")[0]] = "下降 📉"
+            else:
+                trends[name.split(" ")[0]] = "レンジ ➡️"
         else:
-            results[tf_k] = "不明 ❓"
-    return results
+            trends[name.split(" ")[0]] = "判定中..."
+    return trends
+
+@st.cache_data(ttl=300, show_spinner=False)
+def run_backtest(X_bt, y_bt, test_len):
+    cumulative_wins = []
+    trade_count, correct_count = 0, 0
+    step_size = max(1, test_len // 15)
+
+    for i in range(0, test_len, step_size):
+        idx = len(X_bt) - test_len + i
+        train_end = max(1, idx - 3)
+        valid_train = ~y_bt.iloc[:train_end].isna()
+        if valid_train.sum() < 30:
+            continue
+        y_sub = y_bt.iloc[:train_end][valid_train]
+        if len(np.unique(y_sub)) < 2:
+            continue
+        sub_model = RandomForestClassifier(n_estimators=50, max_depth=4, min_samples_leaf=10, random_state=42)
+        sub_model.fit(X_bt.iloc[:train_end][valid_train], y_sub)
+        p = sub_model.predict(X_bt.iloc[[idx]])[0]
+        actual = y_bt.iloc[idx]
+
+        if p != 0 and not pd.isna(actual):
+            trade_count += 1
+            if p == actual:
+                correct_count += 1
+        current_win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
+        cumulative_wins.append((i + 1, current_win_rate))
+
+    win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
+    return cumulative_wins, win_rate, trade_count, correct_count
+
+@st.cache_data(ttl=60, show_spinner=False)
+def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_estimators_override=None):
+    if df_current is None or len(df_current) < 50:
+        return "HOLD", 50.0, "不明"
+    try:
+        avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
+        X = df_current[avail]
+        y = df_current["Target"]
+        train_mask = ~y.isna()
+        X_train_full = X[train_mask]
+        y_train_full = y[train_mask]
+        X_train = X_train_full.iloc[-1000:] if len(X_train_full) > 1000 else X_train_full
+        y_train = y_train_full.iloc[-1000:] if len(y_train_full) > 1000 else y_train_full
+
+        if len(np.unique(y_train)) < 2:
+            return "HOLD (分析不可: クラス不足)", 50.0, "判定不可"
+
+        trees_count = n_estimators_override if n_estimators_override is not None else 120
+        model = RandomForestClassifier(n_estimators=trees_count, max_depth=4, min_samples_leaf=10, random_state=42)
+        model.fit(X_train, y_train)
+
+        X_latest = X.iloc[[-1]]
+        prob_array = model.predict_proba(X_latest)[0]
+        prob_dict = dict(zip(model.classes_, prob_array))
+        prob_up, prob_down = prob_dict.get(1, 0.0), prob_dict.get(-1, 0.0)
+        confidence = max(prob_up, prob_down) * 100
+
+        latest_price = df_current["Close"].iloc[-1]
+        latest_ema200 = df_current["EMA_200"].iloc[-1] if "EMA_200" in df_current.columns else latest_price
+        latest_sma20 = df_current["SMA_20"].iloc[-1] if "SMA_20" in df_current.columns else latest_price
+        latest_adx = df_current["ADX"].iloc[-1] if "ADX" in df_current.columns else 25.0
+        latest_rsi = df_current["RSI"].iloc[-1] if "RSI" in df_current.columns else 50.0
+        latest_atr = df_current["ATR"].iloc[-1] if "ATR" in df_current.columns else 0.1
+        upper_band = df_current["Upper_Band"].iloc[-1] if "Upper_Band" in df_current.columns else latest_price
+        lower_band = df_current["Lower_Band"].iloc[-1] if "Lower_Band" in df_current.columns else latest_price
+        
+        if "BB_Width" in df_current.columns:
+            latest_bb_width = df_current["BB_Width"].iloc[-1]
+            avg_bb_series = df_current["BB_Width"].rolling(window=20).mean()
+            avg_bb_width = avg_bb_series.iloc[-1] if not avg_bb_series.empty and not pd.isna(avg_bb_series.iloc[-1]) else 0.05
+        else:
+            latest_bb_width = 0.05
+            avg_bb_width = 0.05
+        
+        is_squeezed = latest_bb_width < (avg_bb_width * 0.75)
+
+        htf_trend = "FLAT"
+        if df_higher is not None and not df_higher.empty and "EMA_200" in df_higher.columns:
+            htf_trend = "UP" if df_higher["Close"].iloc[-1] > df_higher["EMA_200"].iloc[-1] else "DOWN" if df_higher["Close"].iloc[-1] < df_higher["EMA_200"].iloc[-1] else "FLAT"
+
+        is_cross_jpy = "JPY" in current_symbol and current_symbol != "USDJPY=X"
+        usdjpy_strong_up = usdjpy_strong_down = False
+        if is_cross_jpy and usdjpy_df is not None and not usdjpy_df.empty and "EMA_200" in usdjpy_df.columns:
+            uj_close, uj_ema = usdjpy_df["Close"].iloc[-1], usdjpy_df["EMA_200"].iloc[-1]
+            uj_rsi = usdjpy_df["RSI"].iloc[-1] if "RSI" in usdjpy_df.columns else 50.0
+            if uj_close > uj_ema and uj_rsi > 58: usdjpy_strong_up = True
+            elif uj_close < uj_ema and uj_rsi < 42: usdjpy_strong_down = True
+
+        recent_50_high = df_current["High"].iloc[-50:-1].max()
+        recent_50_low = df_current["Low"].iloc[-50:-1].min()
+        is_far_from_sma = abs(latest_price - latest_sma20) > (latest_atr * 1.5)
+        is_near_support = (latest_price - recent_50_low) < (latest_atr * 0.8)
+        is_near_resistance = (recent_50_high - latest_price) < (latest_atr * 0.8)
+
+        HIGH_THRESHOLD = 0.62
+
+        if latest_adx > 22.0:
+            market_type = "トレンド相場"
+            if prob_up >= HIGH_THRESHOLD and htf_trend != "DOWN":
+                if usdjpy_strong_down: status = "HOLD (ストッパー: ドル円急落中)"
+                elif latest_price <= latest_ema200: status = "HOLD (逆張り警戒: 200EMA下)"
+                elif is_far_from_sma: status = "HOLD (高値掴み回避)"
+                elif is_near_resistance: status = "HOLD (抵抗線直前)"
+                else: status = "BUY"
+            elif prob_down >= HIGH_THRESHOLD and htf_trend != "UP":
+                if usdjpy_strong_up: status = "HOLD (ストッパー: ドル円急騰中)"
+                elif latest_price >= latest_ema200: status = "HOLD (逆張り警戒: 200EMA上)"
+                elif is_far_from_sma: status = "HOLD (安値掴み回避)"
+                elif is_near_support: status = "HOLD (支持線直前)"
+                else: status = "SELL"
+            else: status = f"HOLD (確信度不足: {confidence:.1f}%)"
+        else:
+            market_type = "レンジ相場"
+            if is_squeezed:
+                status = "HOLD (ブレイクアウト警戒)"
+            else:
+                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.58:
+                    status = "BUY (レンジ逆張り)" if not usdjpy_strong_down else "HOLD (ストッパー: ドル円逆行)"
+                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.58:
+                    status = "SELL (レンジ逆張り)" if not usdjpy_strong_up else "HOLD (ストッパー: ドル円逆行)"
+                else:
+                    status = "HOLD (レンジ内静観)"
+
+        return status, confidence, market_type
+    except Exception:
+        return "HOLD", 50.0, "不明"
 # ==========================================
 # 4. メインデータロード & 画面描画処理
 # ==========================================
 with st.spinner("データとAIを初期化中..."):
     usdjpy_data = load_and_process_data("USDJPY=X", tf_config["period"], tf_config["interval"], tf_label)
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
-    higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足")
+    higher_tf_data = load_and_process_data(ticker, "1y", "1d", "日足 (スイング・環境認識用)")
 
 now_datetime_jst = datetime.now(ZoneInfo("Asia/Tokyo"))
 current_day, current_hour_jst, current_minute_jst = now_datetime_jst.weekday(), now_datetime_jst.hour, now_datetime_jst.minute
@@ -395,20 +459,15 @@ else:
     is_ny_open = current_hour_jst >= 22 or current_hour_jst == 0
     is_econ_indicator_time = (current_hour_jst == 22 and current_minute_jst >= 15) or (current_hour_jst == 23 and current_minute_jst <= 45)
 
-if is_weekend: 
-    st.error("🛑 **【週末・為替市場クローズ中】**: 現在外国為替市場は休業時間帯です。表示価格は最終クローズ値となります。")
-elif is_econ_indicator_time: 
-    st.error("🚨 **【重要経済指標 警戒タイムゾーン】**: 突発的乱高下の危険がある時間帯です。新規エントリーは自重をお勧めします。")
-elif is_low_liquidity: 
-    st.warning("⚠️ **【流動性低下タイムゾーン】**: オセアニア時間の早朝です。スプレッド拡大にご注意ください。")
-elif is_ny_open: 
-    st.info("🔥 **【NY市場オープンタイムゾーン】**: ボラティリティが高まる時間帯です。")
+if is_weekend: st.error("🛑 **【週末・為替市場クローズ中】**: 現在外国為替市場は休業時間帯です。表示価格は最終クローズ値となります。")
+elif is_econ_indicator_time: st.error("🚨 **【重要経済指標 警戒タイムゾーン】**: 突発的乱高下の危険がある時間帯です。新規エントリーは自重をお勧めします。")
+elif is_low_liquidity: st.warning("⚠️ **【流動性低下タイムゾーン】**: オセアニア時間の早朝です。スプレッド拡大にご注意ください。")
+elif is_ny_open: st.info("🔥 **【NY市場オープンタイムゾーン】**: ボラティリティが高まる時間帯です。")
 
 if data is None or len(data) < 10:
     st.error("🚨 リアルタイムデータの取得に失敗しました。時間足を変更するか、1〜2分待ってから「最新データに更新」を押してください。")
 else:
     market_status, confidence, market_type = analyze_signal(data, higher_tf_data, usdjpy_df=usdjpy_data, current_symbol=ticker)
-    
     if is_econ_indicator_time and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         market_status = "HOLD (指標発表警戒時間帯)"
 
@@ -514,7 +573,7 @@ else:
     m_col5.metric("ADX (トレンド強度)", f"{latest_adx:.1f}")
     m_col6.metric("上位足 (日足) トレンド", long_term_trend)
 
-    # マルチタイムフレーム (MTF) トレンド一覧パネル
+    # マルチタイムフレーム (MTF) トレンド一覧パネル（高速化キャッシュ対応）
     st.markdown("##### 🌐 マルチタイムフレーム (MTF) トレンド一覧")
     mtf_trends = get_mtf_trends(ticker)
     mtf_cols = st.columns(len(TIMEFRAMES))
@@ -632,9 +691,9 @@ else:
                 for idx_p, (p_label, p_symbol) in enumerate(PAIRS.items()):
                     status_text_scan.text(f"スキャン中... {p_label}")
                     sub_df = load_and_process_data(p_symbol, tf_config["period"], tf_config["interval"], tf_label)
-                    sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足")
+                    sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
                     if sub_df is not None and len(sub_df) > 10:
-                        s_status, s_conf, s_mtype = analyze_signal(sub_df, sub_htf, usdjpy_df=usdjpy_data, current_symbol=p_symbol)
+                        s_status, s_conf, s_mtype = analyze_signal(sub_df, sub_htf, usdjpy_df=usdjpy_data, current_symbol=p_symbol, n_estimators_override=40)
                         scan_results.append({
                             "通貨ペア": p_label, "相場環境": s_mtype, "AI総合判定": s_status, "確信度 (%)": round(s_conf, 1),
                             "ADX (強度)": round(sub_df["ADX"].iloc[-1] if "ADX" in sub_df.columns else 25.0, 1)
