@@ -18,7 +18,7 @@ from streamlit_autorefresh import st_autorefresh
 # 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.1",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.4.0",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -136,7 +136,7 @@ PAIR_ATR_CONFIG = {
     "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.1)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.4.0)")
 
 col_s1, col_s2 = st.columns(2)
 with col_s1:
@@ -264,8 +264,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
-        f_high = pd.concat([df["High"].shift(-1), df["High"].shift(-2), df["High"].shift(-3)], axis=1)
-        f_low = pd.concat([df["Low"].shift(-1), df["Low"].shift(-2), df["Low"].shift(-3)], axis=1)
+        # 【改善1】未来5本先まで監視期間を延ばし、トレンド発生データを捉えやすく変更
+        f_high = pd.concat([df["High"].shift(-i) for i in range(1, 6)], axis=1)
+        f_low = pd.concat([df["Low"].shift(-i) for i in range(1, 6)], axis=1)
 
         target_pips = df["ATR"] * 0.8  
         future_max_up = f_high.max(axis=1) - df["Close"]
@@ -278,8 +279,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         
         target_series = np.select(conditions, [1, -1], default=0)
         df["Target"] = target_series.astype(float)
-        if len(df) > 3:
-            df.iloc[-3:, df.columns.get_loc("Target")] = np.nan
+        
+        # 監視期間5本に合わせて末尾5行を学習から除外
+        if len(df) > 5:
+            df.iloc[-5:, df.columns.get_loc("Target")] = np.nan
 
         feature_cols = [c for c in df.columns if c != "Target"]
         df = df.dropna(subset=feature_cols)
@@ -324,7 +327,14 @@ def run_backtest(X_bt, y_bt, test_len):
         y_sub = y_bt.iloc[:train_end][valid_train]
         if len(np.unique(y_sub)) < 2:
             continue
-        sub_model = RandomForestClassifier(n_estimators=50, max_depth=4, min_samples_leaf=10, random_state=42)
+        # 【改善3】バックテスト用モデルも深さ6・クラス不均衡補正を適用
+        sub_model = RandomForestClassifier(
+            n_estimators=50, 
+            max_depth=6, 
+            min_samples_leaf=5, 
+            random_state=42, 
+            class_weight="balanced_subsample"
+        )
         sub_model.fit(X_bt.iloc[:train_end][valid_train], y_sub)
         p = sub_model.predict(X_bt.iloc[[idx]])[0]
         actual = y_bt.iloc[idx]
@@ -357,7 +367,14 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_e
             return "HOLD (分析不可: クラス不足)", 50.0, "判定不可"
 
         trees_count = n_estimators_override if n_estimators_override is not None else 120
-        model = RandomForestClassifier(n_estimators=trees_count, max_depth=4, min_samples_leaf=10, random_state=42)
+        # 【改善2】モデルの表現力を上げ、レンジ過多なデータバランスを自動調整
+        model = RandomForestClassifier(
+            n_estimators=trees_count, 
+            max_depth=6, 
+            min_samples_leaf=5, 
+            random_state=42, 
+            class_weight="balanced_subsample"
+        )
         model.fit(X_train, y_train)
 
         X_latest = X.iloc[[-1]]
@@ -403,7 +420,8 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_e
         is_near_support = (latest_price - recent_50_low) < (latest_atr * 0.8)
         is_near_resistance = (recent_50_high - latest_price) < (latest_atr * 0.8)
 
-        HIGH_THRESHOLD = 0.62
+        # 【改善2】確信度閾値を実用的な55%に最適化（エントリー発生頻度の向上）
+        HIGH_THRESHOLD = 0.55
 
         if latest_adx > 22.0:
             market_type = "トレンド相場"
@@ -425,9 +443,9 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol="", n_e
             if is_squeezed:
                 status = "HOLD (ブレイクアウト警戒)"
             else:
-                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.58:
+                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.52:
                     status = "BUY (レンジ逆張り)" if not usdjpy_strong_down else "HOLD (ストッパー: ドル円逆行)"
-                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.58:
+                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.52:
                     status = "SELL (レンジ逆張り)" if not usdjpy_strong_up else "HOLD (ストッパー: ドル円逆行)"
                 else:
                     status = "HOLD (レンジ内静観)"
