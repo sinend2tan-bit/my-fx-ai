@@ -18,7 +18,7 @@ from streamlit_autorefresh import st_autorefresh
 # 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.2",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.3",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -136,7 +136,7 @@ PAIR_ATR_CONFIG = {
     "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
 }
 
-st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.2)")
+st.title("⚡ Pro AI FX デイトレ & リピートアナライザー (v6.3.3)")
 
 col_s1, col_s2 = st.columns(2)
 with col_s1:
@@ -687,12 +687,14 @@ else:
             progress_bar_scan, status_text_scan = st.progress(0), st.empty()
             
             with st.spinner("全通貨ペアを分析中..."):
+                # 各クロス円スキャン時に正確なドル円データを個別に取得するよう最適化
+                sub_usdjpy_df = load_and_process_data("USDJPY=X", tf_config["period"], tf_config["interval"], tf_label)
                 for idx_p, (p_label, p_symbol) in enumerate(PAIRS.items()):
                     status_text_scan.text(f"スキャン中... {p_label}")
                     sub_df = load_and_process_data(p_symbol, tf_config["period"], tf_config["interval"], tf_label)
                     sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
                     if sub_df is not None and len(sub_df) > 10:
-                        s_status, s_conf, s_mtype = analyze_signal(sub_df, sub_htf, usdjpy_df=usdjpy_data, current_symbol=p_symbol)
+                        s_status, s_conf, s_mtype = analyze_signal(sub_df, sub_htf, usdjpy_df=sub_usdjpy_df, current_symbol=p_symbol)
                         scan_results.append({
                             "通貨ペア": p_label, "相場環境": s_mtype, "AI総合判定": s_status, "確信度 (%)": round(s_conf, 1),
                             "ADX (強度)": round(sub_df["ADX"].iloc[-1] if "ADX" in sub_df.columns else 25.0, 1)
