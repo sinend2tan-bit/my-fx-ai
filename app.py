@@ -628,7 +628,7 @@ else:
     ai_recommended_width = int(max(round(raw_atr_pips * atr_cfg["atr_mult"], 1), atr_cfg["min_pips"]))
 
     # ---------------------------------------------------------
-    # 【修正完了箇所】リピート注文タブ
+    # 【修正適用箇所】リピート注文タブ
     # ---------------------------------------------------------
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）最適化ヘルパー")
@@ -649,9 +649,13 @@ else:
         half_intervals_down = total_intervals // 2
         half_intervals_up = total_intervals - half_intervals_down
 
-        # 下限値を基準にし、丸め誤差が発生しないよう整数ステップで上限値を正確に算出
+        # 下限値を基準に計算
         rep_lower = round(base_price - (half_intervals_down * grid_width_val), p_decimals)
-        rep_upper = round(rep_lower + (total_intervals * grid_width_val), p_decimals)
+
+        # 【修正】松井証券のシステム誤差(0.75/0.15 = 4.9999...)による6本目の切捨てを防止するため
+        # レンジ上限に 0.1 pips (0.001 / 0.00001) の微細バッファを上乗せします
+        micro_buffer = 0.001 if is_jpy_pair else 0.00001
+        rep_upper = round(rep_lower + (total_intervals * grid_width_val) + micro_buffer, p_decimals + 1)
 
         buffer_val = max(latest_atr * 1.5, 0.4 if is_jpy_pair else 0.04)
         rep_buy_stop = round(rep_lower - buffer_val, p_decimals)
