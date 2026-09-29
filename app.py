@@ -122,13 +122,9 @@ def send_discord_notification(webhook_url, title, message, color=0x00FF00):
     except Exception as e:
         return False, str(e)
 
-def get_signal_type(status_str):
-    if status_str.startswith("BUY"): return "BUY"
-    elif status_str.startswith("SELL"): return "SELL"
-    return "HOLD"
-
 def clean_series(s):
-    if isinstance(s, pd.DataFrame): return s.iloc[:, 0]
+    if isinstance(s, pd.DataFrame):
+        return s.iloc[:, 0]
     return s
 
 # ==========================================
@@ -284,6 +280,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df
     except Exception:
         return None
+
 # ==========================================
 # 4. マルチタイムフレーム＆AI分析ロジック
 # ==========================================
@@ -521,7 +518,6 @@ now_datetime_ny = now_datetime_jst.astimezone(ZoneInfo("America/New_York"))
 is_summer_time = now_datetime_ny.dst().total_seconds() != 0 
 
 is_weekend = (current_day == 5 and current_hour_jst >= 6) or (current_day == 6) or (current_day == 0 and current_hour_jst < 6)
-is_low_liquidity = 3 <= current_hour_jst <= 7
 
 if is_summer_time:
     is_econ_indicator_time = (current_hour_jst == 21 and current_minute_jst >= 15) or (current_hour_jst == 22 and current_minute_jst <= 45)
@@ -539,7 +535,6 @@ else:
 
     c_close = clean_series(data["Close"])
     latest_price = float(c_close.iloc[-1])
-    latest_bar_time = str(data.index[-1])
 
     upcoming_events = get_upcoming_market_events(now_datetime_jst, is_summer_time)
     next_ev = upcoming_events[0]
@@ -637,22 +632,16 @@ else:
         margin_per_unit = (jpy_rate * custom_quantity) / 25.0
         max_allowable_grids = max(2, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
 
-        # 松井証券の入力桁数（クロス円:2桁, ドルストレート:4桁）
         p_decimals = 2 if is_jpy_pair else 4
         base_price = round(latest_price, p_decimals)
         grid_width_val = round(ai_recommended_width * pip_unit, p_decimals)
 
-        # 希望本数 N に対する区間数は N - 1
         target_grids = max(2, max_allowable_grids)
-        total_intervals = target_grids - 1  # 例: 6本なら5区間
+        total_intervals = target_grids - 1
 
         half_intervals_down = total_intervals // 2
-
-        # 下限値を算出
         rep_lower = round(base_price - (half_intervals_down * grid_width_val), p_decimals)
-
-        # 【重要修正】松井証券の入力桁数に合わせて1 pips分繰り上げる
-        # これにより松井証券画面で (上限-下限)/値幅 が確実に 5.06... となり、切り捨てられても5区間(=6本)になります
+        
         safety_buffer = pip_unit * 1.0
         rep_upper = round(rep_lower + (total_intervals * grid_width_val) + safety_buffer, p_decimals)
 
@@ -661,7 +650,6 @@ else:
         rep_sell_stop = round(rep_upper + buffer_val, p_decimals)
         buffer_pips = round(buffer_val / pip_unit, 1)
 
-        # アプリ側での表示確認用計算式
         calculated_grids = int((rep_upper - rep_lower) / grid_width_val) + 1
 
         st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本** (算出レンジ設定: **{calculated_grids}本分**)")
