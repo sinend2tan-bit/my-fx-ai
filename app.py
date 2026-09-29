@@ -65,8 +65,6 @@ DEFAULT_SETTINGS = {
     "selected_pair_label": "米ドル / 円 (USD/JPY)",
     "selected_tf_label": "15分足 (デイトレエントリー用)",
     "last_notified_status": {},
-    "ai_threshold": 55.0,  
-    "adx_threshold": 20.0, 
 }
 
 # ==========================================
@@ -95,8 +93,6 @@ def save_user_settings():
         "selected_pair_label": st.session_state.get("selected_pair_label", DEFAULT_SETTINGS["selected_pair_label"]),
         "selected_tf_label": st.session_state.get("selected_tf_label", DEFAULT_SETTINGS["selected_tf_label"]),
         "last_notified_status": st.session_state.get("last_notified_status", DEFAULT_SETTINGS["last_notified_status"]),
-        "ai_threshold": st.session_state.get("ai_threshold", DEFAULT_SETTINGS["ai_threshold"]),
-        "adx_threshold": st.session_state.get("adx_threshold", DEFAULT_SETTINGS["adx_threshold"]),
     }
     try:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
@@ -188,11 +184,6 @@ auto_refresh = st.sidebar.checkbox("自動更新を有効にする", key="auto_r
 refresh_interval = st.sidebar.selectbox("更新間隔", options=[60, 180, 300], format_func=lambda x: f"{x // 60}分ごと", key="refresh_interval", on_change=save_user_settings)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🤖 AIモデル・チューニング")
-ai_threshold = st.sidebar.slider("AIシグナル確信度 閾値 (%)", min_value=50.0, max_value=75.0, value=float(st.session_state.get("ai_threshold", 55.0)), step=1.0, key="ai_threshold", on_change=save_user_settings, help="この数値を下げるとシグナルが出やすくなります（ダマシには注意）")
-adx_threshold = st.sidebar.slider("トレンド判定 ADX 閾値", min_value=15.0, max_value=30.0, value=float(st.session_state.get("adx_threshold", 20.0)), step=1.0, key="adx_threshold", on_change=save_user_settings, help="トレンド相場と判断するADXの基準値です")
-
-st.sidebar.markdown("---")
 st.sidebar.subheader("💰 松井証券トレード資金設定")
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, step=50000, key="account_balance", on_change=save_user_settings)
 quantity_wan = st.sidebar.number_input("注文数量 (万通貨)", min_value=0.0001, max_value=10.0, step=0.01, format="%.4f", key="quantity_wan", on_change=save_user_settings)
@@ -218,14 +209,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
-        # MultiIndexカラム対応（最新のyfinance仕様への安全対策）
         if isinstance(df.columns, pd.MultiIndex):
-            if 'Close' in df.columns.get_level_values(0):
-                df.columns = df.columns.get_level_values(0)
-            elif 'Close' in df.columns.get_level_values(1):
-                df.columns = df.columns.get_level_values(1)
-            else:
-                df.columns = [col[0] for col in df.columns]
+            df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
     except Exception:
         pass
 
@@ -329,7 +314,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         if len(df) > 3: df.iloc[-3:, df.columns.get_loc("Target")] = np.nan
 
         feature_cols = [c for c in df.columns if c != "Target"]
-        df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=feature_cols)
+        df = df.dropna(subset=feature_cols)
 
         if df.empty: return None
         return df
@@ -356,7 +341,7 @@ def get_mtf_trends(symbol: str) -> dict:
     return trends
 
 @st.cache_data(ttl=300, show_spinner=False)
-def run_backtest(X_bt, y_bt, test_len, threshold_pct):
+def run_backtest(X_bt, y_bt, test_len):
     cumulative_wins = []
     trade_count, correct_count = 0, 0
     max_valid_idx = len(X_bt) - 3
@@ -365,8 +350,6 @@ def run_backtest(X_bt, y_bt, test_len, threshold_pct):
 
     valid_test_len = min(test_len, max_valid_idx - 10)
     step_size = max(1, valid_test_len // 15)
-    
-    threshold = threshold_pct / 100.0
 
     for i in range(0, valid_test_len, step_size):
         idx = max_valid_idx - valid_test_len + i
@@ -377,24 +360,14 @@ def run_backtest(X_bt, y_bt, test_len, threshold_pct):
         y_sub = y_bt.iloc[:train_end][valid_train]
         if len(np.unique(y_sub)) < 2: continue
         
-        sub_model = RandomForestClassifier(n_estimators=100, max_depth=5, min_samples_leaf=3, class_weight="balanced", random_state=42)
+        sub_model = RandomForestClassifier(n_estimators=120, max_depth=5, min_samples_leaf=5, class_weight="balanced", random_state=42)
         sub_model.fit(X_bt.iloc[:train_end][valid_train], y_sub)
-        
-        probas = sub_model.predict_proba(X_bt.iloc[[idx]])[0]
-        prob_dict = dict(zip(sub_model.classes_, probas))
-        p_up = prob_dict.get(1, 0.0)
-        p_down = prob_dict.get(-1, 0.0)
-        
-        if p_up >= threshold: p = 1
-        elif p_down >= threshold: p = -1
-        else: p = 0
-        
+        p = sub_model.predict(X_bt.iloc[[idx]])[0]
         actual = y_bt.iloc[idx]
 
         if p != 0 and not pd.isna(actual):
             trade_count += 1
             if p == actual: correct_count += 1
-        
         current_win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
         cumulative_wins.append((i + 1, current_win_rate))
 
@@ -402,7 +375,7 @@ def run_backtest(X_bt, y_bt, test_len, threshold_pct):
     return cumulative_wins, win_rate, trade_count, correct_count
 
 @st.cache_data(ttl=60, show_spinner=False)
-def analyze_signal(df_current, df_higher, usdjpy_df, current_symbol, ui_ai_threshold, ui_adx_threshold):
+def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
     if df_current is None or len(df_current) < 50:
         return "HOLD", 50.0, "不明", {}
     try:
@@ -412,18 +385,13 @@ def analyze_signal(df_current, df_higher, usdjpy_df, current_symbol, ui_ai_thres
         train_mask = ~y.isna()
         X_train_full = X[train_mask]
         y_train_full = y[train_mask]
-        
-        valid_idx = X_train_full.dropna().index
-        X_train_full = X_train_full.loc[valid_idx]
-        y_train_full = y_train_full.loc[valid_idx]
-        
         X_train = X_train_full.iloc[-1000:] if len(X_train_full) > 1000 else X_train_full
         y_train = y_train_full.iloc[-1000:] if len(y_train_full) > 1000 else y_train_full
 
         if len(np.unique(y_train)) < 2:
             return "HOLD (分析不可: クラス不足)", 50.0, "判定不可", {}
 
-        model = RandomForestClassifier(n_estimators=100, max_depth=5, min_samples_leaf=3, class_weight="balanced", random_state=42)
+        model = RandomForestClassifier(n_estimators=120, max_depth=5, min_samples_leaf=5, class_weight="balanced", random_state=42)
         model.fit(X_train, y_train)
 
         importances = dict(zip(avail, model.feature_importances_))
@@ -451,7 +419,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df, current_symbol, ui_ai_thres
         else:
             latest_bb_width, avg_bb_width = 0.05, 0.05
             
-        is_squeezed = latest_bb_width < (avg_bb_width * 0.70) 
+        is_squeezed = latest_bb_width < (avg_bb_width * 0.75)
 
         htf_trend = "FLAT"
         if df_higher is not None and not df_higher.empty and "EMA_200" in df_higher.columns:
@@ -474,9 +442,9 @@ def analyze_signal(df_current, df_higher, usdjpy_df, current_symbol, ui_ai_thres
         is_near_support = (latest_price - recent_50_low) < (latest_atr * 0.8)
         is_near_resistance = (recent_50_high - latest_price) < (latest_atr * 0.8)
 
-        HIGH_THRESHOLD = ui_ai_threshold / 100.0
+        HIGH_THRESHOLD = 0.60
 
-        if latest_adx > ui_adx_threshold:
+        if latest_adx > 22.0:
             market_type = "トレンド相場"
             if prob_up >= HIGH_THRESHOLD and htf_trend != "DOWN":
                 if usdjpy_strong_down: status = "HOLD (ストッパー: ドル円急落中)"
@@ -495,9 +463,9 @@ def analyze_signal(df_current, df_higher, usdjpy_df, current_symbol, ui_ai_thres
             market_type = "レンジ相場"
             if is_squeezed: status = "HOLD (ブレイクアウト警戒)"
             else:
-                if (latest_price <= lower_band or latest_rsi <= 35.0) and prob_up >= 0.54:
+                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.56:
                     status = "BUY (レンジ逆張り)" if not usdjpy_strong_down else "HOLD (ストッパー: ドル円逆行)"
-                elif (latest_price >= upper_band or latest_rsi >= 65.0) and prob_down >= 0.54:
+                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.56:
                     status = "SELL (レンジ逆張り)" if not usdjpy_strong_up else "HOLD (ストッパー: ドル円逆行)"
                 else: status = "HOLD (レンジ内静観)"
         return status, confidence, market_type, importances
@@ -535,11 +503,7 @@ elif is_low_liquidity: st.warning("【低流動性時間帯】早朝のためス
 if data is None or len(data) < 10:
     st.error("データ取得に失敗しました。時間足を切り替えるか少し置いて再実行してください。")
 else:
-    market_status, confidence, market_type, importances = analyze_signal(
-        data, higher_tf_data, usdjpy_df=usdjpy_data, current_symbol=ticker,
-        ui_ai_threshold=st.session_state["ai_threshold"],
-        ui_adx_threshold=st.session_state["adx_threshold"]
-    )
+    market_status, confidence, market_type, importances = analyze_signal(data, higher_tf_data, usdjpy_df=usdjpy_data, current_symbol=ticker)
     if is_econ_indicator_time and (market_status.startswith("BUY") or market_status.startswith("SELL")):
         market_status = "HOLD (指標警戒帯)"
 
@@ -576,10 +540,8 @@ else:
     X_bt, y_bt = data[available_features], data["Target"]
     test_len = min(30, len(X_bt) - 10)
 
-    if test_len > 5: 
-        cumulative_wins, win_rate, trade_count, correct_count = run_backtest(X_bt, y_bt, test_len, st.session_state["ai_threshold"])
-    else: 
-        cumulative_wins, win_rate, trade_count, correct_count = [], 0.0, 0, 0
+    if test_len > 5: cumulative_wins, win_rate, trade_count, correct_count = run_backtest(X_bt, y_bt, test_len)
+    else: cumulative_wins, win_rate, trade_count, correct_count = [], 0.0, 0, 0
 
     latest_adx = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 25.0
     htf_close = latest_price
@@ -629,6 +591,7 @@ else:
     safe_single_units = max(100, min(int(allowed_loss_jpy / (sl_distance_pips * pip_value_per_unit)), 50000))
     safe_single_wan = round(safe_single_units / 10000.0, 4)
 
+    # 画面描画ブロック
     try:
         with st.container(border=True):
             m_head1, m_head2, m_head3, m_head4 = st.columns([1.2, 1.5, 1, 1])
@@ -641,10 +604,19 @@ else:
             m_head2.markdown("**AI総合判定 / 確信度**")
             m_head2.markdown(badge_html, unsafe_allow_html=True)
             
-            m_head3.metric("相場環境", market_type, "トレンド" if latest_adx > st.session_state["adx_threshold"] else "レンジ")
+            m_head3.metric("相場環境", market_type, "トレンド" if latest_adx > 22 else "レンジ")
             m_head4.metric("直近AI勝率", f"{win_rate:.1f}%" if trade_count > 0 else "N/A", f"{correct_count}勝 / {trade_count}戦")
     except TypeError:
-        pass
+        with st.container():
+            m_head1, m_head2, m_head3, m_head4 = st.columns([1.2, 1.5, 1, 1])
+            m_head1.metric("現在レート", f"{latest_price:{price_fmt}}")
+            if market_status.startswith("BUY"): badge_html = f'<div class="status-badge-buy">BUY 買い ({confidence:.1f}%)</div>'
+            elif market_status.startswith("SELL"): badge_html = f'<div class="status-badge-sell">SELL 売り ({confidence:.1f}%)</div>'
+            else: badge_html = f'<div class="status-badge-hold">{market_status}</div>'
+            m_head2.markdown("**AI総合判定 / 確信度**")
+            m_head2.markdown(badge_html, unsafe_allow_html=True)
+            m_head3.metric("相場環境", market_type, "トレンド" if latest_adx > 22 else "レンジ")
+            m_head4.metric("直近AI勝率", f"{win_rate:.1f}%" if trade_count > 0 else "N/A", f"{correct_count}勝 / {trade_count}戦")
 
     with st.container():
         sec1, sec2, sec3, sec4 = st.columns(4)
@@ -663,8 +635,8 @@ else:
     # ---------------------------------------------------------
     # 📑 メイン操作タブ
     # ---------------------------------------------------------
-    tab_repeat, tab_single, tab_speed, tab_chart, tab_scanner, tab_backtest = st.tabs([
-        "📋 リピート注文 (松井証券)", "🎯 デイトレ単発 (AI)", "⚡ スピード注文", "📈 チャート", "🔍 全ペアスキャン", "📊 バックテスト"
+    tab_repeat, tab_single, tab_speed, tab_chart, tab_scanner, tab_backtest, tab_metrics = st.tabs([
+        "📋 リピート注文 (松井証券)", "🎯 デイトレ単発 (AI)", "⚡ スピード注文", "📈 チャート", "🔍 全ペアスキャン", "📊 バックテスト", "📋 運用サマリー"
     ])
 
     with tab_repeat:
@@ -768,55 +740,67 @@ else:
         is_daily = "日足" in tf_label
         chart_x = df_chart.index.strftime("%Y-%m-%d" if is_daily else "%m-%d %H:%M")
 
-        fig = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.03)
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
         fig.add_trace(go.Candlestick(
             x=chart_x, open=clean_series(df_chart["Open"]), high=clean_series(df_chart["High"]),
             low=clean_series(df_chart["Low"]), close=clean_series(df_chart["Close"]), name="ローソク足"
-        ))
+        ), row=1, col=1)
 
         for col, color, width, dash in [("SMA_20", "orange", 1, "solid"), ("EMA_200", "#3498db", 1.5, "solid"), ("Upper_Band", "gray", 1, "dash"), ("Lower_Band", "gray", 1, "dash")]:
             if col in df_chart.columns:
-                fig.add_trace(go.Scatter(x=chart_x, y=clean_series(df_chart[col]), mode="lines", name=col, line=dict(color=color, width=width, dash=dash)))
+                fig.add_trace(go.Scatter(x=chart_x, y=clean_series(df_chart[col]), mode="lines", name=col, line=dict(color=color, width=width, dash=dash)), row=1, col=1)
         
         if market_status.startswith("BUY") or market_status.startswith("SELL"):
-            fig.add_hline(y=calc_tp, line_dash="dot", line_color="green", annotation_text="TP")
-            fig.add_hline(y=calc_sl, line_dash="dot", line_color="red", annotation_text="SL")
+            fig.add_hline(y=calc_tp, line_dash="dash", line_color="#2ECC71", annotation_text="TP (利確)", row=1, col=1)
+            fig.add_hline(y=calc_sl, line_dash="dash", line_color="#E74C3C", annotation_text="SL (損切)", row=1, col=1)
 
-        fig.update_layout(height=500, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
+        if "RSI" in df_chart.columns:
+            fig.add_trace(go.Scatter(x=chart_x, y=clean_series(df_chart["RSI"]), mode="lines", name="RSI", line=dict(color="#9b59b6", width=1.5)), row=2, col=1)
+
+        fig.add_hline(y=70, line_dash="dash", line_color="#e74c3c", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="#2ecc71", row=2, col=1)
+        fig.update_xaxes(type="category", nticks=8)
+        fig.update_layout(xaxis_rangeslider_visible=False, height=480, margin=dict(l=10, r=10, t=10, b=10), template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
 
     with tab_scanner:
-        st.subheader("🔍 AIシグナル 簡易スキャン")
-        st.write("※現在選択中の時間軸で他通貨ペアのシグナル状況を確認します（計算に少し時間がかかります）。")
-        if st.button("全通貨ペアをスキャンする", key="scan_btn"):
-            with st.spinner("スキャン実行中..."):
-                scan_results = []
-                for p_name, p_ticker in PAIRS.items():
-                    if p_ticker == ticker:
-                        continue 
-                    p_data = load_and_process_data(p_ticker, tf_config["period"], tf_config["interval"])
-                    if p_data is not None:
-                        p_stat, p_conf, p_type, _ = analyze_signal(
-                            p_data, higher_tf_data, usdjpy_data, p_ticker, 
-                            st.session_state["ai_threshold"], st.session_state["adx_threshold"]
-                        )
-                        scan_results.append({"通貨ペア": p_name, "AI判定": p_stat, "確信度": f"{p_conf:.1f}%", "相場環境": p_type})
-                
-                if scan_results:
-                    st.table(pd.DataFrame(scan_results))
-                else:
-                    st.info("データが取得できませんでした。")
+        st.subheader("🔍 全監視通貨ペア AI防衛スキャン")
+        if st.button("全通貨ペアをスキャン実行", use_container_width=True):
+            scan_results = []
+            progress_bar_scan = st.progress(0)
+            
+            with st.spinner("一括解析中..."):
+                sub_usdjpy_df = load_and_process_data("USDJPY=X", tf_config["period"], tf_config["interval"], tf_label)
+                for idx_p, (p_label, p_symbol) in enumerate(PAIRS.items()):
+                    sub_df = load_and_process_data(p_symbol, tf_config["period"], tf_config["interval"], tf_label)
+                    sub_htf = load_and_process_data(p_symbol, "1y", "1d", "日足 (スイング・環境認識用)")
+                    if sub_df is not None and len(sub_df) > 10:
+                        s_status, s_conf, s_mtype, _ = analyze_signal(sub_df, sub_htf, usdjpy_df=sub_usdjpy_df, current_symbol=p_symbol)
+                        scan_results.append({
+                            "通貨ペア": p_label, "相場タイプ": s_mtype, "AI判定": s_status,
+                            "確信度 (%)": round(s_conf, 1),
+                            "ADX": round(float(clean_series(sub_df["ADX"]).iloc[-1]) if "ADX" in sub_df.columns else 25.0, 1)
+                        })
+                    progress_bar_scan.progress(min(1.0, (idx_p + 1) / len(PAIRS)))
+
+            progress_bar_scan.empty()
+            if scan_results:
+                st.dataframe(pd.DataFrame(scan_results).sort_values(by="確信度 (%)", ascending=False), use_container_width=True)
 
     with tab_backtest:
-        st.subheader("📊 直近AI勝率（バックテスト）")
-        if len(cumulative_wins) > 0:
-            df_bt = pd.DataFrame(cumulative_wins, columns=["Trade", "WinRate"])
-            fig_bt = go.Figure()
-            fig_bt.add_trace(go.Scatter(x=df_bt["Trade"], y=df_bt["WinRate"], mode="lines+markers", name="勝率推移"))
-            fig_bt.update_layout(title="シミュレーション勝率推移", xaxis_title="トレード回数", yaxis_title="勝率 (%)", yaxis_range=[0, 100], height=400)
-            st.plotly_chart(fig_bt, use_container_width=True)
-        else:
-            st.info("テストを実行するのに十分なデータが蓄積されていません。")
+        st.subheader("📊 時系列ウォークフォワード検証")
+        if cumulative_wins:
+            st.line_chart(pd.DataFrame(cumulative_wins, columns=["ステップ", "適合率 (%)"]).set_index("ステップ"))
+            st.metric("トレード実行時 適合率", f"{win_rate:.1f}%" if trade_count > 0 else "N/A", f"{correct_count}勝 / {trade_count}回")
+
+    with tab_metrics:
+        st.subheader("📋 運用設定サマリー")
+        sum_c1, sum_c2 = st.columns(2)
+        sum_c1.metric("口座資金", f"{account_balance:,} 円")
+        sum_c1.metric("1回あたり数量", f"{quantity_wan} 万通貨 ({custom_quantity:,} 通貨)")
+        sum_c2.metric("分析通貨ペア", selected_label)
+        sum_c2.metric("分析時間足", tf_label)
 
 if auto_refresh:
-    st_autorefresh(interval=refresh_interval * 1000, key="data_autorefresh")
+    st.caption(f"🔄 自動更新有効 ({refresh_interval}秒間隔)")
+    st_autorefresh(interval=refresh_interval * 1000, limit=100, key="data_refresh")
