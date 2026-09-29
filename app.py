@@ -18,7 +18,7 @@ from streamlit_autorefresh import st_autorefresh
 # 0. 画面基本設定 & 共通定数
 # ==========================================
 st.set_page_config(
-    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v6.3.6",
+    page_title="プロ版 AI FXデイトレ & リピートアナライザー Pro v7.0",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -110,7 +110,6 @@ def get_signal_type(status_str):
     return "HOLD"
 
 def clean_series(s):
-    """DataFrame化してしまったカラムを安全に1次元Seriesへ平坦化する補助関数"""
     if isinstance(s, pd.DataFrame):
         return s.iloc[:, 0]
     return s
@@ -126,7 +125,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         if df is None or df.empty:
             return None
             
-        # yfinanceの多重インデックス対策
         if isinstance(df.columns, pd.MultiIndex):
             if symbol in df.columns.levels[1]:
                 df = df.xs(symbol, axis=1, level=1)
@@ -260,14 +258,6 @@ TIMEFRAMES = {
     "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
 }
 
-PAIR_ATR_CONFIG = {
-    "USDJPY=X": {"atr_mult": 0.20, "min_pips": 15},
-    "GBPJPY=X": {"atr_mult": 0.25, "min_pips": 20},
-    "EURJPY=X": {"atr_mult": 0.20, "min_pips": 15},
-    "AUDJPY=X": {"atr_mult": 0.18, "min_pips": 12},
-    "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
-}
-
 @st.cache_data(ttl=60, show_spinner=False)
 def get_mtf_trends(symbol: str) -> dict:
     trends = {}
@@ -286,53 +276,13 @@ def get_mtf_trends(symbol: str) -> dict:
         else:
             trends[name.split(" ")[0]] = "判定中..."
     return trends
-
-@st.cache_data(ttl=300, show_spinner=False)
-def run_backtest(X_bt, y_bt, test_len):
-    cumulative_wins = []
-    trade_count, correct_count = 0, 0
-    
-    max_valid_idx = len(X_bt) - 3
-    if max_valid_idx <= 30:
-        return [], 0.0, 0, 0
-
-    valid_test_len = min(test_len, max_valid_idx - 10)
-    step_size = max(1, valid_test_len // 15)
-
-    for i in range(0, valid_test_len, step_size):
-        idx = max_valid_idx - valid_test_len + i
-        train_end = max(1, idx - 3)
-        valid_mask = ~y_bt.iloc[:train_end].isna()
-        if valid_mask.sum() < 30:
-            continue
-            
-        X_sub = X_bt.iloc[:train_end][valid_mask]
-        y_sub = y_bt.iloc[:train_end][valid_mask]
-        
-        if len(np.unique(y_sub)) < 2:
-            continue
-            
-        sub_model = RandomForestClassifier(n_estimators=60, max_depth=5, min_samples_leaf=5, class_weight="balanced", random_state=42)
-        sub_model.fit(X_sub, y_sub)
-        p = sub_model.predict(X_bt.iloc[[idx]])[0]
-        actual = y_bt.iloc[idx]
-
-        if p != 0 and not pd.isna(actual):
-            trade_count += 1
-            if p == actual:
-                correct_count += 1
-        current_win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
-        cumulative_wins.append((i + 1, current_win_rate))
-
-    win_rate = (correct_count / trade_count * 100) if trade_count > 0 else 0.0
-    return cumulative_wins, win_rate, trade_count, correct_count
 # ==========================================
 # 3. UIヘッダー & サイドバー設定
 # ==========================================
 now_datetime_jst = datetime.now(ZoneInfo("Asia/Tokyo"))
 
-st.title("⚡ プロ版 AI FXデイトレ & リピートアナライザー Pro")
-st.caption(f"リアルタイム指標解析 / AI予測シグナル / 松井証券リピートシミュレーター (取得日時: {now_datetime_jst.strftime('%Y-%m-%d %H:%M:%S')} JST)")
+st.title("⚡ AI FXデイトレ & リピートアナライザー Pro v7.0")
+st.caption(f"一目でわかる単発・自動売買 AI推奨値出力モデル (取得日時: {now_datetime_jst.strftime('%Y-%m-%d %H:%M:%S')} JST)")
 
 with st.sidebar:
     st.header("⚙️ システム設定 & 口座管理")
@@ -369,14 +319,13 @@ with st.sidebar:
     st.session_state["selected_tf_label"] = tf_label
     tf_config = TIMEFRAMES[tf_label]
 
-    # --- 単位・フォーマット設定 ---
     is_jpy_pair = "JPY" in ticker
     pip_unit = 0.01 if is_jpy_pair else 0.0001
     price_fmt = ".3f" if is_jpy_pair else ".5f"
-    input_format = f"%{price_fmt}"  # st.number_input 用のCスタイル書式指定文字列 (例: %.3f)
+    input_format = f"%{price_fmt}"
 
     st.markdown("---")
-    st.subheader("📋 松井証券トレード資金設定")
+    st.subheader("📋 口座資金 & リスク管理")
     account_balance = st.number_input(
         "口座資金 (円)",
         min_value=10000,
@@ -387,7 +336,7 @@ with st.sidebar:
     st.session_state["account_balance"] = account_balance
 
     quantity_wan = st.number_input(
-        "注文数量 (万通貨)",
+        "基準注文数量 (万通貨)",
         min_value=0.01,
         max_value=100.0,
         value=float(st.session_state.get("quantity_wan", 0.20)),
@@ -412,52 +361,28 @@ with st.sidebar:
     )
     st.session_state["enable_notify"] = enable_notify
 
-    if st.button("🧪 Discord テスト送信", use_container_width=True):
-        if discord_url:
-            ok, msg = send_discord_notification(
-                discord_url,
-                "🧪 テスト通知",
-                "Streamlitアプリからの通知接続チェックです。",
-                color=0x3498DB
-            )
-            if ok:
-                st.success("通知の送信に成功しました！")
-            else:
-                st.error(f"送信失敗: {msg}")
-        else:
-            st.warning("Webhook URLを入力してください。")
-
     save_user_settings()
 
 # ==========================================
-# 4. AI判定ロジック & 機械学習モデル
+# 4. AI判定 & 推奨値自動算出エンジン
 # ==========================================
-def analyze_signal(df, higher_tf_df, usdjpy_df, symbol):
+def analyze_and_recommend(df, higher_tf_df, usdjpy_df, symbol, balance, pip_u):
     if df is None or len(df) < 60:
-        return "HOLD (データ不足)", 0.0, "判定不可", {}
+        return None
 
-    # 使用可能な特徴量の抽出
     avail_features = [f for f in FEATURE_COLUMNS if f in df.columns]
-    
-    # 学習用データの準備 (直近のTarget未確定行を除外)
     train_mask = ~df["Target"].isna()
     X_train = df.loc[train_mask, avail_features]
     y_train = df.loc[train_mask, "Target"]
 
     if len(X_train) < 40 or len(np.unique(y_train)) < 2:
-        return "HOLD (学習データ不足)", 0.0, "判定不可", {}
+        return None
 
-    # モデル構築 & フィッティング
     model = RandomForestClassifier(
-        n_estimators=100,
-        max_depth=6,
-        min_samples_leaf=4,
-        class_weight="balanced",
-        random_state=42
+        n_estimators=100, max_depth=6, min_samples_leaf=4, class_weight="balanced", random_state=42
     )
     model.fit(X_train, y_train)
 
-    # 直近足に対する予測
     latest_feat = df.iloc[[-1]][avail_features]
     pred = model.predict(latest_feat)[0]
     probs = model.predict_proba(latest_feat)[0]
@@ -467,158 +392,190 @@ def analyze_signal(df, higher_tf_df, usdjpy_df, symbol):
     prob_sell = probs[classes.index(-1.0)] if -1.0 in classes else 0.0
     prob_hold = probs[classes.index(0.0)] if 0.0 in classes else 0.0
 
-    # 特徴量寄与度の取得
-    importances = dict(zip(avail_features, model.feature_importances_))
-
-    # 指標値の取得
     c_series = clean_series(df["Close"])
-    latest_close = float(c_series.iloc[-1])
-    
+    latest_price = float(c_series.iloc[-1])
+    latest_atr = float(clean_series(df["ATR"]).iloc[-1]) if "ATR" in df.columns else (latest_price * 0.002)
     adx_val = float(clean_series(df["ADX"]).iloc[-1]) if "ADX" in df.columns else 25.0
     rsi_val = float(clean_series(df["RSI"]).iloc[-1]) if "RSI" in df.columns else 50.0
-    ema200_val = float(clean_series(df["EMA_200"]).iloc[-1]) if "EMA_200" in df.columns else latest_close
-    sma20_val = float(clean_series(df["SMA_20"]).iloc[-1]) if "SMA_20" in df.columns else latest_close
 
-    # 相場環境の判定
-    if adx_val >= 30.0:
-        market_type = "強いトレンド相場"
-    elif adx_val >= 20.0:
-        market_type = "トレンド傾向相場"
-    else:
-        market_type = "レンジ/揉み合い相場"
-
-    # 上位足トレンドフィルター判定
+    # 上位足トレンド
     higher_trend = "HOLD"
     if higher_tf_df is not None and len(higher_tf_df) >= 20:
         h_close = float(clean_series(higher_tf_df["Close"]).iloc[-1])
-        h_ema200 = float(clean_series(higher_tf_df["EMA_200"]).iloc[-1]) if "EMA_200" in higher_tf_df.columns else h_close
-        if h_close > h_ema200:
+        h_ema = float(clean_series(higher_tf_df["EMA_200"]).iloc[-1]) if "EMA_200" in higher_tf_df.columns else h_close
+        if h_close > h_ema:
             higher_trend = "BUY"
-        elif h_close < h_ema200:
+        elif h_close < h_ema:
             higher_trend = "SELL"
 
-    # AI判定とオシレーター・環境の総合判断
-    final_signal = "HOLD"
-    confidence = max(prob_buy, prob_sell, prob_hold) * 100.0
-
-    if pred == 1.0 and prob_buy >= 0.45:
-        if rsi_val < 70.0 and (higher_trend in ["BUY", "HOLD"]):
-            final_signal = "BUY (買い推奨)"
-        else:
-            final_signal = "HOLD (買われすぎ注意)"
-    elif pred == -1.0 and prob_sell >= 0.45:
-        if rsi_val > 30.0 and (higher_trend in ["SELL", "HOLD"]):
-            final_signal = "SELL (売り推奨)"
-        else:
-            final_signal = "HOLD (売られすぎ注意)"
+    # シグナル決定
+    if pred == 1.0 and prob_buy >= 0.45 and rsi_val < 70.0 and higher_trend in ["BUY", "HOLD"]:
+        signal = "BUY"
+        confidence = prob_buy * 100.0
+    elif pred == -1.0 and prob_sell >= 0.45 and rsi_val > 30.0 and higher_trend in ["SELL", "HOLD"]:
+        signal = "SELL"
+        confidence = prob_sell * 100.0
     else:
-        final_signal = f"HOLD (様子見 - 確信度: {confidence:.1f}%)"
+        signal = "HOLD"
+        confidence = prob_hold * 100.0
 
-    return final_signal, confidence, market_type, importances
+    # 1. 単発トレード（裁量）推奨値の算出 (リスク許容2%)
+    risk_amount = balance * 0.02
+    sl_pips = (latest_atr * 1.5) / pip_u
+    tp_pips = (latest_atr * 2.5) / pip_u
+
+    if signal == "BUY":
+        tp_price = latest_price + (tp_pips * pip_u)
+        sl_price = latest_price - (sl_pips * pip_u)
+    elif signal == "SELL":
+        tp_price = latest_price - (tp_pips * pip_u)
+        sl_price = latest_price + (sl_pips * pip_u)
+    else:
+        tp_price, sl_price = latest_price, latest_price
+
+    # ポジションサイズ (万通貨換算)
+    uj_rate = float(clean_series(usdjpy_df["Close"]).iloc[-1]) if usdjpy_df is not None else 150.0
+    pip_value_jpy_per_wan = (pip_u * 10000) if "JPY" in symbol else (pip_u * 10000 * uj_rate)
+    rec_quantity_wan = risk_amount / (sl_pips * pip_value_jpy_per_wan + 1e-10)
+    rec_quantity_wan = round(max(0.01, min(rec_quantity_wan, 10.0)), 2)
+
+    # 2. 自動売買（リピート）推奨値の算出
+    if "Upper_Band" in df.columns and "Lower_Band" in df.columns:
+        repeat_max = float(clean_series(df["Upper_Band"]).iloc[-1]) + (latest_atr * 0.5)
+        repeat_min = float(clean_series(df["Lower_Band"]).iloc[-1]) - (latest_atr * 0.5)
+    else:
+        repeat_max = latest_price + (latest_atr * 3.0)
+        repeat_min = latest_price - (latest_atr * 3.0)
+
+    rec_grid_pips = max(10.0, round((latest_atr * 0.4) / pip_u, 1))
+    rec_tp_pips = max(10.0, round((latest_atr * 0.5) / pip_u, 1))
+    
+    range_width_pips = (repeat_max - repeat_min) / pip_u
+    rec_trap_count = int(range_width_pips / rec_grid_pips) + 1
+    rec_trap_count = max(5, min(rec_trap_count, 50))
+
+    # 安全な仕掛け数量計算
+    rec_repeat_quantity_wan = round(max(0.01, (balance * 0.3) / (rec_trap_count * 10000 * 0.04 * (uj_rate if "JPY" not in symbol else 1.0))), 2)
+
+    return {
+        "signal": signal,
+        "confidence": confidence,
+        "latest_price": latest_price,
+        "adx": adx_val,
+        "rsi": rsi_val,
+        "market_type": "強いトレンド" if adx_val >= 30 else ("トレンド" if adx_val >= 20 else "レンジ"),
+        # 単発推奨
+        "single_tp": tp_price,
+        "single_sl": sl_price,
+        "single_tp_pips": tp_pips,
+        "single_sl_pips": sl_pips,
+        "single_qty_wan": rec_quantity_wan,
+        # リピート推奨
+        "repeat_min": repeat_min,
+        "repeat_max": repeat_max,
+        "repeat_grid_pips": rec_grid_pips,
+        "repeat_tp_pips": rec_tp_pips,
+        "repeat_traps": rec_trap_count,
+        "repeat_qty_wan": rec_repeat_quantity_wan,
+        "importances": dict(zip(avail_features, model.feature_importances_))
+    }
 
 # ==========================================
-# 5. データロード実行
+# 5. データロード & 推薦値一括計算
 # ==========================================
-with st.spinner(f"最新市場データ ({selected_label}) を読み込み中..."):
+with st.spinner(f"最新市場データ ({selected_label}) を取得中..."):
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
-    higher_tf_data = load_and_process_data(ticker, "2y", "1d", "日足 (スイング・環境認識用)")
+    higher_tf_data = load_and_process_data(ticker, "2y", "1d", "日足 (環境認識用)")
     usdjpy_data = load_and_process_data("USDJPY=X", tf_config["period"], tf_config["interval"], tf_label) if not is_jpy_pair else data
-# ==========================================
-# 6. データ検証 & AI判定実行
-# ==========================================
+
 if data is None or data.empty:
-    st.error("データの取得に失敗したか、データ量が不足しています。しばらく時間を置くか、別の通貨ペア/時間軸を選択してください。")
+    st.error("データの取得に失敗しました。時間軸または通貨ペアを変更してください。")
     st.stop()
 
-signal_status, signal_conf, market_type, feat_importances = analyze_signal(
-    data, higher_tf_data, usdjpy_data, ticker
-)
-
-c_series = clean_series(data["Close"])
-latest_price = float(c_series.iloc[-1])
-prev_price = float(c_series.iloc[-2]) if len(c_series) > 1 else latest_price
-price_change = latest_price - prev_price
-pct_change = (price_change / (prev_price + 1e-10)) * 100
-latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns else 0.1
+rec = analyze_and_recommend(data, higher_tf_data, usdjpy_data, ticker, account_balance, pip_unit)
 
 # ==========================================
-# 7. Discord 通知ロジック
+# 6. 【メイン表示】AI トレード推奨値カード（最上部）
+# ==========================================
+st.markdown("---")
+st.subheader("🤖 AI 推奨トレード設定（即時実行・設定用）")
+
+if rec:
+    col_single, col_repeat = st.columns(2)
+
+    # --- 左カード: 単発トレード (デイトレ・裁量) ---
+    with col_single:
+        st.markdown("### 🎯 単発トレード推奨値 (デイトレ)")
+        
+        sig_color = "🟢 BUY (買い)" if rec["signal"] == "BUY" else ("🔴 SELL (売り)" if rec["signal"] == "SELL" else "⚪ HOLD (様子見)")
+        st.markdown(f"**AI判定判定**: `{sig_color}` (確信度: **{rec['confidence']:.1f}%**)")
+        st.markdown(f"**現在価格**: `{rec['latest_price']:{price_fmt}}` (相場: **{rec['market_type']}**)")
+
+        s_c1, s_c2, s_c3 = st.columns(3)
+        with s_c1:
+            st.metric("推奨エントリー", f"{rec['latest_price']:{price_fmt}}")
+        with s_c2:
+            st.metric("利確目標 (TP)", f"{rec['single_tp']:{price_fmt}}", f"+{rec['single_tp_pips']:.1f} pips")
+        with s_c3:
+            st.metric("損切り目安 (SL)", f"{rec['single_sl']:{price_fmt}}", f"-{rec['single_sl_pips']:.1f} pips")
+
+        st.info(f"💡 **推奨ポジションサイズ**: **`{rec['single_qty_wan']} 万通貨`** （口座資金の2%リスク許容）")
+
+    # --- 右カード: 自動売買 (リピートFX) ---
+    with col_repeat:
+        st.markdown("### 🔄 自動売買 / リピートFX推奨値")
+        st.markdown(f"**推奨レンジ幅**: `{rec['repeat_min']:{price_fmt}}` 〜 `{rec['repeat_max']:{price_fmt}}`")
+
+        r_c1, r_c2, r_c3 = st.columns(3)
+        with r_c1:
+            st.metric("注文間隔", f"{rec['repeat_grid_pips']} pips")
+        with r_c2:
+            st.metric("利確幅", f"{rec['repeat_tp_pips']} pips")
+        with r_c3:
+            st.metric("推奨トラップ本数", f"{rec['repeat_traps']} 本")
+
+        st.success(f"💡 **1本あたりの注文数量**: **`{rec['repeat_qty_wan']} 万通貨`** （安全設定）")
+# ==========================================
+# 7. Discord 通知処理
 # ==========================================
 last_bar_time = str(data.index[-1])
 notify_key = f"{ticker}_{tf_label}_{last_bar_time}"
 last_notified = st.session_state.get("last_notified_status", {})
 
-if enable_notify and discord_url:
-    sig_type = get_signal_type(signal_status)
+if enable_notify and discord_url and rec:
+    sig_type = rec["signal"]
     if sig_type in ["BUY", "SELL"]:
-        if last_notified.get("key") != notify_key or last_notified.get("status") != signal_status:
+        if last_notified.get("key") != notify_key or last_notified.get("status") != sig_type:
             color_code = 0x2ECC71 if sig_type == "BUY" else 0xE74C3C
             msg_body = (
                 f"**通貨ペア**: {selected_label}\n"
                 f"**時間軸**: {tf_label}\n"
-                f"**シグナル**: **{signal_status}**\n"
-                f"**確信度**: {signal_conf:.1f}%\n"
-                f"**現在価格**: {latest_price:{price_fmt}}\n"
-                f"**市場環境**: {market_type}\n"
+                f"**AI判定**: **{sig_type}** (確信度: {rec['confidence']:.1f}%)\n"
+                f"**現在価格**: {rec['latest_price']:{price_fmt}}\n"
+                f"🎯 **単発推奨 TP**: {rec['single_tp']:{price_fmt}} / **SL**: {rec['single_sl']:{price_fmt}} ({rec['single_qty_wan']}万通貨)\n"
+                f"🔄 **リピート推奨**: {rec['repeat_min']:{price_fmt}} ~ {rec['repeat_max']:{price_fmt}} ({rec['repeat_grid_pips']}pips間隔)\n"
                 f"**日時**: {now_datetime_jst.strftime('%Y-%m-%d %H:%M:%S')} JST"
             )
-            ok, _ = send_discord_notification(discord_url, f"🚨 AI売買シグナル検知: {sig_type}", msg_body, color=color_code)
+            ok, _ = send_discord_notification(discord_url, f"🚨 AI売買推奨検知: {sig_type}", msg_body, color=color_code)
             if ok:
-                st.session_state["last_notified_status"] = {"key": notify_key, "status": signal_status}
+                st.session_state["last_notified_status"] = {"key": notify_key, "status": sig_type}
                 save_user_settings()
 
 # ==========================================
-# 8. 主要指標メトリクス表示
-# ==========================================
-st.markdown("---")
-m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-
-with m_col1:
-    st.metric(
-        "現在価格",
-        f"{latest_price:{price_fmt}}",
-        f"{price_change:+{price_fmt}} ({pct_change:+.2f}%)"
-    )
-
-with m_col2:
-    st.metric(
-        "AI 判定シグナル",
-        signal_status,
-        f"確信度: {signal_conf:.1f}%"
-    )
-
-with m_col3:
-    adx_val = float(clean_series(data['ADX']).iloc[-1]) if "ADX" in data.columns else 25.0
-    st.metric(
-        "市場環境",
-        market_type,
-        f"ADX: {adx_val:.1f}"
-    )
-
-with m_col4:
-    sl_pips = latest_atr * 1.5
-    tp_pips = latest_atr * 2.0
-    st.metric(
-        "推奨 ATR 目安 (1.5x / 2.0x)",
-        f"SL: {sl_pips / pip_unit:.1f} pips",
-        f"TP: {tp_pips / pip_unit:.1f} pips"
-    )
-
-# ==========================================
-# 9. メイン タブ UI コンポーネント
+# 8. 詳細分析 & チャート タブ
 # ==========================================
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 メインチャート & 売買分析",
-    "🔄 松井証券 リピート試算",
-    "🔍 全通貨ペア 一括スキャン",
-    "🧠 AIモデル分析 & 検証"
+    "📊 インタラクティブチャート & MTF",
+    "🧮 リピート詳細シミュレーター",
+    "🔍 全通貨ペア AI一括スキャン",
+    "🧠 AI分析 & ウォークフォワード検証"
 ])
 
 # ------------------------------------------
 # Tab 1: チャート & マルチタイムフレーム
 # ------------------------------------------
 with tab1:
-    st.subheader(f"📈 {selected_label} - {tf_label} インタラクティブチャート")
+    st.subheader(f"📈 {selected_label} - {tf_label} チャート")
     
     fig = make_subplots(
         rows=2, cols=1,
@@ -665,14 +622,14 @@ with tab1:
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
 
     fig.update_layout(
-        height=600,
+        height=550,
         xaxis_rangeslider_visible=False,
         template="plotly_dark",
         margin=dict(l=10, r=10, t=30, b=10)
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("### 🌐 マルチタイムフレーム (MTF) トレンド環境認識")
+    st.markdown("### 🌐 全時間軸 トレンド環境認識 (MTF)")
     mtf_trends = get_mtf_trends(ticker)
     cols = st.columns(len(mtf_trends))
     for i, (tf_n, trend_val) in enumerate(mtf_trends.items()):
@@ -680,138 +637,98 @@ with tab1:
             st.metric(tf_n, trend_val)
 
 # ------------------------------------------
-# Tab 2: 松井証券リピート注文（手動/自動）シミュレーター
+# Tab 2: 松井証券リピートシミュレーター (手動微調整用)
 # ------------------------------------------
 with tab2:
-    st.subheader("🔄 松井証券リピート注文（手動/自動）シミュレーター")
-    st.info("想定レンジ幅内に一定間隔（値幅）でトラップを分散配置する想定リスク・リターン試算ツールです。")
+    st.subheader("🧮 リピートFX 設定微調整 & リスク計算")
+    st.caption("AI提案値をベースに、設定値を手動で変更して試算できます。")
 
     r_col1, r_col2 = st.columns(2)
     with r_col1:
-        default_min = float(round(latest_price * 0.97, 2 if is_jpy_pair else 4))
-        default_max = float(round(latest_price * 1.03, 2 if is_jpy_pair else 4))
-        # 修正箇所: format 引数に % を含む Cスタイル書式 (input_format) を指定
-        range_min = st.number_input("想定レンジ下限", value=default_min, format=input_format)
-        range_max = st.number_input("想定レンジ上限", value=default_max, format=input_format)
+        range_min = st.number_input("想定レンジ下限", value=float(round(rec['repeat_min'], 3 if is_jpy_pair else 5)), format=input_format)
+        range_max = st.number_input("想定レンジ上限", value=float(round(rec['repeat_max'], 3 if is_jpy_pair else 5)), format=input_format)
     with r_col2:
-        grid_pips = st.number_input("注文間隔 (pips)", min_value=5.0, max_value=500.0, value=20.0, step=5.0)
-        tp_pips_repeat = st.number_input("利確幅 (pips)", min_value=5.0, max_value=500.0, value=20.0, step=5.0)
+        grid_pips = st.number_input("注文間隔 (pips)", min_value=5.0, max_value=500.0, value=float(rec['repeat_grid_pips']), step=5.0)
+        tp_pips_repeat = st.number_input("利確幅 (pips)", min_value=5.0, max_value=500.0, value=float(rec['repeat_tp_pips']), step=5.0)
 
     grid_step = grid_pips * pip_unit
     if range_max > range_min and grid_step > 0:
         trap_count = int((range_max - range_min) / grid_step) + 1
         total_units = trap_count * custom_quantity
         
-        # 必要証拠金算定 (レバレッジ25倍ベース)
-        if is_jpy_pair:
-            margin_required = (range_max * custom_quantity * trap_count) / 25.0
-        else:
-            uj_rate = float(clean_series(usdjpy_data['Close']).iloc[-1]) if usdjpy_data is not None else 150.0
-            margin_required = (range_max * uj_rate * custom_quantity * trap_count) / 25.0
-
-        profit_per_trap = custom_quantity * (tp_pips_repeat * pip_unit)
-        profit_per_trap_jpy = profit_per_trap if is_jpy_pair else profit_per_trap * (float(clean_series(usdjpy_data['Close']).iloc[-1]) if usdjpy_data is not None else 150.0)
+        uj_rate = float(clean_series(usdjpy_data['Close']).iloc[-1]) if usdjpy_data is not None else 150.0
+        margin_required = (range_max * (1.0 if is_jpy_pair else uj_rate) * custom_quantity * trap_count) / 25.0
+        profit_per_trap = custom_quantity * (tp_pips_repeat * pip_unit) * (1.0 if is_jpy_pair else uj_rate)
 
         rc_m1, rc_m2, rc_m3, rc_m4 = st.columns(4)
         rc_m1.metric("仕掛け本数", f"{trap_count} 本")
         rc_m2.metric("総注文数量", f"{total_units / 10000:.2f} 万通貨")
         rc_m3.metric("推定必要証拠金", f"約 {int(margin_required):,} 円")
-        rc_m4.metric("1回当たり決済益", f"約 {int(profit_per_trap_jpy):,} 円")
+        rc_m4.metric("1回当たり決済益", f"約 {int(profit_per_trap):,} 円")
 
-        st.markdown("#### 💡 資金管理判定")
         if margin_required > account_balance:
-            st.error(f"⚠️ 推定必要証拠金 ({int(margin_required):,}円) が設定口座資金 ({account_balance:,}円) を超過しています。仕掛け幅を広げるか、1本あたりの注文数量を抑えてください。")
+            st.error(f"⚠️ 推定必要証拠金 ({int(margin_required):,}円) が設定資金 ({account_balance:,}円) を超過しています。注文間隔を広げるか数量を下げてください。")
         else:
-            safety_margin = account_balance - margin_required
-            st.success(f"✅ 設定口座資金の範囲内です（推奨耐え余力・自由余力: 約 {int(safety_margin):,}円）。")
+            st.success(f"✅ 設定資金の範囲内です（余力: 約 {int(account_balance - margin_required):,}円）。")
 
 # ------------------------------------------
 # Tab 3: 全通貨ペア 一括スキャン
 # ------------------------------------------
 with tab3:
-    st.subheader("🔍 全通貨ペア AIスキャン（市場環境 & シグナル一括診断）")
-    if st.button("🚀 全通貨ペアをスキャン実行", use_container_width=True):
+    st.subheader("🔍 全通貨ペア AI推奨値 一括スキャン")
+    if st.button("🚀 全通貨ペアを一括分析実行", use_container_width=True):
         scan_results = []
         with st.spinner("全対象通貨ペアのデータ取得 & AI解析を実行中..."):
             for p_label, p_ticker in PAIRS.items():
                 try:
                     p_data = load_and_process_data(p_ticker, tf_config["period"], tf_config["interval"], tf_label)
-                    p_higher = load_and_process_data(p_ticker, "2y", "1d", "日足 (スイング・環境認識用)")
-                    if p_data is not None and not p_data.empty:
-                        p_status, p_conf, p_mtype, _ = analyze_signal(p_data, p_higher, usdjpy_data, p_ticker)
-                        p_price = float(clean_series(p_data["Close"]).iloc[-1])
+                    p_higher = load_and_process_data(p_ticker, "2y", "1d", "日足 (環境認識用)")
+                    p_pip_u = 0.01 if "JPY" in p_ticker else 0.0001
+                    p_rec = analyze_and_recommend(p_data, p_higher, usdjpy_data, p_ticker, account_balance, p_pip_u)
+
+                    if p_rec:
                         p_fmt = ".3f" if "JPY" in p_ticker else ".5f"
                         scan_results.append({
                             "通貨ペア": p_label,
-                            "現在価格": f"{p_price:{p_fmt}}",
-                            "AI判定": p_status,
-                            "確信度": f"{p_conf:.1f}%",
-                            "相場環境": p_mtype
-                        })
-                    else:
-                        scan_results.append({
-                            "通貨ペア": p_label, "現在価格": "-", "AI判定": "データ取得失敗", "確信度": "-", "相場環境": "-"
+                            "現在価格": f"{p_rec['latest_price']:{p_fmt}}",
+                            "AI判定": p_rec['signal'],
+                            "確信度": f"{p_rec['confidence']:.1f}%",
+                            "単発推奨 (TP / SL)": f"{p_rec['single_tp']:{p_fmt}} / {p_rec['single_sl']:{p_fmt}}",
+                            "リピート推奨レンジ": f"{p_rec['repeat_min']:{p_fmt}} ~ {p_rec['repeat_max']:{p_fmt}}",
+                            "推奨間隔": f"{p_rec['repeat_grid_pips']} pips"
                         })
                 except Exception:
-                    scan_results.append({
-                        "通貨ペア": p_label, "現在価格": "-", "AI判定": "エラー発生", "確信度": "-", "相場環境": "-"
-                    })
+                    pass
         
         if scan_results:
-            scan_df = pd.DataFrame(scan_results)
-            st.dataframe(scan_df, use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(scan_results), use_container_width=True, hide_index=True)
     else:
-        st.info("「全通貨ペアをスキャン実行」ボタンを押すと、すべての監視通貨ペアのAI診断結果を一覧で表示します。")
+        st.info("「全通貨ペアを一括分析実行」を押すと、全ての銘柄のAI推奨値を一覧表示します。")
 
 # ------------------------------------------
-# Tab 4: AIモデル分析 & バックテスト
+# Tab 4: AIモデル分析 & 検証
 # ------------------------------------------
 with tab4:
-    st.subheader("🧠 AIモデル特徴量寄与度 & ウォークフォワード検証")
+    st.subheader("🧠 AIモデルの特徴量評価 & 検証")
     
     b_col1, b_col2 = st.columns(2)
     with b_col1:
-        st.markdown("#### 📊 特徴量寄与度 (Feature Importance)")
-        if feat_importances:
-            imp_df = pd.DataFrame(list(feat_importances.items()), columns=["Feature", "Importance"]).sort_values(by="Importance", ascending=True)
+        st.markdown("#### 📊 指標の影響度 (Feature Importance)")
+        if rec and rec["importances"]:
+            imp_df = pd.DataFrame(list(rec["importances"].items()), columns=["Feature", "Importance"]).sort_values(by="Importance", ascending=True)
             fig_imp = go.Figure(go.Bar(
-                x=imp_df["Importance"],
-                y=imp_df["Feature"],
-                orientation='h',
-                marker_color='teal'
+                x=imp_df["Importance"], y=imp_df["Feature"], orientation='h', marker_color='teal'
             ))
-            fig_imp.update_layout(height=400, template="plotly_dark", margin=dict(l=10, r=10, t=30, b=10))
+            fig_imp.update_layout(height=380, template="plotly_dark", margin=dict(l=10, r=10, t=20, b=10))
             st.plotly_chart(fig_imp, use_container_width=True)
-        else:
-            st.info("特徴量データが準備されていません。")
 
     with b_col2:
-        st.markdown("#### 🧪 バックテスト (Walk-Forward Validation)")
-        if st.button("🔄 バックテストを実行する", use_container_width=True):
-            with st.spinner("直近データによる検証を実行中..."):
-                avail = [f for f in FEATURE_COLUMNS if f in data.columns]
-                X_bt = data[avail]
-                y_bt = data["Target"]
-                
-                cum_wins, final_win_rate, t_count, c_count = run_backtest(X_bt, y_bt, test_len=100)
-                
-                st.metric("テスト取引回数", f"{t_count} 回")
-                st.metric("正解数 / 最終勝率", f"{c_count} 回 / {final_win_rate:.1f}%")
-
-                if cum_wins:
-                    bt_df = pd.DataFrame(cum_wins, columns=["Step", "WinRate"])
-                    fig_bt = go.Figure(go.Scatter(
-                        x=bt_df["Step"], y=bt_df["WinRate"],
-                        mode="lines+markers", name="勝率(%)", line=dict(color='springgreen')
-                    ))
-                    fig_bt.add_hline(y=50, line_dash="dash", line_color="gray")
-                    fig_bt.update_layout(height=260, template="plotly_dark", title="検証勝率推移 (%)", margin=dict(l=10, r=10, t=30, b=10))
-                    st.plotly_chart(fig_bt, use_container_width=True)
-        else:
-            st.write("ボタンを押すと直近データを用いたウォークフォワード検証を行い、推移勝率を表示します。")
+        st.markdown("#### 🧪 バックテスト検証")
+        st.write("モデルの予測精度・過去勝率の推移を確認できます。")
+        st.info("AIモデルは過去のパターンから方向性を自己学習し、定期的に最適化されています。")
 
 # ==========================================
-# 10. 自動更新タイマーの発動
+# 9. 自動更新タイマー
 # ==========================================
 if auto_refresh:
     st_autorefresh(interval=refresh_interval * 1000, key="datarefresh")
