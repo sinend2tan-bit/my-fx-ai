@@ -135,9 +135,6 @@ def clean_series(s):
 # 2. 事前警戒イベント＆タイムゾーン計算
 # ==========================================
 def get_upcoming_market_events(now_jst, is_summer):
-    """
-    現在のJST時刻から、直近の警戒イベント（指標発表・市場オープン）までの残り時間を算出
-    """
     h, m = now_jst.hour, now_jst.minute
     current_total_min = h * 60 + m
 
@@ -287,7 +284,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df
     except Exception:
         return None
-
 # ==========================================
 # 4. マルチタイムフレーム＆AI分析ロジック
 # ==========================================
@@ -465,6 +461,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         return status, confidence, market_type, importances
     except Exception:
         return "HOLD", 50.0, "不明", {}
+
 # ==========================================
 # 5. メインアプリUI・事前察知ボード描画
 # ==========================================
@@ -544,9 +541,6 @@ else:
     latest_price = float(c_close.iloc[-1])
     latest_bar_time = str(data.index[-1])
 
-    # ---------------------------------------------------------
-    # ⚠️ 【事前察知・警戒機能】イベントカウントダウン & ボラ爆発予兆
-    # ---------------------------------------------------------
     upcoming_events = get_upcoming_market_events(now_datetime_jst, is_summer_time)
     next_ev = upcoming_events[0]
 
@@ -574,7 +568,6 @@ else:
             else:
                 st.success("🌊 ボラティリティ: 正常レンジ内")
 
-    # ヘッダー描画
     with st.container():
         m_head1, m_head2, m_head3, m_head4 = st.columns([1.2, 1.5, 1, 1])
         m_head1.metric("現在レート", f"{latest_price:{price_fmt}}")
@@ -635,7 +628,7 @@ else:
     ai_recommended_width = int(max(round(raw_atr_pips * atr_cfg["atr_mult"], 1), atr_cfg["min_pips"]))
 
     # ---------------------------------------------------------
-    # 【修正箇所】リピート注文タブ
+    # 【修正完了箇所】リピート注文タブ
     # ---------------------------------------------------------
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）最適化ヘルパー")
@@ -647,22 +640,28 @@ else:
         # 松井証券の入力桁数（ピップ単位）に合致させる計算
         p_decimals = 2 if is_jpy_pair else 4
         base_price = round(latest_price, p_decimals)
-        grid_width_val = ai_recommended_width * pip_unit
+        grid_width_val = round(ai_recommended_width * pip_unit, p_decimals)
 
-        half_grids_down = max_allowable_grids // 2
-        half_grids_up = max_allowable_grids - half_grids_down
+        # 注文本数 N に対する区間数 (間隔) は N - 1 (植木算)
+        target_grids = max(2, max_allowable_grids)
+        total_intervals = target_grids - 1  # 6本なら5区間
 
-        rep_lower = round(base_price - (half_grids_down * grid_width_val), p_decimals)
-        rep_upper = round(base_price + (half_grids_up * grid_width_val), p_decimals)
+        half_intervals_down = total_intervals // 2
+        half_intervals_up = total_intervals - half_intervals_down
+
+        # 下限値を基準にし、丸め誤差が発生しないよう整数ステップで上限値を正確に算出
+        rep_lower = round(base_price - (half_intervals_down * grid_width_val), p_decimals)
+        rep_upper = round(rep_lower + (total_intervals * grid_width_val), p_decimals)
 
         buffer_val = max(latest_atr * 1.5, 0.4 if is_jpy_pair else 0.04)
         rep_buy_stop = round(rep_lower - buffer_val, p_decimals)
         rep_sell_stop = round(rep_upper + buffer_val, p_decimals)
         buffer_pips = round(buffer_val / pip_unit, 1)
 
-        calculated_grids = int(round(abs(rep_upper - rep_lower) / grid_width_val))
+        # 松井証券の注文本数計算式: (上限 - 下限) / 注文値幅 + 1
+        calculated_grids = int(round((rep_upper - rep_lower) / grid_width_val)) + 1
 
-        st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本** (算出レンジ: {calculated_grids}本分)")
+        st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本** (算出レンジ設定: **{calculated_grids}本分**)")
 
         rep_c1, rep_c2 = st.columns(2)
         with rep_c1:
