@@ -15,7 +15,7 @@ from sklearn.ensemble import RandomForestClassifier
 from streamlit_autorefresh import st_autorefresh
 
 # ==========================================
-# 0. 画面基本設定 & CSSデザイン定義（ハイコントラスト化）
+# 0. 画面基本設定 & CSSデザイン定義
 # ==========================================
 st.set_page_config(
     page_title="AI FX デイトレ & リピートアナライザー Pro",
@@ -26,20 +26,25 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1280px; }
-    label[data-testid="stWidgetLabel"] p { font-size: 1.05rem !important; font-weight: 700 !important; color: #0f172a !important; }
-    [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 700 !important; color: #1e293b !important; }
-    [data-testid="stMetricValue"] { font-size: 1.7rem !important; font-weight: 800 !important; color: #0f172a !important; }
-    [data-testid="stCaptionContainer"], .stCaption p { font-size: 0.95rem !important; color: #334155 !important; font-weight: 600 !important; }
+    
+    /* ライト/ダークモードに自動追従するよう、文字色の固定指定を削除しました */
+    label[data-testid="stWidgetLabel"] p { font-size: 1.05rem !important; font-weight: 700 !important; }
+    [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 700 !important; }
+    [data-testid="stMetricValue"] { font-size: 1.7rem !important; font-weight: 800 !important; }
+    [data-testid="stCaptionContainer"], .stCaption p { font-size: 0.95rem !important; font-weight: 600 !important; }
+    
     .status-badge-buy { background-color: #15803d; color: #ffffff; border: 1px solid #16a34a; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 1.15rem; display: inline-block; }
     .status-badge-sell { background-color: #b91c1c; color: #ffffff; border: 1px solid #dc2626; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 1.15rem; display: inline-block; }
     .status-badge-hold { background-color: #854d0e; color: #ffffff; border: 1px solid #ca8a04; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 1.15rem; display: inline-block; }
-    .param-box { background-color: #1e293b !important; border-left: 6px solid #3b82f6; padding: 18px; border-radius: 8px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 1.05rem; line-height: 1.8; color: #f8fafc !important; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+    
+    .param-box { background-color: rgba(30, 41, 59, 0.8) !important; border-left: 6px solid #3b82f6; padding: 18px; border-radius: 8px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 1.05rem; line-height: 1.8; color: #f8fafc !important; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
     .param-box b.label-title { color: #94a3b8 !important; }
-    .param-box code { font-size: 1.1rem !important; font-weight: 700 !important; padding: 2px 8px !important; background-color: #334155 !important; color: #38bdf8 !important; border: 1px solid #475569; border-radius: 4px; }
+    .param-box code { font-size: 1.1rem !important; font-weight: 700 !important; padding: 2px 8px !important; background-color: rgba(51, 65, 85, 0.8) !important; color: #38bdf8 !important; border: 1px solid #475569; border-radius: 4px; }
     .param-box-buy { border-left-color: #22c55e !important; }
     .param-box-sell { border-left-color: #ef4444 !important; }
+    
     .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab"] { padding: 10px 18px; font-size: 1.0rem !important; font-weight: 700; color: #334155 !important; border-radius: 6px 6px 0 0; }
+    .stTabs [data-baseweb="tab"] { padding: 10px 18px; font-size: 1.0rem !important; font-weight: 700; border-radius: 6px 6px 0 0; }
     .stTabs [aria-selected="true"] { color: #0284c7 !important; border-bottom-color: #0284c7 !important; }
 </style>
 """, unsafe_allow_html=True)
