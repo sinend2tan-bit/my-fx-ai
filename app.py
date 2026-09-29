@@ -15,15 +15,15 @@ from sklearn.ensemble import RandomForestClassifier
 from streamlit_autorefresh import st_autorefresh
 
 # ==========================================
-# 0. 画面基本設定 & CSSデザイン定義（iPad視認性最適化）
+# 0. 画面基本設定 & CSSデザイン定義（ハイコントラスト化）
 # ==========================================
 st.set_page_config(
-    page_title="AI FX デイトレ & リピートアナライザー Pro v6.3.5",
+    page_title="AI FX デイトレ & リピートアナライザー Pro v6.3.6",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# iPad・高解像度端末向けのカスタムCSS
+# iPad・白背景/黒背景の双方に対応したハイコントラストCSS
 st.markdown("""
 <style>
     /* 全体フォント・余白調整 */
@@ -33,47 +33,39 @@ st.markdown("""
         max-width: 1280px;
     }
     
-    /* 入力フォーム・セレクトボックスのラベル文字を大きく見やすく */
+    /* 入力フォーム・セレクトボックスのラベル文字（濃色でくっきり表示） */
     label[data-testid="stWidgetLabel"] p {
         font-size: 1.05rem !important;
-        font-weight: 600 !important;
-        color: #e0e0e0 !important;
+        font-weight: 700 !important;
+        color: #0f172a !important;
     }
 
     /* メトリクス（数値の上の項目名）の視認性向上 */
     [data-testid="stMetricLabel"] {
         font-size: 1.0rem !important;
-        font-weight: 600 !important;
-        color: #d1d5db !important;
+        font-weight: 700 !important;
+        color: #1e293b !important;
     }
     
     /* メトリクス（数値自体）の強調 */
     [data-testid="stMetricValue"] {
         font-size: 1.7rem !important;
-        font-weight: 700 !important;
+        font-weight: 800 !important;
+        color: #0f172a !important;
     }
 
-    /* キャプション（注意書き・補足文）の文字拡大とカラー明確化 */
+    /* キャプション（注意書き・補足文）の同化防止 */
     [data-testid="stCaptionContainer"], .stCaption p {
         font-size: 0.95rem !important;
-        color: #d0d7de !important;
-        font-weight: 500 !important;
-    }
-    
-    /* カードデザインの共通化 */
-    .custom-card {
-        background-color: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        border-radius: 10px;
-        padding: 16px;
-        margin-bottom: 12px;
+        color: #334155 !important;
+        font-weight: 600 !important;
     }
     
     /* ステータスバッジ */
     .status-badge-buy {
-        background-color: #0e3a1e;
-        color: #2ecc71;
-        border: 1px solid #2ecc71;
+        background-color: #15803d;
+        color: #ffffff;
+        border: 1px solid #16a34a;
         padding: 8px 16px;
         border-radius: 6px;
         font-weight: bold;
@@ -81,9 +73,9 @@ st.markdown("""
         display: inline-block;
     }
     .status-badge-sell {
-        background-color: #3a1414;
-        color: #e74c3c;
-        border: 1px solid #e74c3c;
+        background-color: #b91c1c;
+        color: #ffffff;
+        border: 1px solid #dc2626;
         padding: 8px 16px;
         border-radius: 6px;
         font-weight: bold;
@@ -91,9 +83,9 @@ st.markdown("""
         display: inline-block;
     }
     .status-badge-hold {
-        background-color: #332d12;
-        color: #f1c40f;
-        border: 1px solid #f1c40f;
+        background-color: #854d0e;
+        color: #ffffff;
+        border: 1px solid #ca8a04;
         padding: 8px 16px;
         border-radius: 6px;
         font-weight: bold;
@@ -101,27 +93,32 @@ st.markdown("""
         display: inline-block;
     }
     
-    /* パラメータ表示ボックス（松井証券リピート設定など） */
+    /* パラメータ表示ボックス（背景を暗色に固定し文字を白・水色で極小同化を防ぐ） */
     .param-box {
-        background-color: rgba(0, 0, 0, 0.35);
-        border-left: 5px solid #3498db;
-        padding: 16px;
-        border-radius: 6px;
+        background-color: #1e293b !important;
+        border-left: 6px solid #3b82f6;
+        padding: 18px;
+        border-radius: 8px;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         font-size: 1.05rem;
         line-height: 1.8;
-        color: #f0f0f0;
+        color: #f8fafc !important;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+    .param-box b.label-title {
+        color: #94a3b8 !important;
     }
     .param-box code {
         font-size: 1.1rem !important;
-        font-weight: bold !important;
+        font-weight: 700 !important;
         padding: 2px 8px !important;
-        background-color: rgba(255, 255, 255, 0.18) !important;
-        color: #ffffff !important;
+        background-color: #334155 !important;
+        color: #38bdf8 !important;
+        border: 1px solid #475569;
         border-radius: 4px;
     }
-    .param-box-buy { border-left-color: #2ecc71; }
-    .param-box-sell { border-left-color: #e74c3c; }
+    .param-box-buy { border-left-color: #22c55e !important; }
+    .param-box-sell { border-left-color: #ef4444 !important; }
 
     /* タブのデザイン */
     .stTabs [data-baseweb="tab-list"] {
@@ -130,8 +127,13 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] {
         padding: 10px 18px;
         font-size: 1.0rem !important;
-        font-weight: 600;
+        font-weight: 700;
+        color: #334155 !important;
         border-radius: 6px 6px 0 0;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #0284c7 !important;
+        border-bottom-color: #0284c7 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -792,14 +794,14 @@ else:
             st.markdown("#### 🟢 買いリピート設定")
             st.markdown(f"""
             <div class="param-box param-box-buy">
-            <b>通貨ペア</b>    : {selected_label}<br>
-            <b>売買区分</b>    : 買<br>
-            <b>レンジ上限</b>  : <code>{rep_upper}</code><br>
-            <b>レンジ下限</b>  : <code>{rep_lower}</code><br>
-            <b>数量（万）</b>  : <code>{quantity_wan}</code><br>
-            <b>注文値幅</b>    : <code>{ai_recommended_width} pips</code><br>
-            <b>益出し幅</b>    : <code>{ai_recommended_width} pips</code><br>
-            <b>運用停止</b>    : <code>{rep_buy_stop}</code> (-{buffer_pips}pips)
+            <b class="label-title">通貨ペア</b>    : {selected_label}<br>
+            <b class="label-title">売買区分</b>    : 買<br>
+            <b class="label-title">レンジ上限</b>  : <code>{rep_upper}</code><br>
+            <b class="label-title">レンジ下限</b>  : <code>{rep_lower}</code><br>
+            <b class="label-title">数量（万）</b>  : <code>{quantity_wan}</code><br>
+            <b class="label-title">注文値幅</b>    : <code>{ai_recommended_width} pips</code><br>
+            <b class="label-title">益出し幅</b>    : <code>{ai_recommended_width} pips</code><br>
+            <b class="label-title">運用停止</b>    : <code>{rep_buy_stop}</code> (-{buffer_pips}pips)
             </div>
             """, unsafe_allow_html=True)
             
@@ -807,14 +809,14 @@ else:
             st.markdown("#### 🔴 売りリピート設定")
             st.markdown(f"""
             <div class="param-box param-box-sell">
-            <b>通貨ペア</b>    : {selected_label}<br>
-            <b>売買区分</b>    : 売<br>
-            <b>レンジ上限</b>  : <code>{rep_upper}</code><br>
-            <b>レンジ下限</b>  : <code>{rep_lower}</code><br>
-            <b>数量（万）</b>  : <code>{quantity_wan}</code><br>
-            <b>注文値幅</b>    : <code>{ai_recommended_width} pips</code><br>
-            <b>益出し幅</b>    : <code>{ai_recommended_width} pips</code><br>
-            <b>運用停止</b>    : <code>{rep_sell_stop}</code> (+{buffer_pips}pips)
+            <b class="label-title">通貨ペア</b>    : {selected_label}<br>
+            <b class="label-title">売買区分</b>    : 売<br>
+            <b class="label-title">レンジ上限</b>  : <code>{rep_upper}</code><br>
+            <b class="label-title">レンジ下限</b>  : <code>{rep_lower}</code><br>
+            <b class="label-title">数量（万）</b>  : <code>{quantity_wan}</code><br>
+            <b class="label-title">注文値幅</b>    : <code>{ai_recommended_width} pips</code><br>
+            <b class="label-title">益出し幅</b>    : <code>{ai_recommended_width} pips</code><br>
+            <b class="label-title">運用停止</b>    : <code>{rep_sell_stop}</code> (+{buffer_pips}pips)
             </div>
             """, unsafe_allow_html=True)
 
@@ -857,11 +859,11 @@ else:
         rec_dir = "買い (ASK)" if market_status.startswith("BUY") else "売り (BID)" if market_status.startswith("SELL") else "静観"
         st.markdown(f"""
         <div class="param-box">
-        <b>注文方向</b> : {rec_dir}<br>
-        <b>注文数量</b> : <b>{safe_single_wan}</b> 万通貨 ({safe_single_units:,} 通貨)<br>
-        <b>益出し幅</b> : <b>{sp_tp_pips}</b> pips<br>
-        <b>損切り幅</b> : <b>{sp_sl_pips}</b> pips<br>
-        <b>スリッページ上限</b> : <b>{recommended_slippage}</b> pips
+        <b class="label-title">注文方向</b> : {rec_dir}<br>
+        <b class="label-title">注文数量</b> : <code>{safe_single_wan}</code> 万通貨 ({safe_single_units:,} 通貨)<br>
+        <b class="label-title">益出し幅</b> : <code>{sp_tp_pips} pips</code><br>
+        <b class="label-title">損切り幅</b> : <code>{sp_sl_pips} pips</code><br>
+        <b class="label-title">スリッページ上限</b> : <code>{recommended_slippage} pips</code>
         </div>
         """, unsafe_allow_html=True)
 
