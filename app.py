@@ -15,7 +15,7 @@ from sklearn.ensemble import RandomForestClassifier
 from streamlit_autorefresh import st_autorefresh
 
 # ==========================================
-# 0. 画面基本設定 & CSSデザイン定義
+# 0. 画面基本設定 & CSSデザイン定義（レスポンシブ・文字崩れ対策）
 # ==========================================
 st.set_page_config(
     page_title="AI FX 環境認識 & リピートアナライザー Pro",
@@ -27,10 +27,16 @@ st.markdown(
     """
 <style>
     .main .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1280px; }
-    
     label[data-testid="stWidgetLabel"] p { font-size: 1.05rem !important; font-weight: 700 !important; }
-    [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 700 !important; }
-    [data-testid="stMetricValue"] { font-size: 1.7rem !important; font-weight: 800 !important; }
+    
+    /* メトリクスのレイアウト＆自動折り返し調整 */
+    [data-testid="stMetricLabel"] { font-size: 0.9rem !important; font-weight: 700 !important; }
+    [data-testid="stMetricValue"] { 
+        font-size: 1.3rem !important; 
+        font-weight: 800 !important; 
+        white-space: normal !important; 
+        word-break: break-word !important;
+    }
     [data-testid="stCaptionContainer"], .stCaption p { font-size: 0.95rem !important; font-weight: 600 !important; }
     
     .status-badge-buy { background-color: #15803d; color: #ffffff; border: 1px solid #16a34a; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 1.15rem; display: inline-block; }
@@ -166,14 +172,6 @@ def send_discord_notification(webhook_url, title, message, color=0x00FF00):
         return False, str(e)
 
 
-def get_signal_type(status_str):
-    if status_str.startswith("BUY"):
-        return "BUY"
-    elif status_str.startswith("SELL"):
-        return "SELL"
-    return "HOLD"
-
-
 def clean_series(s):
     if isinstance(s, pd.DataFrame):
         return s.iloc[:, 0]
@@ -184,7 +182,6 @@ def clean_series(s):
 # 2. 事前警戒イベント＆タイムゾーン計算
 # ==========================================
 def get_upcoming_market_events(now_jst, is_summer):
-    """現在のJST時刻から、直近の警戒イベント（指標発表・市場オープン）までの残り時間を算出"""
     h, m = now_jst.hour, now_jst.minute
     current_total_min = h * 60 + m
 
@@ -245,13 +242,14 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             symbol, period=period, interval=interval, progress=False
         )
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [
-                col[0] if isinstance(col, tuple) else col for col in df.columns
-            ]
+            df.columns = df.columns.get_level_values(0)
     except Exception:
-        pass
+        return None
 
-    if not df.empty and "4時間足" in tf_name and interval == "1h":
+    if df.empty or len(df) < 50:
+        return None
+
+    if "4時間足" in tf_name and interval == "1h":
         try:
             tz_before = df.index.tz
             df = (
@@ -271,9 +269,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 df.index = df.index.tz_localize(tz_before)
         except Exception:
             pass
-
-    if df.empty or len(df) < 50:
-        return None
 
     try:
         c_series = clean_series(df["Close"])
@@ -431,25 +426,26 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 # 4. 機械学習（AI）モデルの学習と判定エンジン
 # ==========================================
 def train_rf_model(df):
-    """RandomForestを使用したAI分類モデルの学習関数"""
-    if df is None or len(df) < 100:
+    if df is None or len(df) < 50:
         return None, 0.0
 
     train_data = df.dropna(subset=["Target"])
-    if len(train_data) < 50:
+    if len(train_data) < 30:
         return None, 0.0
 
     X = train_data[FEATURE_COLUMNS]
     y = train_data["Target"].astype(int)
 
-    # 単一クラスのみの場合は学習をスキップ
     if len(np.unique(y)) < 2:
         return None, 0.0
 
-    # 時系列分割を考慮（直近20%を検証用データに固定）
     split_idx = int(len(X) * 0.8)
-    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+    if split_idx < 10:
+        X_train, X_test = X, X
+        y_train, y_test = y, y
+    else:
+        X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+        y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
 
     model = RandomForestClassifier(
         n_estimators=100,
@@ -465,7 +461,6 @@ def train_rf_model(df):
 
 
 def predict_ai_signal(model, latest_df):
-    """学習済みモデルを用いて最新足のシグナルと信頼度を予測"""
     if model is None or latest_df is None or latest_df.empty:
         return "HOLD", 0.0, 0.0, 0.0
 
@@ -482,7 +477,6 @@ def predict_ai_signal(model, latest_df):
     sell_prob = prob_dict.get(-1, 0.0)
     hold_prob = prob_dict.get(0, 0.0)
 
-    # シグナル判定閾値（勝率重視：55%以上で発火）
     if buy_prob >= 0.55 and buy_prob > sell_prob:
         signal = "BUY"
         confidence = buy_prob
@@ -502,7 +496,6 @@ def predict_ai_signal(model, latest_df):
 def run_repeat_backtest(
     df, trap_width_pips, tp_pips, sl_pips, lot_wan, is_jpy_pair=True
 ):
-    """グリッド型リピートトレードの簡易バックテスト計算"""
     if df is None or len(df) < 50:
         return None
 
@@ -528,11 +521,9 @@ def run_repeat_backtest(
         curr_low = low_prices[i]
         curr_close = close_prices[i]
 
-        # 1. 保有ポジションの利確・損切り判定
         remaining_positions = []
         for pos in positions:
             entry = pos["entry_price"]
-            # 利確 (TP)
             if curr_high >= entry + tp_dist:
                 pnl = tp_dist * units
                 total_realized_pnl += pnl
@@ -545,7 +536,6 @@ def run_repeat_backtest(
                         "pnl": pnl,
                     }
                 )
-            # 損切り (SL)
             elif sl_dist and curr_low <= entry - sl_dist:
                 pnl = -sl_dist * units
                 total_realized_pnl += pnl
@@ -563,8 +553,7 @@ def run_repeat_backtest(
 
         positions = remaining_positions
 
-        # 2. 新規エントリー判定（トラップ間隔の条件充足時）
-        if len(positions) < 10:  # 最大10ポジションに制限
+        if len(positions) < 10:
             if not positions:
                 positions.append({"entry_price": curr_close, "type": "BUY"})
             else:
@@ -572,7 +561,6 @@ def run_repeat_backtest(
                 if abs(curr_close - last_entry) >= trap_dist:
                     positions.append({"entry_price": curr_close, "type": "BUY"})
 
-        # 含み損益および評価残高の記録
         unrealized_pnl = sum(
             (curr_close - p["entry_price"]) * units for p in positions
         )
@@ -604,8 +592,7 @@ def run_repeat_backtest(
 # ==========================================
 # 6. マルチタイムフレーム環境認識 & AI総合判定
 # ==========================================
-def analyze_mtf_environment(df_daily, df_4h, df_15m):
-    """日足・4時間足・15分足の多角分析による環境認識ロジック"""
+def analyze_mtf_environment(df_daily, df_4h, df_main):
     res = {
         "daily_trend": "レンジ",
         "h4_trend": "レンジ",
@@ -618,10 +605,9 @@ def analyze_mtf_environment(df_daily, df_4h, df_15m):
         "sl_pips": 100,
     }
 
-    if df_daily is None or df_4h is None or df_15m is None:
+    if df_daily is None or df_4h is None or df_main is None:
         return res
 
-    # 1. 日足トレンド評価
     d_close = df_daily["Close"].iloc[-1]
     d_ema20 = df_daily["EMA_20"].iloc[-1]
     d_ema200 = df_daily["EMA_200"].iloc[-1]
@@ -636,7 +622,6 @@ def analyze_mtf_environment(df_daily, df_4h, df_15m):
     else:
         res["daily_trend"] = "緩やかな下降（レンジ傾向）"
 
-    # 2. 4時間足トレンド評価
     h4_close = df_4h["Close"].iloc[-1]
     h4_ema20 = df_4h["EMA_20"].iloc[-1]
     h4_ema200 = df_4h["EMA_200"].iloc[-1]
@@ -649,43 +634,42 @@ def analyze_mtf_environment(df_daily, df_4h, df_15m):
     else:
         res["h4_trend"] = "ボックスレンジ"
 
-    # 3. 15分足トレンド & モメンタム
-    m15_atr = df_15m["ATR"].iloc[-1]
-    m15_bb_width = df_15m["BB_Width"].iloc[-1]
+    main_atr = df_main["ATR"].iloc[-1]
+    main_bb_width = df_main["BB_Width"].iloc[-1]
 
-    # リスクスコア計算
     risk = 0
-    if m15_bb_width > 0.008:
-        risk += 30  # ボラティリティ急増警戒
+    if main_bb_width > 0.008:
+        risk += 30
     if h4_rsi > 70 or h4_rsi < 30:
-        risk += 20  # 加熱警戒
+        risk += 20
 
     if "上昇" in res["daily_trend"] and "上昇" in res["h4_trend"]:
         res["overall_status"] = "BUY (買い推奨)"
         res["recommended_strategy"] = "買いリピート展開 / 押し目買い運用"
-        res["grid_spacing"] = max(15, int(m15_atr * 100 * 0.8))
+        res["grid_spacing"] = max(15, int(main_atr * 100 * 0.8))
         res["tp_pips"] = int(res["grid_spacing"] * 1.2)
         res["sl_pips"] = int(res["grid_spacing"] * 5)
     elif "下降" in res["daily_trend"] and "下降" in res["h4_trend"]:
         res["overall_status"] = "SELL (売り推奨)"
         res["recommended_strategy"] = "売りリピート展開 / 戻り売り運用"
-        res["grid_spacing"] = max(15, int(m15_atr * 100 * 0.8))
+        res["grid_spacing"] = max(15, int(main_atr * 100 * 0.8))
         res["tp_pips"] = int(res["grid_spacing"] * 1.2)
         res["sl_pips"] = int(res["grid_spacing"] * 5)
     else:
         res["overall_status"] = "HOLD (様子見・レンジ運用)"
         res["recommended_strategy"] = "レンジ内逆張り または 調整待ち静観"
-        res["grid_spacing"] = max(20, int(m15_atr * 100))
+        res["grid_spacing"] = max(20, int(main_atr * 100))
         res["tp_pips"] = res["grid_spacing"]
         res["sl_pips"] = int(res["grid_spacing"] * 4)
 
     res["risk_score"] = min(100, risk)
     return res
+
+
 # ==========================================
-# 7. Plotly インタラクティブチャート描画エンジン
+# 7. Plotly インタラクティブチャート描画エンジン（タイトル被り修正）
 # ==========================================
 def create_chart_figure(df, title="チャート"):
-    """ローソク足、移動平均線、ボリンジャーバンド、MACDを組み合わせたサブプロット描画"""
     if df is None or df.empty:
         return go.Figure()
 
@@ -693,12 +677,11 @@ def create_chart_figure(df, title="チャート"):
         rows=2,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.03,
+        vertical_spacing=0.08,
         subplot_titles=(title, "MACD & ヒストグラム"),
-        row_width=[0.25, 0.75],
+        row_heights=[0.7, 0.3],
     )
 
-    # 1. ローソク足
     fig.add_trace(
         go.Candlestick(
             x=df.index,
@@ -714,7 +697,6 @@ def create_chart_figure(df, title="チャート"):
         col=1,
     )
 
-    # 2. 移動平均線 (EMA20, EMA200)
     if "EMA_20" in df.columns:
         fig.add_trace(
             go.Scatter(
@@ -739,7 +721,6 @@ def create_chart_figure(df, title="チャート"):
             col=1,
         )
 
-    # 3. ボリンジャーバンド
     if "Upper_Band" in df.columns and "Lower_Band" in df.columns:
         fig.add_trace(
             go.Scatter(
@@ -764,7 +745,6 @@ def create_chart_figure(df, title="チャート"):
             col=1,
         )
 
-    # 4. MACD & ヒストグラム (サブチャート)
     if "MACD" in df.columns and "MACD_Signal" in df.columns:
         fig.add_trace(
             go.Scatter(
@@ -801,26 +781,29 @@ def create_chart_figure(df, title="チャート"):
 
     fig.update_layout(
         template="plotly_dark",
-        height=650,
-        margin=dict(l=10, r=10, t=40, b=10),
+        height=680,
+        margin=dict(l=10, r=10, t=50, b=60),
         xaxis_rangeslider_visible=False,
         legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+            orientation="h",
+            yanchor="top",
+            y=-0.12,  # 凡例をグラフ直下に配置してタイトルとの被りを解消
+            xanchor="center",
+            x=0.5,
         ),
     )
 
+    fig.for_each_annotation(lambda a: a.update(font=dict(size=12)))
+
     return fig
-
-
 # ==========================================
-# 8. Streamlit メインアプリ & 画面レイアウト
+# 8. Streamlit メインアプリ & 画面レイアウト（文字切れ防止版）
 # ==========================================
 def main():
     st.title("📈 AI FX 環境認識 & リピートアナライザー Pro")
 
-    # サイドバー設定エリア
     with st.sidebar:
-        st.header("⚙️ 動作コントロール")
+        st.header("⚙ 動作コントロール")
 
         pair_dict = {
             "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -914,14 +897,12 @@ def main():
             on_change=save_user_settings,
         )
 
-    # 自動再読み込みタイマー設定
     if st.session_state.get("auto_refresh", False):
         st_autorefresh(
             interval=st.session_state.get("refresh_interval", 180) * 1000,
             key="data_autorefresh",
         )
 
-    # マルチタイムフレーム用データの読み込み
     with st.spinner("リアルタイムデータ取得 & 分析中..."):
         df_daily = load_and_process_data(
             selected_pair_symbol, "730d", "1d", "日足"
@@ -939,17 +920,14 @@ def main():
         )
         return
 
-    # タイムゾーン変換 (JST)
     now_utc = datetime.now(timezone.utc)
     now_jst = now_utc.astimezone(ZoneInfo("Asia/Tokyo"))
-    is_summer = True  # 夏時間判定ロジック用（簡略化）
+    is_summer = True
 
-    # 環境認識 & AI分析の実行
     mtf_res = analyze_mtf_environment(df_daily, df_4h, df_main)
     rf_model, accuracy = train_rf_model(df_main)
     signal, buy_p, sell_p, conf = predict_ai_signal(rf_model, df_main)
 
-    # Discord自動通知チェック
     if enable_notify and discord_url:
         last_status = st.session_state.get("last_notified_status", {})
         pair_last_sig = last_status.get(selected_pair_label, "")
@@ -975,24 +953,25 @@ def main():
                 ] = signal
                 save_user_settings()
 
-    # ==========================================
-    # 9. メインパネルレイアウト描画
-    # ==========================================
-
-    # 1. 警戒イベント通知バー
     upcoming_events = get_upcoming_market_events(now_jst, is_summer)
     if upcoming_events:
         next_ev = upcoming_events[0]
-        if next_ev["left_min"] <= 60 and next_ev["left_min"] >= 0:
+        if 0 <= next_ev["left_min"] <= 60:
             st.warning(
                 f"⚠️ **市場警戒**: 60分以内に 【{next_ev['event']}】 ({next_ev['time']}) が控えています。突発的な価格変動にご注意ください。"
             )
 
-    # 2. サマリー指標 (Metrics)
+    # --- 上部メトリクス表示（文字切れ防止の最適化） ---
     col1, col2, col3, col4 = st.columns(4)
     curr_price = df_main["Close"].iloc[-1]
     prev_price = df_main["Close"].iloc[-2]
     price_diff = curr_price - prev_price
+
+    daily_trend_short = (
+        mtf_res["daily_trend"]
+        .replace("トレンド", "")
+        .replace("（レンジ傾向）", "")
+    )
 
     with col1:
         st.metric(
@@ -1004,26 +983,27 @@ def main():
     with col2:
         st.metric(
             "日足トレンド",
-            mtf_res["daily_trend"],
+            daily_trend_short,
         )
 
     with col3:
         st.metric(
-            "AI 判定シグナル",
-            f"{signal} ({conf * 100:.1f}%)",
-            delta=f"勝率予想 {accuracy * 100:.1f}%",
+            "AI 判定",
+            f"{signal}",
+            delta=f"信頼度 {conf*100:.0f}% / 勝率 {accuracy*100:.0f}%",
+            delta_color="normal",
         )
 
     with col4:
         st.metric(
-            "推奨トラップ幅",
+            "推奨トラップ",
             f"{mtf_res['grid_spacing']} pips",
-            delta=f"リスクスコア: {mtf_res['risk_score']}/100",
+            delta=f"リスク: {mtf_res['risk_score']}/100",
+            delta_color="off",
         )
 
     st.markdown("---")
 
-    # 3. タブコンテンツ (チャート・分析・バックテスト)
     tab1, tab2, tab3 = st.tabs(
         [
             "📊 インタラクティブ・チャート",
@@ -1074,9 +1054,9 @@ def main():
             st.write(f"- **日足 トレンド:** {mtf_res['daily_trend']}")
             st.write(f"- **4時間足 トレンド:** {mtf_res['h4_trend']}")
             st.write(
-                f"- **15分足 ATR:** {df_main['ATR'].iloc[-1]:.3f}"
+                f"- **選択足 ATR:** {df_main['ATR'].iloc[-1]:.3f}"
                 if is_jpy
-                else f"- **15分足 ATR:** {df_main['ATR'].iloc[-1]:.5f}"
+                else f"- **選択足 ATR:** {df_main['ATR'].iloc[-1]:.5f}"
             )
 
         with col_b:
@@ -1115,7 +1095,7 @@ def main():
         if bt_res:
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("総実現損益", f"{bt_res['total_pnl']:,.0f} 円")
-            m2.metric("総総トレード数", f"{bt_res['total_trades']} 回")
+            m2.metric("総トレード数", f"{bt_res['total_trades']} 回")
             m3.metric("勝率", f"{bt_res['win_rate']:.1f} %")
             m4.metric("最大ドローダウン", f"{bt_res['max_drawdown']:,.0f} 円")
 
