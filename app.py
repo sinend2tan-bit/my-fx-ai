@@ -465,7 +465,6 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         return status, confidence, market_type, importances
     except Exception:
         return "HOLD", 50.0, "不明", {}
-
 # ==========================================
 # 5. メインアプリUI・事前察知ボード描画
 # ==========================================
@@ -635,22 +634,35 @@ else:
 
     ai_recommended_width = int(max(round(raw_atr_pips * atr_cfg["atr_mult"], 1), atr_cfg["min_pips"]))
 
+    # ---------------------------------------------------------
+    # 【修正箇所】リピート注文タブ
+    # ---------------------------------------------------------
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）最適化ヘルパー")
         uj_rate = float(clean_series(usdjpy_data["Close"]).iloc[-1]) if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0
         jpy_rate = latest_price if is_jpy_pair else latest_price * uj_rate
         margin_per_unit = (jpy_rate * custom_quantity) / 25.0
         max_allowable_grids = max(2, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
-        safe_half_range_val = max(1, max_allowable_grids // 2) * ai_recommended_width * pip_unit
 
-        rep_lower = round(latest_price - safe_half_range_val, 3 if is_jpy_pair else 5)
-        rep_upper = round(latest_price + safe_half_range_val, 3 if is_jpy_pair else 5)
+        # 松井証券の入力桁数（ピップ単位）に合致させる計算
+        p_decimals = 2 if is_jpy_pair else 4
+        base_price = round(latest_price, p_decimals)
+        grid_width_val = ai_recommended_width * pip_unit
+
+        half_grids_down = max_allowable_grids // 2
+        half_grids_up = max_allowable_grids - half_grids_down
+
+        rep_lower = round(base_price - (half_grids_down * grid_width_val), p_decimals)
+        rep_upper = round(base_price + (half_grids_up * grid_width_val), p_decimals)
+
         buffer_val = max(latest_atr * 1.5, 0.4 if is_jpy_pair else 0.04)
-        rep_buy_stop = round(rep_lower - buffer_val, 3 if is_jpy_pair else 5)
-        rep_sell_stop = round(rep_upper + buffer_val, 3 if is_jpy_pair else 5)
+        rep_buy_stop = round(rep_lower - buffer_val, p_decimals)
+        rep_sell_stop = round(rep_upper + buffer_val, p_decimals)
         buffer_pips = round(buffer_val / pip_unit, 1)
 
-        st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本**")
+        calculated_grids = int(round(abs(rep_upper - rep_lower) / grid_width_val))
+
+        st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本** (算出レンジ: {calculated_grids}本分)")
 
         rep_c1, rep_c2 = st.columns(2)
         with rep_c1:
@@ -760,19 +772,14 @@ else:
             if col in df_chart.columns:
                 fig.add_trace(go.Scatter(x=chart_x, y=clean_series(df_chart[col]), mode="lines", name=col, line=dict(color=color, width=width, dash=dash)), row=1, col=1)
 
-        # ---------------------------------------------------------
-        # 🎨 【事前察知機能】チャート背景の警戒時間帯ハイライト描画
-        # ---------------------------------------------------------
         for idx_x, t_str in enumerate(chart_x):
             try:
                 time_part = t_str.split(" ")[-1]
                 hour_val = int(time_part.split(":")[0])
 
-                # 米国主要指標＆NYオープン時間帯（赤背景）
                 indicator_start = 21 if is_summer_time else 22
                 if indicator_start <= hour_val <= (indicator_start + 2):
                     fig.add_vrect(x0=idx_x-0.5, x1=idx_x+0.5, fillcolor="rgba(239, 68, 68, 0.15)", layer="below", line_width=0)
-                # 早朝流動性低下時間帯（黄背景）
                 elif 3 <= hour_val <= 6:
                     fig.add_vrect(x0=idx_x-0.5, x1=idx_x+0.5, fillcolor="rgba(234, 179, 8, 0.12)", layer="below", line_width=0)
             except Exception:
