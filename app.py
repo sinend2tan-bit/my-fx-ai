@@ -27,7 +27,6 @@ st.markdown("""
 <style>
     .main .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1280px; }
     
-    /* ライト/ダークモードに自動追従するよう、文字色の固定指定を削除しました */
     label[data-testid="stWidgetLabel"] p { font-size: 1.05rem !important; font-weight: 700 !important; }
     [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 700 !important; }
     [data-testid="stMetricValue"] { font-size: 1.7rem !important; font-weight: 800 !important; }
@@ -131,6 +130,7 @@ def get_signal_type(status_str):
 def clean_series(s):
     if isinstance(s, pd.DataFrame): return s.iloc[:, 0]
     return s
+
 # ==========================================
 # 2. 通貨ペア & 時間軸設定
 # ==========================================
@@ -209,7 +209,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
-        # yfinanceのバージョンによるMultiIndexへの堅牢な対応
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
     except Exception:
@@ -472,6 +471,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         return status, confidence, market_type, importances
     except Exception:
         return "HOLD", 50.0, "不明", {}
+
 # ==========================================
 # 4. メインデータロード & 画面描画処理
 # ==========================================
@@ -591,6 +591,7 @@ else:
     safe_single_units = max(100, min(int(allowed_loss_jpy / (sl_distance_pips * pip_value_per_unit)), 50000))
     safe_single_wan = round(safe_single_units / 10000.0, 4)
 
+    # 画面描画ブロック
     try:
         with st.container(border=True):
             m_head1, m_head2, m_head3, m_head4 = st.columns([1.2, 1.5, 1, 1])
@@ -606,7 +607,6 @@ else:
             m_head3.metric("相場環境", market_type, "トレンド" if latest_adx > 22 else "レンジ")
             m_head4.metric("直近AI勝率", f"{win_rate:.1f}%" if trade_count > 0 else "N/A", f"{correct_count}勝 / {trade_count}戦")
     except TypeError:
-        # border=True非対応のStreamlitバージョン用フォールバック
         with st.container():
             m_head1, m_head2, m_head3, m_head4 = st.columns([1.2, 1.5, 1, 1])
             m_head1.metric("現在レート", f"{latest_price:{price_fmt}}")
@@ -631,6 +631,7 @@ else:
     for idx, (tf_name_key, t_val) in enumerate(mtf_trends.items()):
         mtf_cols[idx].metric(label=tf_name_key, value=t_val)
     st.markdown("---")
+
     # ---------------------------------------------------------
     # 📑 メイン操作タブ
     # ---------------------------------------------------------
