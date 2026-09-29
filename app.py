@@ -141,7 +141,6 @@ def get_upcoming_market_events(now_jst, is_summer):
     h, m = now_jst.hour, now_jst.minute
     current_total_min = h * 60 + m
 
-    # 夏時間/冬時間に応じたイベント時刻の設定（分単位換算）
     london_open = 16 * 60 if is_summer else 17 * 60
     us_econ_indicator = (21 * 60 + 30) if is_summer else (22 * 60 + 30)
     ny_open = (22 * 60 + 30) if is_summer else (23 * 60 + 30)
@@ -157,7 +156,7 @@ def get_upcoming_market_events(now_jst, is_summer):
     upcoming = []
     for ev in events:
         diff = ev["min"] - current_total_min
-        if diff < -120:  # 既に通過して2時間以上経過したイベントは翌日扱い
+        if diff < -120:
             diff += 24 * 60
 
         upcoming.append({
@@ -288,6 +287,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df
     except Exception:
         return None
+
 # ==========================================
 # 4. マルチタイムフレーム＆AI分析ロジック
 # ==========================================
@@ -465,6 +465,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         return status, confidence, market_type, importances
     except Exception:
         return "HOLD", 50.0, "不明", {}
+
 # ==========================================
 # 5. メインアプリUI・事前察知ボード描画
 # ==========================================
