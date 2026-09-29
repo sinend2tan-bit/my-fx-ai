@@ -15,7 +15,7 @@ from sklearn.ensemble import RandomForestClassifier
 from streamlit_autorefresh import st_autorefresh
 
 # ==========================================
-# 0. 画面基本設定 & CSSデザイン定義
+# 0. 画面基本設定 & CSSデザイン定義（iPad視認性最適化）
 # ==========================================
 st.set_page_config(
     page_title="AI FX デイトレ & リピートアナライザー Pro v6.3.5",
@@ -23,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# UI洗練用のカスタムCSS
+# iPad・高解像度端末向けのカスタムCSS
 st.markdown("""
 <style>
     /* 全体フォント・余白調整 */
@@ -33,23 +33,40 @@ st.markdown("""
         max-width: 1280px;
     }
     
+    /* 入力フォーム・セレクトボックスのラベル文字を大きく見やすく */
+    label[data-testid="stWidgetLabel"] p {
+        font-size: 1.05rem !important;
+        font-weight: 600 !important;
+        color: #e0e0e0 !important;
+    }
+
+    /* メトリクス（数値の上の項目名）の視認性向上 */
+    [data-testid="stMetricLabel"] {
+        font-size: 1.0rem !important;
+        font-weight: 600 !important;
+        color: #d1d5db !important;
+    }
+    
+    /* メトリクス（数値自体）の強調 */
+    [data-testid="stMetricValue"] {
+        font-size: 1.7rem !important;
+        font-weight: 700 !important;
+    }
+
+    /* キャプション（注意書き・補足文）の文字拡大とカラー明確化 */
+    [data-testid="stCaptionContainer"], .stCaption p {
+        font-size: 0.95rem !important;
+        color: #d0d7de !important;
+        font-weight: 500 !important;
+    }
+    
     /* カードデザインの共通化 */
     .custom-card {
-        background-color: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.15);
         border-radius: 10px;
         padding: 16px;
         margin-bottom: 12px;
-    }
-    
-    /* メトリクス強調 */
-    [data-testid="stMetricValue"] {
-        font-size: 1.6rem !important;
-        font-weight: 700 !important;
-    }
-    [data-testid="stMetricLabel"] {
-        font-size: 0.85rem !important;
-        color: #888888 !important;
     }
     
     /* ステータスバッジ */
@@ -57,42 +74,51 @@ st.markdown("""
         background-color: #0e3a1e;
         color: #2ecc71;
         border: 1px solid #2ecc71;
-        padding: 6px 14px;
+        padding: 8px 16px;
         border-radius: 6px;
         font-weight: bold;
-        font-size: 1.1rem;
+        font-size: 1.15rem;
         display: inline-block;
     }
     .status-badge-sell {
         background-color: #3a1414;
         color: #e74c3c;
         border: 1px solid #e74c3c;
-        padding: 6px 14px;
+        padding: 8px 16px;
         border-radius: 6px;
         font-weight: bold;
-        font-size: 1.1rem;
+        font-size: 1.15rem;
         display: inline-block;
     }
     .status-badge-hold {
         background-color: #332d12;
         color: #f1c40f;
         border: 1px solid #f1c40f;
-        padding: 6px 14px;
+        padding: 8px 16px;
         border-radius: 6px;
         font-weight: bold;
-        font-size: 1.1rem;
+        font-size: 1.15rem;
         display: inline-block;
     }
     
-    /* パラメータ表示ボックス */
+    /* パラメータ表示ボックス（松井証券リピート設定など） */
     .param-box {
-        background-color: rgba(0, 0, 0, 0.2);
-        border-left: 4px solid #3498db;
-        padding: 12px;
+        background-color: rgba(0, 0, 0, 0.35);
+        border-left: 5px solid #3498db;
+        padding: 16px;
+        border-radius: 6px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-size: 1.05rem;
+        line-height: 1.8;
+        color: #f0f0f0;
+    }
+    .param-box code {
+        font-size: 1.1rem !important;
+        font-weight: bold !important;
+        padding: 2px 8px !important;
+        background-color: rgba(255, 255, 255, 0.18) !important;
+        color: #ffffff !important;
         border-radius: 4px;
-        font-family: monospace;
-        font-size: 0.95rem;
-        line-height: 1.6;
     }
     .param-box-buy { border-left-color: #2ecc71; }
     .param-box-sell { border-left-color: #e74c3c; }
@@ -102,7 +128,9 @@ st.markdown("""
         gap: 8px;
     }
     .stTabs [data-baseweb="tab"] {
-        padding: 8px 16px;
+        padding: 10px 18px;
+        font-size: 1.0rem !important;
+        font-weight: 600;
         border-radius: 6px 6px 0 0;
     }
 </style>
@@ -582,7 +610,7 @@ else:
     is_ny_open = current_hour_jst >= 22 or current_hour_jst == 0
     is_econ_indicator_time = (current_hour_jst == 22 and current_minute_jst >= 15) or (current_hour_jst == 23 and current_minute_jst <= 45)
 
-# 警告メッセージのコンパクト化
+# 警告メッセージ表示
 if is_weekend: st.error("【週末クローズ中】現在市場は休業時間帯です。表示レートは最終終値となります。")
 elif is_econ_indicator_time: st.error("【経済指標 警戒時間帯】急変の危険があります。エントリー自重をお勧めします。")
 elif is_low_liquidity: st.warning("【低流動性時間帯】早朝のためスプレッド拡大にご注意ください。")
@@ -701,7 +729,6 @@ else:
         
         m_head1.metric("現在レート", f"{latest_price:{price_fmt}}")
         
-        # ステータスの視覚化バッジ化
         if market_status.startswith("BUY"):
             badge_html = f'<div class="status-badge-buy">BUY 買い ({confidence:.1f}%)</div>'
         elif market_status.startswith("SELL"):
@@ -715,7 +742,7 @@ else:
         m_head3.metric("相場環境", market_type, "トレンド" if latest_adx > 22 else "レンジ")
         m_head4.metric("直近AI勝率", f"{win_rate:.1f}%" if trade_count > 0 else "N/A", f"{correct_count}勝 / {trade_count}戦")
 
-    # セカンダリ指標（折りたたみ型で画面をシンプルに）
+    # セカンダリ指標
     with st.container():
         sec1, sec2, sec3, sec4 = st.columns(4)
         sec1.metric("RSI (14)", f"{latest_rsi:.1f}")
