@@ -127,9 +127,6 @@ def clean_series(s):
         return s.iloc[:, 0]
     return s
 
-# ==========================================
-# 2. 事前警戒イベント＆タイムゾーン計算
-# ==========================================
 def get_upcoming_market_events(now_jst, is_summer):
     h, m = now_jst.hour, now_jst.minute
     current_total_min = h * 60 + m
@@ -151,18 +148,12 @@ def get_upcoming_market_events(now_jst, is_summer):
         diff = ev["min"] - current_total_min
         if diff < -120:
             diff += 24 * 60
-
-        upcoming.append({
-            "event": ev["name"],
-            "time": ev["time_str"],
-            "left_min": diff,
-        })
+        upcoming.append({"event": ev["name"], "time": ev["time_str"], "left_min": diff})
 
     upcoming.sort(key=lambda x: x["left_min"])
     return upcoming
-
 # ==========================================
-# 3. データ取得 & インジケーター計算エンジン
+# 2. データ取得 & インジケーター計算エンジン
 # ==========================================
 @st.cache_data(ttl=60, show_spinner=False)
 def load_and_process_data(symbol, period, interval, tf_name=""):
@@ -281,9 +272,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception:
         return None
 
-# ==========================================
-# 4. マルチタイムフレーム＆AI分析ロジック
-# ==========================================
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -458,9 +446,8 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         return status, confidence, market_type, importances
     except Exception:
         return "HOLD", 50.0, "不明", {}
-
 # ==========================================
-# 5. メインアプリUI・事前察知ボード描画
+# 3. メインアプリUI・事前察知ボード描画
 # ==========================================
 st.title("AI FX 環境認識 & リピートアナライザー Pro")
 
@@ -505,7 +492,6 @@ if st.sidebar.button("🧪 テスト送信", use_container_width=True):
         else: st.sidebar.error(f"送信失敗: {msg}")
     else: st.sidebar.warning("URLを入力してください")
 
-# データロード処理
 with st.spinner("最新市場データとAIモデルを読込中..."):
     usdjpy_data = load_and_process_data("USDJPY=X", tf_config["period"], tf_config["interval"], tf_label)
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
@@ -582,7 +568,6 @@ else:
         test_len = min(30, len(X_bt) - 10)
         cumulative_wins, win_rate, trade_count, correct_count = run_backtest(X_bt, y_bt, test_len) if test_len > 5 else ([], 0.0, 0, 0)
         m_head4.metric("直近AI勝率", f"{win_rate:.1f}%" if trade_count > 0 else "N/A", f"{correct_count}勝 / {trade_count}戦")
-
     with st.container():
         sec1, sec2, sec3, sec4 = st.columns(4)
         latest_rsi = float(clean_series(data["RSI"]).iloc[-1]) if "RSI" in data.columns else 50.0
@@ -613,18 +598,15 @@ else:
         mtf_cols[idx].metric(label=tf_name_key, value=t_val)
     st.markdown("---")
 
-    # ---------------------------------------------------------
-    # 📑 メイン操作タブ
-    # ---------------------------------------------------------
     tab_repeat, tab_single, tab_speed, tab_chart, tab_scanner, tab_backtest, tab_metrics = st.tabs([
         "📋 リピート注文 (松井証券)", "🎯 デイトレ参考 (AI)", "⚡ スピード注文", "📈 チャート", "🔍 全ペアスキャン", "📊 バックテスト", "📋 運用サマリー"
     ])
 
     ai_recommended_width = int(max(round(raw_atr_pips * atr_cfg["atr_mult"], 1), atr_cfg["min_pips"]))
 
-    # ---------------------------------------------------------
-    # 【完全修正版】リピート注文タブ
-    # ---------------------------------------------------------
+    # =========================================================
+    # 【完全修正版】リピート注文タブ（端数解消・整数倍レンジ調整）
+    # =========================================================
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）最適化ヘルパー")
         uj_rate = float(clean_series(usdjpy_data["Close"]).iloc[-1]) if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0
@@ -636,23 +618,22 @@ else:
         base_price = round(latest_price, p_decimals)
         grid_width_val = round(ai_recommended_width * pip_unit, p_decimals)
 
-        target_grids = max(2, max_allowable_grids)
+        # 【修正ロジック】注文値幅の整数倍（例: 6本なら5間隔分 = 注文値幅 × 5）にレンジ幅を綺麗に固定
+        target_grids = max(2, min(6, max_allowable_grids))
         total_intervals = target_grids - 1
 
         half_intervals_down = total_intervals // 2
         rep_lower = round(base_price - (half_intervals_down * grid_width_val), p_decimals)
-        
-        safety_buffer = pip_unit * 1.0
-        rep_upper = round(rep_lower + (total_intervals * grid_width_val) + safety_buffer, p_decimals)
+        rep_upper = round(rep_lower + (total_intervals * grid_width_val), p_decimals)
 
         buffer_val = max(latest_atr * 1.5, 0.4 if is_jpy_pair else 0.04)
         rep_buy_stop = round(rep_lower - buffer_val, p_decimals)
         rep_sell_stop = round(rep_upper + buffer_val, p_decimals)
         buffer_pips = round(buffer_val / pip_unit, 1)
 
-        calculated_grids = int((rep_upper - rep_lower) / grid_width_val) + 1
+        calculated_grids = int(round((rep_upper - rep_lower) / grid_width_val)) + 1
 
-        st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本** (算出レンジ設定: **{calculated_grids}本分**)")
+        st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本** (算出レンジ設定: **{calculated_grids}本分**) ※端数が出ないよう整数倍に最適化済み")
 
         rep_c1, rep_c2 = st.columns(2)
         with rep_c1:
@@ -685,7 +666,6 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-    # 計算用補助
     conf_factor, adx_bonus = confidence / 50.0, 0.2 if latest_adx > 25 else 0.0
     ai_tp_mult = round(max(1.0, min(2.5, 1.2 * conf_factor + adx_bonus)), 2)
     ai_sl_mult = round(max(0.6, min(1.5, 0.8 / (conf_factor * 0.8))), 2)
