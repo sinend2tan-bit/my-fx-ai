@@ -628,7 +628,7 @@ else:
     ai_recommended_width = int(max(round(raw_atr_pips * atr_cfg["atr_mult"], 1), atr_cfg["min_pips"]))
 
     # ---------------------------------------------------------
-    # 【修正適用箇所】リピート注文タブ
+    # 【完全修正版】リピート注文タブ
     # ---------------------------------------------------------
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）最適化ヘルパー")
@@ -637,33 +637,32 @@ else:
         margin_per_unit = (jpy_rate * custom_quantity) / 25.0
         max_allowable_grids = max(2, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
 
-        # 松井証券の入力桁数（ピップ単位）に合致させる計算
+        # 松井証券の入力桁数（クロス円:2桁, ドルストレート:4桁）
         p_decimals = 2 if is_jpy_pair else 4
         base_price = round(latest_price, p_decimals)
         grid_width_val = round(ai_recommended_width * pip_unit, p_decimals)
 
-        # 注文本数 N に対する区間数 (間隔) は N - 1 (植木算)
+        # 希望本数 N に対する区間数は N - 1
         target_grids = max(2, max_allowable_grids)
-        total_intervals = target_grids - 1  # 6本なら5区間
+        total_intervals = target_grids - 1  # 例: 6本なら5区間
 
         half_intervals_down = total_intervals // 2
-        half_intervals_up = total_intervals - half_intervals_down
 
-        # 下限値を基準に計算
+        # 下限値を算出
         rep_lower = round(base_price - (half_intervals_down * grid_width_val), p_decimals)
 
-        # 【修正】松井証券のシステム誤差(0.75/0.15 = 4.9999...)による6本目の切捨てを防止するため
-        # レンジ上限に 0.1 pips (0.001 / 0.00001) の微細バッファを上乗せします
-        micro_buffer = 0.001 if is_jpy_pair else 0.00001
-        rep_upper = round(rep_lower + (total_intervals * grid_width_val) + micro_buffer, p_decimals + 1)
+        # 【重要修正】松井証券の入力桁数に合わせて1 pips分繰り上げる
+        # これにより松井証券画面で (上限-下限)/値幅 が確実に 5.06... となり、切り捨てられても5区間(=6本)になります
+        safety_buffer = pip_unit * 1.0
+        rep_upper = round(rep_lower + (total_intervals * grid_width_val) + safety_buffer, p_decimals)
 
         buffer_val = max(latest_atr * 1.5, 0.4 if is_jpy_pair else 0.04)
         rep_buy_stop = round(rep_lower - buffer_val, p_decimals)
         rep_sell_stop = round(rep_upper + buffer_val, p_decimals)
         buffer_pips = round(buffer_val / pip_unit, 1)
 
-        # 松井証券の注文本数計算式: (上限 - 下限) / 注文値幅 + 1
-        calculated_grids = int(round((rep_upper - rep_lower) / grid_width_val)) + 1
+        # アプリ側での表示確認用計算式
+        calculated_grids = int((rep_upper - rep_lower) / grid_width_val) + 1
 
         st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本** (算出レンジ設定: **{calculated_grids}本分**)")
 
