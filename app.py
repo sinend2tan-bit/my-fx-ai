@@ -58,6 +58,7 @@ SETTINGS_FILE = "user_settings.json"
 DEFAULT_SETTINGS = {
     "account_balance": 200000,
     "quantity_wan": 0.20,
+    "repeat_mode_grids": 5,  # デフォルトを松井証券対応の「5本モード」に指定
     "discord_url": "",
     "enable_notify": False,
     "auto_refresh": False,
@@ -86,6 +87,7 @@ def save_user_settings():
     settings = {
         "account_balance": st.session_state.get("account_balance", DEFAULT_SETTINGS["account_balance"]),
         "quantity_wan": st.session_state.get("quantity_wan", DEFAULT_SETTINGS["quantity_wan"]),
+        "repeat_mode_grids": st.session_state.get("repeat_mode_grids", DEFAULT_SETTINGS["repeat_mode_grids"]),
         "discord_url": st.session_state.get("discord_url", DEFAULT_SETTINGS["discord_url"]),
         "enable_notify": st.session_state.get("enable_notify", DEFAULT_SETTINGS["enable_notify"]),
         "auto_refresh": st.session_state.get("auto_refresh", DEFAULT_SETTINGS["auto_refresh"]),
@@ -447,7 +449,6 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         return status, confidence, market_type, importances
     except Exception:
         return "HOLD", 50.0, "不明", {}
-
 # ==========================================
 # 3. メインアプリUI・事前察知ボード描画
 # ==========================================
@@ -481,6 +482,15 @@ st.sidebar.subheader("💰 松井証券トレード資金設定")
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, step=50000, key="account_balance", on_change=save_user_settings)
 quantity_wan = st.sidebar.number_input("注文数量 (万通貨)", min_value=0.0001, max_value=10.0, step=0.01, format="%.4f", key="quantity_wan", on_change=save_user_settings)
 custom_quantity = int(round(quantity_wan * 10000))
+
+# 松井証券仕様：注文本数モード指定（5本・7本・9本）
+repeat_mode_grids = st.sidebar.selectbox(
+    "松井証券リピート注文本数",
+    options=[5, 7, 9],
+    format_func=lambda x: f"{x}本モード（中心1本＋上下{(x-1)//2}本）",
+    key="repeat_mode_grids",
+    on_change=save_user_settings
+)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔔 Discord 通知設定")
@@ -608,38 +618,45 @@ else:
     ai_recommended_width = int(max(round(raw_atr_pips * atr_cfg["atr_mult"], 1), atr_cfg["min_pips"]))
 
     # =========================================================
-    # 【完全修正版】リピート注文タブ（下限基準・指定本数完全一致ロジック）
+    # 【完全修正版】松井証券仕様 リピート注文タブ（奇数本数完全一致ロジック）
     # =========================================================
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）最適化ヘルパー")
-        uj_rate = float(clean_series(usdjpy_data["Close"]).iloc[-1]) if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0
-        jpy_rate = latest_price if is_jpy_pair else latest_price * uj_rate
-        margin_per_unit = (jpy_rate * custom_quantity) / 25.0
-        max_allowable_grids = max(2, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
-
+        
+        # 選択中の本数モード（5本、7本、9本...）
+        target_grids = int(repeat_mode_grids)
+        
+        # 松井証券の仕組み：区間数 ＝ 本数 - 1（必ず偶数）
+        # 中心1本 ＋ 上下にそれぞれ N本 ずつ配置（計 2N + 1 本）
+        side_grids = (target_grids - 1) // 2  # 例: 5本なら上下2本ずつ, 7本なら上下3本ずつ
+        
         p_decimals = 3 if is_jpy_pair else 5
-        base_price = round(latest_price, p_decimals)
         grid_width_val = round(ai_recommended_width * pip_unit, p_decimals)
 
-        # ターゲット本数を 6本（＝5区間）に固定し、下限を現在地から適度に下へ丸めたキリの良い価格を起点にする
-        target_grids = 6  # 確実に6本発注されるよう本数を固定
-        total_intervals = target_grids - 1  # 5区間
-
-        # 現在値から少し下にグリッド下限を設定（30pipsの倍数で綺麗に割り切れるように調整）
-        # 例: 現在値の少し下を基準に、grid_width_valの整数倍で下限を決める
-        rough_lower = base_price - (latest_atr * 1.2)
-        # grid_width_val の倍数にスナップ（丸め込み）
-        rep_lower = round(round(rough_lower / grid_width_val) * grid_width_val, p_decimals)
+        # 現在価格を中心基準としてスナップ（綺麗に割り切れる価格に調整）
+        center_price = round(round(latest_price / grid_width_val) * grid_width_val, p_decimals)
         
-        # 上限は「下限 ＋ (区間数 × 注文値幅)」で完全に計算（これにより端数やズレを完全に排除）
-        rep_upper = round(rep_lower + (total_intervals * grid_width_val), p_decimals)
+        # 中心価格から上下同数（side_grids）ずつレンジ幅を延ばす
+        rep_lower = round(center_price - (side_grids * grid_width_val), p_decimals)
+        rep_upper = round(center_price + (side_grids * grid_width_val), p_decimals)
 
+        # 運用停止（損切り）バッファー価格の算出
         buffer_val = max(latest_atr * 1.5, 0.4 if is_jpy_pair else 0.04)
         rep_buy_stop = round(rep_lower - buffer_val, p_decimals)
         rep_sell_stop = round(rep_upper + buffer_val, p_decimals)
         buffer_pips = round(buffer_val / pip_unit, 1)
 
-        st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本** ⇒ **【完全6本（5区間）一致モード】**適用中")
+        uj_rate = float(clean_series(usdjpy_data["Close"]).iloc[-1]) if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0
+        jpy_rate = latest_price if is_jpy_pair else latest_price * uj_rate
+        margin_per_unit = (jpy_rate * custom_quantity) / 25.0
+        max_allowable_grids = max(3, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
+
+        st.caption(
+            f"💡 ATR基準の推測注文値幅: **{ai_recommended_width} pips** | "
+            f"設定モード: **【{target_grids}本モード (中心価格±{side_grids}本)】** | "
+            f"口座許容最大: **約{max_allowable_grids}本**"
+        )
+        st.info(f"注文本数: **{target_grids}本**（区間数: **{target_grids - 1}区間**）※松井証券の「中心1本＋上下同数」のシステム入力に1ピップのズレもなく完全一致します。")
 
         rep_c1, rep_c2 = st.columns(2)
         with rep_c1:
@@ -805,6 +822,7 @@ else:
         sum_c1, sum_c2 = st.columns(2)
         sum_c1.metric("口座資金", f"{account_balance:,} 円")
         sum_c1.metric("1回あたり数量", f"{quantity_wan} 万通貨 ({custom_quantity:,} 通貨)")
+        sum_c1.metric("リピート注文本数", f"{repeat_mode_grids} 本")
         sum_c2.metric("分析通貨ペア", selected_label)
         sum_c2.metric("分析時間足", tf_label)
 
