@@ -152,6 +152,7 @@ def get_upcoming_market_events(now_jst, is_summer):
 
     upcoming.sort(key=lambda x: x["left_min"])
     return upcoming
+
 # ==========================================
 # 2. データ取得 & インジケーター計算エンジン
 # ==========================================
@@ -446,6 +447,7 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         return status, confidence, market_type, importances
     except Exception:
         return "HOLD", 50.0, "不明", {}
+
 # ==========================================
 # 3. メインアプリUI・事前察知ボード描画
 # ==========================================
@@ -568,6 +570,7 @@ else:
         test_len = min(30, len(X_bt) - 10)
         cumulative_wins, win_rate, trade_count, correct_count = run_backtest(X_bt, y_bt, test_len) if test_len > 5 else ([], 0.0, 0, 0)
         m_head4.metric("直近AI勝率", f"{win_rate:.1f}%" if trade_count > 0 else "N/A", f"{correct_count}勝 / {trade_count}戦")
+
     with st.container():
         sec1, sec2, sec3, sec4 = st.columns(4)
         latest_rsi = float(clean_series(data["RSI"]).iloc[-1]) if "RSI" in data.columns else 50.0
@@ -605,7 +608,7 @@ else:
     ai_recommended_width = int(max(round(raw_atr_pips * atr_cfg["atr_mult"], 1), atr_cfg["min_pips"]))
 
     # =========================================================
-    # 【完全修正版】リピート注文タブ（端数解消・整数倍レンジ調整）
+    # 【完全修正版】リピート注文タブ（下限基準・指定本数完全一致ロジック）
     # =========================================================
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）最適化ヘルパー")
@@ -614,16 +617,21 @@ else:
         margin_per_unit = (jpy_rate * custom_quantity) / 25.0
         max_allowable_grids = max(2, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
 
-        p_decimals = 2 if is_jpy_pair else 4
+        p_decimals = 3 if is_jpy_pair else 5
         base_price = round(latest_price, p_decimals)
         grid_width_val = round(ai_recommended_width * pip_unit, p_decimals)
 
-        # 【修正ロジック】注文値幅の整数倍（例: 6本なら5間隔分 = 注文値幅 × 5）にレンジ幅を綺麗に固定
-        target_grids = max(2, min(6, max_allowable_grids))
-        total_intervals = target_grids - 1
+        # ターゲット本数を 6本（＝5区間）に固定し、下限を現在地から適度に下へ丸めたキリの良い価格を起点にする
+        target_grids = 6  # 確実に6本発注されるよう本数を固定
+        total_intervals = target_grids - 1  # 5区間
 
-        half_intervals_down = total_intervals // 2
-        rep_lower = round(base_price - (half_intervals_down * grid_width_val), p_decimals)
+        # 現在値から少し下にグリッド下限を設定（30pipsの倍数で綺麗に割り切れるように調整）
+        # 例: 現在値の少し下を基準に、grid_width_valの整数倍で下限を決める
+        rough_lower = base_price - (latest_atr * 1.2)
+        # grid_width_val の倍数にスナップ（丸め込み）
+        rep_lower = round(round(rough_lower / grid_width_val) * grid_width_val, p_decimals)
+        
+        # 上限は「下限 ＋ (区間数 × 注文値幅)」で完全に計算（これにより端数やズレを完全に排除）
         rep_upper = round(rep_lower + (total_intervals * grid_width_val), p_decimals)
 
         buffer_val = max(latest_atr * 1.5, 0.4 if is_jpy_pair else 0.04)
@@ -631,9 +639,7 @@ else:
         rep_sell_stop = round(rep_upper + buffer_val, p_decimals)
         buffer_pips = round(buffer_val / pip_unit, 1)
 
-        calculated_grids = int(round((rep_upper - rep_lower) / grid_width_val)) + 1
-
-        st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本** (算出レンジ設定: **{calculated_grids}本分**) ※端数が出ないよう整数倍に最適化済み")
+        st.caption(f"💡 現在のATR ({raw_atr_pips:.1f} pips) に基づく推奨注文値幅: **{ai_recommended_width} pips** | 口座適正本数: **最大{max_allowable_grids}本** ⇒ **【完全6本（5区間）一致モード】**適用中")
 
         rep_c1, rep_c2 = st.columns(2)
         with rep_c1:
