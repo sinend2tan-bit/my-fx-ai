@@ -26,7 +26,6 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1280px; }
-    
     label[data-testid="stWidgetLabel"] p { font-size: 1.05rem !important; font-weight: 700 !important; }
     [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 700 !important; }
     [data-testid="stMetricValue"] { font-size: 1.7rem !important; font-weight: 800 !important; }
@@ -58,7 +57,6 @@ SETTINGS_FILE = "user_settings.json"
 DEFAULT_SETTINGS = {
     "account_balance": 200000,
     "quantity_wan": 0.20,
-    "repeat_mode_grids": 5,  # デフォルトを松井証券対応の「5本モード」に指定
     "discord_url": "",
     "enable_notify": False,
     "auto_refresh": False,
@@ -87,7 +85,6 @@ def save_user_settings():
     settings = {
         "account_balance": st.session_state.get("account_balance", DEFAULT_SETTINGS["account_balance"]),
         "quantity_wan": st.session_state.get("quantity_wan", DEFAULT_SETTINGS["quantity_wan"]),
-        "repeat_mode_grids": st.session_state.get("repeat_mode_grids", DEFAULT_SETTINGS["repeat_mode_grids"]),
         "discord_url": st.session_state.get("discord_url", DEFAULT_SETTINGS["discord_url"]),
         "enable_notify": st.session_state.get("enable_notify", DEFAULT_SETTINGS["enable_notify"]),
         "auto_refresh": st.session_state.get("auto_refresh", DEFAULT_SETTINGS["auto_refresh"]),
@@ -154,10 +151,33 @@ def get_upcoming_market_events(now_jst, is_summer):
 
     upcoming.sort(key=lambda x: x["left_min"])
     return upcoming
-
 # ==========================================
 # 2. データ取得 & インジケーター計算エンジン
 # ==========================================
+PAIRS = {
+    "米ドル / 円 (USD/JPY)": "USDJPY=X",
+    "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
+    "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
+    "豪ドル / 円 (AUD/JPY)": "AUDJPY=X",
+    "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
+}
+
+TIMEFRAMES = {
+    "5分足 (超短期スキャル用)": {"period": "7d", "interval": "5m"},
+    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
+    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
+    "4時間足 (中期トレンド用)": {"period": "2y", "interval": "1h"},
+    "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
+}
+
+PAIR_ATR_CONFIG = {
+    "USDJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "GBPJPY=X": {"atr_mult": 0.25, "min_pips": 20},
+    "EURJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "AUDJPY=X": {"atr_mult": 0.18, "min_pips": 12},
+    "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
+}
+
 @st.cache_data(ttl=60, show_spinner=False)
 def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
@@ -274,30 +294,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df
     except Exception:
         return None
-
-PAIRS = {
-    "米ドル / 円 (USD/JPY)": "USDJPY=X",
-    "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
-    "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
-    "豪ドル / 円 (AUD/JPY)": "AUDJPY=X",
-    "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
-}
-
-TIMEFRAMES = {
-    "5分足 (超短期スキャル用)": {"period": "7d", "interval": "5m"},
-    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
-    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
-    "4時間足 (中期トレンド用)": {"period": "2y", "interval": "1h"},
-    "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
-}
-
-PAIR_ATR_CONFIG = {
-    "USDJPY=X": {"atr_mult": 0.20, "min_pips": 15},
-    "GBPJPY=X": {"atr_mult": 0.25, "min_pips": 20},
-    "EURJPY=X": {"atr_mult": 0.20, "min_pips": 15},
-    "AUDJPY=X": {"atr_mult": 0.18, "min_pips": 12},
-    "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
-}
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_mtf_trends(symbol: str) -> dict:
@@ -482,15 +478,7 @@ st.sidebar.subheader("💰 松井証券トレード資金設定")
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, step=50000, key="account_balance", on_change=save_user_settings)
 quantity_wan = st.sidebar.number_input("注文数量 (万通貨)", min_value=0.0001, max_value=10.0, step=0.01, format="%.4f", key="quantity_wan", on_change=save_user_settings)
 custom_quantity = int(round(quantity_wan * 10000))
-
-# 松井証券仕様：注文本数モード指定（5本・7本・9本）
-repeat_mode_grids = st.sidebar.selectbox(
-    "松井証券リピート注文本数",
-    options=[5, 7, 9],
-    format_func=lambda x: f"{x}本モード（中心1本＋上下{(x-1)//2}本）",
-    key="repeat_mode_grids",
-    on_change=save_user_settings
-)
+# 手動での注文本数設定を削除しました（AIが自動算出します）
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔔 Discord 通知設定")
@@ -610,25 +598,49 @@ else:
     for idx, (tf_name_key, t_val) in enumerate(mtf_trends.items()):
         mtf_cols[idx].metric(label=tf_name_key, value=t_val)
     st.markdown("---")
-
     tab_repeat, tab_single, tab_speed, tab_chart, tab_scanner, tab_backtest, tab_metrics = st.tabs([
         "📋 リピート注文 (松井証券)", "🎯 デイトレ参考 (AI)", "⚡ スピード注文", "📈 チャート", "🔍 全ペアスキャン", "📊 バックテスト", "📋 運用サマリー"
     ])
 
+    # AI推奨の注文値幅（pips）
     ai_recommended_width = int(max(round(raw_atr_pips * atr_cfg["atr_mult"], 1), atr_cfg["min_pips"]))
 
     # =========================================================
-    # 【完全修正版】松井証券仕様 リピート注文タブ（奇数本数完全一致ロジック）
+    # 【完全改修版】AI推奨注文本数 自動算出ロジック
     # =========================================================
+    # 1. 過去一定期間（直近50期間）の最高値・最安値から「想定カバーレンジ」を算出
+    c_low, c_high = clean_series(data["Low"]), clean_series(data["High"])
+    recent_50_high = float(c_high.iloc[-50:].max())
+    recent_50_low = float(c_low.iloc[-50:].min())
+    range_pips = (recent_50_high - recent_50_low) / pip_unit
+
+    # 2. カバーレンジと注文値幅から「必要最低限の注文本数」を算出
+    base_grids = int(range_pips / ai_recommended_width)
+    
+    # 3. 資金（証拠金）制約からの上限本数を算出
+    uj_rate = float(clean_series(usdjpy_data["Close"]).iloc[-1]) if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0
+    jpy_rate = latest_price if is_jpy_pair else latest_price * uj_rate
+    margin_per_unit = (jpy_rate * custom_quantity) / 25.0
+    
+    # 資金の50%までを証拠金として許容する安全設計
+    max_allowable_grids = max(3, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
+
+    # 4. AI推奨本数の決定 (資金限界を超えないようにキャップ)
+    ai_grids = min(max_allowable_grids, max(3, base_grids))
+
+    # 5. 松井証券の仕様（中心1本＋上下同数）に合わせるため必ず「奇数」に調整
+    if ai_grids % 2 == 0:
+        ai_grids -= 1  # 偶数なら1引いて奇数にする (安全側に倒す)
+    if ai_grids < 3:
+        ai_grids = 3
+        
+    target_grids = ai_grids
+
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）最適化ヘルパー")
         
-        # 選択中の本数モード（5本、7本、9本...）
-        target_grids = int(repeat_mode_grids)
-        
         # 松井証券の仕組み：区間数 ＝ 本数 - 1（必ず偶数）
-        # 中心1本 ＋ 上下にそれぞれ N本 ずつ配置（計 2N + 1 本）
-        side_grids = (target_grids - 1) // 2  # 例: 5本なら上下2本ずつ, 7本なら上下3本ずつ
+        side_grids = (target_grids - 1) // 2  
         
         p_decimals = 3 if is_jpy_pair else 5
         grid_width_val = round(ai_recommended_width * pip_unit, p_decimals)
@@ -646,17 +658,16 @@ else:
         rep_sell_stop = round(rep_upper + buffer_val, p_decimals)
         buffer_pips = round(buffer_val / pip_unit, 1)
 
-        uj_rate = float(clean_series(usdjpy_data["Close"]).iloc[-1]) if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0
-        jpy_rate = latest_price if is_jpy_pair else latest_price * uj_rate
-        margin_per_unit = (jpy_rate * custom_quantity) / 25.0
-        max_allowable_grids = max(3, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
-
+        st.info(
+            f"✨ **AI最適化完了**: 現在のボラティリティ（直近の変動幅 {round(range_pips, 1)} pips）と"
+            f"口座資金を元に、最適な注文本数を **{target_grids}本** と自動判定しました。"
+        )
+        
         st.caption(
             f"💡 ATR基準の推測注文値幅: **{ai_recommended_width} pips** | "
-            f"設定モード: **【{target_grids}本モード (中心価格±{side_grids}本)】** | "
-            f"口座許容最大: **約{max_allowable_grids}本**"
+            f"AI設定モード: **【{target_grids}本モード (中心価格±{side_grids}本)】** | "
+            f"資金許容最大: **約{max_allowable_grids}本**"
         )
-        st.info(f"注文本数: **{target_grids}本**（区間数: **{target_grids - 1}区間**）※松井証券の「中心1本＋上下同数」のシステム入力に1ピップのズレもなく完全一致します。")
 
         rep_c1, rep_c2 = st.columns(2)
         with rep_c1:
@@ -688,11 +699,18 @@ else:
             <b class="label-title">運用停止(SL)</b>: <code>{rep_sell_stop}</code> (+{buffer_pips}pips)
             </div>
             """, unsafe_allow_html=True)
+            
+        # 資金管理の警告
+        total_margin_req = margin_per_unit * target_grids
+        usage_percent = (total_margin_req / account_balance) * 100
+        if usage_percent > 70:
+            st.error(f"⚠️ 警告: 証拠金使用率が約 {usage_percent:.1f}% に達します。数量を減らすか、資金を追加してください。")
+        elif usage_percent > 40:
+            st.warning(f"⚠️ 注意: 証拠金使用率が約 {usage_percent:.1f}% です。急変動時の含み損に注意してください。")
 
     conf_factor, adx_bonus = confidence / 50.0, 0.2 if latest_adx > 25 else 0.0
     ai_tp_mult = round(max(1.0, min(2.5, 1.2 * conf_factor + adx_bonus)), 2)
     ai_sl_mult = round(max(0.6, min(1.5, 0.8 / (conf_factor * 0.8))), 2)
-    c_low, c_high = clean_series(data["Low"]), clean_series(data["High"])
     buffer_margin = 10 * pip_unit
     structural_buy_sl = round(float(c_low.iloc[-20:].min()) - buffer_margin, 3 if is_jpy_pair else 5)
     structural_sell_sl = round(float(c_high.iloc[-20:].max()) + buffer_margin, 3 if is_jpy_pair else 5)
@@ -822,7 +840,7 @@ else:
         sum_c1, sum_c2 = st.columns(2)
         sum_c1.metric("口座資金", f"{account_balance:,} 円")
         sum_c1.metric("1回あたり数量", f"{quantity_wan} 万通貨 ({custom_quantity:,} 通貨)")
-        sum_c1.metric("リピート注文本数", f"{repeat_mode_grids} 本")
+        sum_c1.metric("AI推奨 注文本数", f"{target_grids} 本")
         sum_c2.metric("分析通貨ペア", selected_label)
         sum_c2.metric("分析時間足", tf_label)
 
