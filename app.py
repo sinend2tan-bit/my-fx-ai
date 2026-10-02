@@ -221,7 +221,9 @@ selected_label = st.sidebar.selectbox(
 symbol = PAIRS[selected_label]
 is_jpy = "JPY" in symbol
 pip_unit = 0.01 if is_jpy else 0.0001
-price_fmt = "{:.3f}" if is_jpy else "{:.5f}"
+
+# Streamlitのnumber_input形式（Printfフォーマット）に変更
+price_fmt = "%.3f" if is_jpy else "%.5f"
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 松井証券 資金・注文設定")
@@ -272,7 +274,7 @@ recommended_width_val = recommended_width_pips * pip_unit
 # ==========================================
 # 3. リピート帯・サポレジ解析結果
 # ==========================================
-# 予想レンジの初期値計算 (Swing High/Low と Pivot を統合)
+# 予想レンジの初期値計算
 range_lower = min(analysis["swing_low_4h"], analysis["s1"])
 range_upper = max(analysis["swing_high_4h"], analysis["r1"])
 
@@ -295,7 +297,7 @@ with r_col2:
         format=price_fmt
     )
 with r_col3:
-    st.metric("現在レート", price_fmt.format(latest_price))
+    st.metric("現在レート", price_fmt % latest_price)
     st.caption(f"日足14日ATR: **{atr_pips:.1f} pips**")
 
 # レンジと本数の計算
@@ -328,13 +330,13 @@ with tab_matsui:
             <b class="label-title">【松井証券 注文設定画面用】</b><br>
             ・<b>通貨ペア</b>　　: <code>{selected_label.split(' ')[0]}</code><br>
             ・<b>売買区分</b>　　: <code>買</code><br>
-            ・<b>レンジ上限</b>　: <code>{price_fmt.format(user_upper)}</code><br>
-            ・<b>レンジ下限</b>　: <code>{price_fmt.format(user_lower)}</code><br>
+            ・<b>レンジ上限</b>　: <code>{price_fmt % user_upper}</code><br>
+            ・<b>レンジ下限</b>　: <code>{price_fmt % user_lower}</code><br>
             ・<b>注文本数</b>　　: <code>{grid_count} 本</code><br>
             ・<b>注文数量</b>　　: <code>{quantity_wan} 万通貨</code> ({order_units:,} 通貨)<br>
             ・<b>注文値幅</b>　　: <code>{recommended_width_pips} pips</code><br>
             ・<b>益出し幅</b>　　: <code>{recommended_width_pips} pips</code><br>
-            ・<b>運用停止(SL)</b>: <code>{price_fmt.format(buy_stop_price)}</code> (-{stop_buffer_pips}pips下落時)
+            ・<b>運用停止(SL)</b>: <code>{price_fmt % buy_stop_price}</code> (-{stop_buffer_pips}pips下落時)
         </div>
         """, unsafe_allow_html=True)
 
@@ -344,13 +346,13 @@ with tab_matsui:
             <b class="label-title">【松井証券 注文設定画面用】</b><br>
             ・<b>通貨ペア</b>　　: <code>{selected_label.split(' ')[0]}</code><br>
             ・<b>売買区分</b>　　: <code>売</code><br>
-            ・<b>レンジ上限</b>　: <code>{price_fmt.format(user_upper)}</code><br>
-            ・<b>レンジ下限</b>　: <code>{price_fmt.format(user_lower)}</code><br>
+            ・<b>レンジ上限</b>　: <code>{price_fmt % user_upper}</code><br>
+            ・<b>レンジ下限</b>　: <code>{price_fmt % user_lower}</code><br>
             ・<b>注文本数</b>　　: <code>{grid_count} 本</code><br>
             ・<b>注文数量</b>　　: <code>{quantity_wan} 万通貨</code> ({order_units:,} 通貨)<br>
             ・<b>注文値幅</b>　　: <code>{recommended_width_pips} pips</code><br>
             ・<b>益出し幅</b>　　: <code>{recommended_width_pips} pips</code><br>
-            ・<b>運用停止(SL)</b>: <code>{price_fmt.format(sell_stop_price)}</code> (+{stop_buffer_pips}pips上昇時)
+            ・<b>運用停止(SL)</b>: <code>{price_fmt % sell_stop_price}</code> (+{stop_buffer_pips}pips上昇時)
         </div>
         """, unsafe_allow_html=True)
 
@@ -365,11 +367,11 @@ with tab_matsui:
             <div class="param-box param-box-buy">
                 <b class="label-title">【買い設定 (下半分)】</b><br>
                 ・<b>売買区分</b>: <code>買</code><br>
-                ・<b>レンジ上限</b>: <code>{price_fmt.format(half_price)}</code><br>
-                ・<b>レンジ下限</b>: <code>{price_fmt.format(user_lower)}</code><br>
+                ・<b>レンジ上限</b>: <code>{price_fmt % half_price}</code><br>
+                ・<b>レンジ下限</b>: <code>{price_fmt % user_lower}</code><br>
                 ・<b>注文本数</b>: <code>{half_buy_grids} 本</code><br>
                 ・<b>注文/益出幅</b>: <code>{recommended_width_pips} pips</code><br>
-                ・<b>運用停止(SL)</b>: <code>{price_fmt.format(buy_stop_price)}</code>
+                ・<b>運用停止(SL)</b>: <code>{price_fmt % buy_stop_price}</code>
             </div>
             """, unsafe_allow_html=True)
         with col_h2:
@@ -377,11 +379,11 @@ with tab_matsui:
             <div class="param-box param-box-sell">
                 <b class="label-title">【売り設定 (上半分)】</b><br>
                 ・<b>売買区分</b>: <code>売</code><br>
-                ・<b>レンジ上限</b>: <code>{price_fmt.format(user_upper)}</code><br>
-                ・<b>レンジ下限</b>: <code>{price_fmt.format(half_price)}</code><br>
+                ・<b>レンジ上限</b>: <code>{price_fmt % user_upper}</code><br>
+                ・<b>レンジ下限</b>: <code>{price_fmt % half_price}</code><br>
                 ・<b>注文本数</b>: <code>{half_sell_grids} 本</code><br>
                 ・<b>注文/益出幅</b>: <code>{recommended_width_pips} pips</code><br>
-                ・<b>運用停止(SL)</b>: <code>{price_fmt.format(sell_stop_price)}</code>
+                ・<b>運用停止(SL)</b>: <code>{price_fmt % sell_stop_price}</code>
             </div>
             """, unsafe_allow_html=True)
 
@@ -421,11 +423,11 @@ with tab_chart:
     # ピボット・サポレジ一覧表
     st.markdown("##### 📌 主要サポレジ・ピボット水準")
     lvl_col1, lvl_col2, lvl_col3 = st.columns(3)
-    lvl_col1.metric("レジスタンス2 (R2)", price_fmt.format(analysis["r2"]))
-    lvl_col1.metric("レジスタンス1 (R1)", price_fmt.format(analysis["r1"]))
-    lvl_col2.metric("デイリーピボット (P)", price_fmt.format(analysis["pivot"]))
-    lvl_col3.metric("サポート1 (S1)", price_fmt.format(analysis["s1"]))
-    lvl_col3.metric("サポート2 (S2)", price_fmt.format(analysis["s2"]))
+    lvl_col1.metric("レジスタンス2 (R2)", price_fmt % analysis["r2"])
+    lvl_col1.metric("レジスタンス1 (R1)", price_fmt % analysis["r1"])
+    lvl_col2.metric("デイリーピボット (P)", price_fmt % analysis["pivot"])
+    lvl_col3.metric("サポート1 (S1)", price_fmt % analysis["s1"])
+    lvl_col3.metric("サポート2 (S2)", price_fmt % analysis["s2"])
 
 # ==========================================
 # Tab 3: 資金管理 & ドローダウンシミュレーション
@@ -434,22 +436,17 @@ with tab_risk:
     st.subheader("🛡️ 想定最大ドローダウン・リスク評価")
     st.caption("設定したレンジの下限（またはロスカットライン）まで価格が完全逆行・全トラップ保有した際の最悪含み損額を事前計算します。")
 
-    # リスク計算ロジック (買いリピート前提の最悪ケース例)
-    # 最悪含み損 = Sum_{i=0}^{N-1} (各ポジションから最安値までの距離 * 数量)
     worst_price = buy_stop_price
     total_unrealized_loss = 0.0
 
-    # レンジ内に均等に置かれたグリッドのポジション生成
     for i in range(grid_count):
         pos_price = user_upper - (i * recommended_width_val)
         if pos_price > worst_price:
             pips_drop = (pos_price - worst_price) / pip_unit
-            # 1pipあたりの損益額 (円ベース)
-            usd_rate = latest_price if is_jpy else 155.0  # クロス円以外の概算用
+            usd_rate = latest_price if is_jpy else 155.0
             pip_value = 100 * (order_units / 10000.0) if is_jpy else (order_units * 0.0001 * usd_rate)
             total_unrealized_loss += pips_drop * pip_value
 
-    # 必要証拠金計算 (レバレッジ25倍)
     single_margin = (latest_price * order_units) / 25.0 if is_jpy else (latest_price * 155.0 * order_units) / 25.0
     total_required_margin = single_margin * grid_count
 
