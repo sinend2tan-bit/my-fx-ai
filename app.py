@@ -12,7 +12,12 @@ import streamlit as st
 import yfinance as yf
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
-from streamlit_autorefresh import st_autorefresh
+
+try:
+    from streamlit_autorefresh import st_autorefresh
+    HAS_AUTOREFRESH = True
+except ImportError:
+    HAS_AUTOREFRESH = False
 
 # ==========================================
 # 0. 画面基本設定 & CSSデザイン定義
@@ -66,6 +71,30 @@ DEFAULT_SETTINGS = {
     "last_notified_status": {},
 }
 
+PAIRS = {
+    "米ドル / 円 (USD/JPY)": "USDJPY=X",
+    "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
+    "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
+    "豪ドル / 円 (AUD/JPY)": "AUDJPY=X",
+    "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
+}
+
+TIMEFRAMES = {
+    "5分足 (超短期スキャル用)": {"period": "7d", "interval": "5m"},
+    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
+    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
+    "4時間足 (中期トレンド用)": {"period": "2y", "interval": "1h"},
+    "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
+}
+
+PAIR_ATR_CONFIG = {
+    "USDJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "GBPJPY=X": {"atr_mult": 0.25, "min_pips": 20},
+    "EURJPY=X": {"atr_mult": 0.20, "min_pips": 15},
+    "AUDJPY=X": {"atr_mult": 0.18, "min_pips": 12},
+    "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
+}
+
 # ==========================================
 # 1. 設定ファイルの永続化 & 補助関数
 # ==========================================
@@ -103,6 +132,11 @@ if "initialized" not in st.session_state:
     saved_settings = load_user_settings()
     for key, val in saved_settings.items():
         st.session_state[key] = val
+    # 安全ガード：選択項目が定義に存在しない場合は初期値に戻す
+    if st.session_state.get("selected_pair_label") not in PAIRS:
+        st.session_state["selected_pair_label"] = DEFAULT_SETTINGS["selected_pair_label"]
+    if st.session_state.get("selected_tf_label") not in TIMEFRAMES:
+        st.session_state["selected_tf_label"] = DEFAULT_SETTINGS["selected_tf_label"]
     st.session_state["initialized"] = True
 
 def send_discord_notification(webhook_url, title, message, color=0x00FF00):
@@ -155,41 +189,22 @@ def get_upcoming_market_events(now_jst, is_summer):
 # ==========================================
 # 2. データ取得 & インジケーター計算エンジン
 # ==========================================
-PAIRS = {
-    "米ドル / 円 (USD/JPY)": "USDJPY=X",
-    "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
-    "ユーロ / 円 (EUR/JPY)": "EURJPY=X",
-    "豪ドル / 円 (AUD/JPY)": "AUDJPY=X",
-    "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
-}
-
-TIMEFRAMES = {
-    "5分足 (超短期スキャル用)": {"period": "7d", "interval": "5m"},
-    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
-    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
-    "4時間足 (中期トレンド用)": {"period": "2y", "interval": "1h"},
-    "日足 (スイング・環境認識用)": {"period": "2y", "interval": "1d"},
-}
-
-PAIR_ATR_CONFIG = {
-    "USDJPY=X": {"atr_mult": 0.20, "min_pips": 15},
-    "GBPJPY=X": {"atr_mult": 0.25, "min_pips": 20},
-    "EURJPY=X": {"atr_mult": 0.20, "min_pips": 15},
-    "AUDJPY=X": {"atr_mult": 0.18, "min_pips": 12},
-    "EURUSD=X": {"atr_mult": 0.18, "min_pips": 12},
-}
-
 @st.cache_data(ttl=60, show_spinner=False)
 def load_and_process_data(symbol, period, interval, tf_name=""):
     df = pd.DataFrame()
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
+        if df.empty:
+            return None
+        
+        # 2次元・階層型カラム（MultiIndex）の整理
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
+            df.columns = df.columns.get_level_values(0)
+        df = df.loc[:, ~df.columns.duplicated()]
     except Exception:
-        pass
+        return None
 
-    if not df.empty and "4時間足" in tf_name and interval == "1h":
+    if "4時間足" in tf_name and interval == "1h":
         try:
             tz_before = df.index.tz
             df = df.resample("4h", closed="left", label="left").agg({
@@ -272,10 +287,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
-        # ---------------------------------------------------------
-        # 【精度向上改修】疑似トリプルバリア法によるTarget生成
-        # 5本先までに損切り(0.5 ATR)にかからず、利確(1.0 ATR)に達したかを判定
-        # ---------------------------------------------------------
+        # 疑似トリプルバリア法によるTarget生成
         lookahead = 5
         f_high = pd.concat([h_series.shift(-i) for i in range(1, lookahead + 1)], axis=1)
         f_low = pd.concat([l_series.shift(-i) for i in range(1, lookahead + 1)], axis=1)
@@ -289,8 +301,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         cond_buy = (future_max_up >= tp_target) & (future_max_down < sl_target)
         cond_sell = (future_max_down >= tp_target) & (future_max_up < sl_target)
 
-        target_series = np.select([cond_buy, cond_sell], [1, -1], default=0)
-        df["Target"] = target_series.astype(float)
+        target_array = np.select([cond_buy, cond_sell], [1, -1], default=0)
+        df["Target"] = pd.Series(target_array, index=df.index, dtype=float)
         
         if len(df) > lookahead: 
             df.iloc[-lookahead:, df.columns.get_loc("Target")] = np.nan
@@ -302,7 +314,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df
     except Exception:
         return None
-@st.cache_data(ttl=60, show_spinner=False)
+# ==========================================
+# パート2: AI学習モデル・バックテスト・MTF分析
+# ==========================================
+@st.cache_data(ttl=120, show_spinner=False)
 def get_mtf_trends(symbol: str) -> dict:
     trends = {}
     for name, params in TIMEFRAMES.items():
@@ -341,7 +356,7 @@ def run_backtest(X_bt, y_bt, test_len):
         y_sub = y_bt.iloc[:train_end][valid_train]
         if len(np.unique(y_sub)) < 2: continue
         
-        sub_model = RandomForestClassifier(n_estimators=120, max_depth=5, min_samples_leaf=5, class_weight="balanced", random_state=42)
+        sub_model = RandomForestClassifier(n_estimators=60, max_depth=5, min_samples_leaf=5, class_weight="balanced", random_state=42)
         sub_model.fit(X_bt.iloc[:train_end][valid_train], y_sub)
         p = sub_model.predict(X_bt.iloc[[idx]])[0]
         actual = y_bt.iloc[idx]
@@ -372,14 +387,14 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         if len(np.unique(y_train)) < 2:
             return "HOLD (分析不可: クラス不足)", 50.0, "判定不可", {}
 
-        model = RandomForestClassifier(n_estimators=120, max_depth=5, min_samples_leaf=5, class_weight="balanced", random_state=42)
+        model = RandomForestClassifier(n_estimators=100, max_depth=5, min_samples_leaf=5, class_weight="balanced", random_state=42)
         model.fit(X_train, y_train)
 
         importances = dict(zip(avail, model.feature_importances_))
         X_latest = X.iloc[[-1]]
         prob_array = model.predict_proba(X_latest)[0]
         prob_dict = dict(zip(model.classes_, prob_array))
-        prob_up, prob_down = prob_dict.get(1, 0.0), prob_dict.get(-1, 0.0)
+        prob_up, prob_down = prob_dict.get(1.0, 0.0), prob_dict.get(-1.0, 0.0)
         confidence = max(prob_up, prob_down) * 100
 
         c_series = clean_series(df_current["Close"])
@@ -423,7 +438,6 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         is_near_support = (latest_price - recent_50_low) < (latest_atr * 0.8)
         is_near_resistance = (recent_50_high - latest_price) < (latest_atr * 0.8)
 
-        # 【精度向上改修】判定しきい値を0.65に引き上げて慎重度を高める
         HIGH_THRESHOLD = 0.65
 
         if latest_adx > 22.0:
@@ -453,9 +467,8 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         return status, confidence, market_type, importances
     except Exception:
         return "HOLD", 50.0, "不明", {}
-
 # ==========================================
-# 3. メインアプリUI・事前察知ボード描画
+# パート3: メインUI・ダッシュボード描画
 # ==========================================
 st.title("AI FX 環境認識 & リピートアナライザー Pro")
 
@@ -605,6 +618,7 @@ else:
     for idx, (tf_name_key, t_val) in enumerate(mtf_trends.items()):
         mtf_cols[idx].metric(label=tf_name_key, value=t_val)
     st.markdown("---")
+    
     tab_repeat, tab_single, tab_speed, tab_chart, tab_scanner, tab_backtest, tab_metrics = st.tabs([
         "📋 リピート注文 (松井証券)", "🎯 デイトレ参考 (AI)", "⚡ スピード注文", "📈 チャート", "🔍 全ペアスキャン", "📊 バックテスト", "📋 運用サマリー"
     ])
@@ -616,7 +630,7 @@ else:
     recent_50_low = float(c_low.iloc[-50:].min())
     range_pips = (recent_50_high - recent_50_low) / pip_unit
 
-    base_grids = int(range_pips / ai_recommended_width)
+    base_grids = int(range_pips / max(1, ai_recommended_width))
     
     uj_rate = float(clean_series(usdjpy_data["Close"]).iloc[-1]) if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0
     jpy_rate = latest_price if is_jpy_pair else latest_price * uj_rate
@@ -641,7 +655,7 @@ else:
         p_decimals = 3 if is_jpy_pair else 5
         grid_width_val = round(ai_recommended_width * pip_unit, p_decimals)
 
-        center_price = round(round(latest_price / grid_width_val) * grid_width_val, p_decimals)
+        center_price = round(round(latest_price / max(1e-5, grid_width_val)) * grid_width_val, p_decimals)
         
         rep_lower = round(center_price - (side_grids * grid_width_val), p_decimals)
         rep_upper = round(center_price + (side_grids * grid_width_val), p_decimals)
@@ -694,18 +708,14 @@ else:
             """, unsafe_allow_html=True)
             
         total_margin_req = margin_per_unit * target_grids
-        usage_percent = (total_margin_req / account_balance) * 100
+        usage_percent = (total_margin_req / max(1.0, account_balance)) * 100
         if usage_percent > 70:
             st.error(f"⚠️ 警告: 証拠金使用率が約 {usage_percent:.1f}% に達します。数量を減らすか、資金を追加してください。")
         elif usage_percent > 40:
             st.warning(f"⚠️ 注意: 証拠金使用率が約 {usage_percent:.1f}% です。急変動時の含み損に注意してください。")
 
-    conf_factor = confidence / 50.0
-    adx_bonus = 0.2 if latest_adx > 25 else 0.0
-    
-    # 単発トレード用: リスクリワード1:2を基本としたTP/SL幅設定
-    ai_tp_mult = 1.0  # 1.0 ATR Target
-    ai_sl_mult = 0.5  # 0.5 ATR Stop
+    ai_tp_mult = 1.0  
+    ai_sl_mult = 0.5  
     
     buffer_margin = 10 * pip_unit
     structural_buy_sl = round(float(c_low.iloc[-20:].min()) - buffer_margin, 3 if is_jpy_pair else 5)
@@ -723,7 +733,7 @@ else:
 
     sl_distance_pips = max(10.0, round((latest_atr * ai_sl_mult) / pip_unit, 1))
     pip_value_per_unit = 0.01 if is_jpy_pair else 0.0001 * uj_rate
-    safe_single_units = max(100, min(int((account_balance * 0.02) / (sl_distance_pips * pip_value_per_unit)), 50000))
+    safe_single_units = max(100, min(int((account_balance * 0.02) / max(0.01, sl_distance_pips * pip_value_per_unit)), 50000))
     safe_single_wan = round(safe_single_units / 10000.0, 4)
 
     with tab_single:
@@ -842,4 +852,5 @@ else:
 
 if auto_refresh:
     st.caption(f"🔄 自動更新有効 ({refresh_interval}秒間隔)")
-    st_autorefresh(interval=refresh_interval * 1000, limit=100, key="data_refresh")
+    if HAS_AUTOREFRESH:
+        st_autorefresh(interval=refresh_interval * 1000, limit=100, key="data_refresh")
