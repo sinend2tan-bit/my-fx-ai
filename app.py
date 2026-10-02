@@ -137,7 +137,22 @@ def get_upcoming_market_events(now_jst, is_summer):
 
     events = [
         {"name": "欧州市場オープン (ロンドン)", "time_str": "16:00" if is_summer else "17:00", "min": london_open},
-  # ==========================================
+        {"name": "米国 主要経済指標発表", "time_str": "21:30" if is_summer else "22:30", "min": us_econ_indicator},
+        {"name": "米国市場オープン (NY)", "time_str": "22:30" if is_summer else "23:30", "min": ny_open},
+        {"name": "早朝・広スプレッド警戒帯", "time_str": "03:00", "min": early_morning},
+    ]
+
+    upcoming = []
+    for ev in events:
+        diff = ev["min"] - current_total_min
+        if diff < -120:
+            diff += 24 * 60
+        upcoming.append({"event": ev["name"], "time": ev["time_str"], "left_min": diff})
+
+    upcoming.sort(key=lambda x: x["left_min"])
+    return upcoming
+
+# ==========================================
 # 2. データ取得 & インジケーター計算エンジン
 # ==========================================
 PAIRS = {
@@ -257,21 +272,28 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
-        f_high = pd.concat([h_series.shift(-1), h_series.shift(-2), h_series.shift(-3)], axis=1)
-        f_low = pd.concat([l_series.shift(-1), l_series.shift(-2), l_series.shift(-3)], axis=1)
+        # ---------------------------------------------------------
+        # 【精度向上改修】疑似トリプルバリア法によるTarget生成
+        # 5本先までに損切り(0.5 ATR)にかからず、利確(1.0 ATR)に達したかを判定
+        # ---------------------------------------------------------
+        lookahead = 5
+        f_high = pd.concat([h_series.shift(-i) for i in range(1, lookahead + 1)], axis=1)
+        f_low = pd.concat([l_series.shift(-i) for i in range(1, lookahead + 1)], axis=1)
 
-        target_pips = new_cols["ATR"] * 0.8  
+        tp_target = new_cols["ATR"] * 1.0
+        sl_target = new_cols["ATR"] * 0.5
+
         future_max_up = f_high.max(axis=1) - c_series
         future_max_down = c_series - f_low.min(axis=1)
 
-        conditions = [
-            (future_max_up >= target_pips) & (future_max_up > future_max_down),
-            (future_max_down >= target_pips) & (future_max_down > future_max_up),
-        ]
-        
-        target_series = np.select(conditions, [1, -1], default=0)
+        cond_buy = (future_max_up >= tp_target) & (future_max_down < sl_target)
+        cond_sell = (future_max_down >= tp_target) & (future_max_up < sl_target)
+
+        target_series = np.select([cond_buy, cond_sell], [1, -1], default=0)
         df["Target"] = target_series.astype(float)
-        if len(df) > 3: df.iloc[-3:, df.columns.get_loc("Target")] = np.nan
+        
+        if len(df) > lookahead: 
+            df.iloc[-lookahead:, df.columns.get_loc("Target")] = np.nan
 
         feature_cols = [c for c in df.columns if c != "Target"]
         df = df.dropna(subset=feature_cols)
@@ -280,7 +302,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df
     except Exception:
         return None
-
 @st.cache_data(ttl=60, show_spinner=False)
 def get_mtf_trends(symbol: str) -> dict:
     trends = {}
@@ -402,7 +423,8 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
         is_near_support = (latest_price - recent_50_low) < (latest_atr * 0.8)
         is_near_resistance = (recent_50_high - latest_price) < (latest_atr * 0.8)
 
-        HIGH_THRESHOLD = 0.60
+        # 【精度向上改修】判定しきい値を0.65に引き上げて慎重度を高める
+        HIGH_THRESHOLD = 0.65
 
         if latest_adx > 22.0:
             market_type = "トレンド相場"
@@ -423,28 +445,15 @@ def analyze_signal(df_current, df_higher, usdjpy_df=None, current_symbol=""):
             market_type = "レンジ相場"
             if is_squeezed: status = "HOLD (ブレイクアウト警戒)"
             else:
-                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.56:
+                if (latest_price <= lower_band or latest_rsi <= 32.0) and prob_up >= 0.58:
                     status = "BUY (レンジ逆張り)" if not usdjpy_strong_down else "HOLD (ストッパー: ドル円逆行)"
-                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.56:
+                elif (latest_price >= upper_band or latest_rsi >= 68.0) and prob_down >= 0.58:
                     status = "SELL (レンジ逆張り)" if not usdjpy_strong_up else "HOLD (ストッパー: ドル円逆行)"
                 else: status = "HOLD (レンジ内静観)"
         return status, confidence, market_type, importances
     except Exception:
         return "HOLD", 50.0, "不明", {}
-      {"name": "米国 主要経済指標発表", "time_str": "21:30" if is_summer else "22:30", "min": us_econ_indicator},
-        {"name": "米国市場オープン (NY)", "time_str": "22:30" if is_summer else "23:30", "min": ny_open},
-        {"name": "早朝・広スプレッド警戒帯", "time_str": "03:00", "min": early_morning},
-    ]
 
-    upcoming = []
-    for ev in events:
-        diff = ev["min"] - current_total_min
-        if diff < -120:
-            diff += 24 * 60
-        upcoming.append({"event": ev["name"], "time": ev["time_str"], "left_min": diff})
-
-    upcoming.sort(key=lambda x: x["left_min"])
-    return upcoming
 # ==========================================
 # 3. メインアプリUI・事前察知ボード描画
 # ==========================================
@@ -478,7 +487,6 @@ st.sidebar.subheader("💰 松井証券トレード資金設定")
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, max_value=100000000, step=50000, key="account_balance", on_change=save_user_settings)
 quantity_wan = st.sidebar.number_input("注文数量 (万通貨)", min_value=0.0001, max_value=10.0, step=0.01, format="%.4f", key="quantity_wan", on_change=save_user_settings)
 custom_quantity = int(round(quantity_wan * 10000))
-# 手動での注文本数設定を削除しました（AIが自動算出します）
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔔 Discord 通知設定")
@@ -511,7 +519,6 @@ else:
     is_econ_indicator_time = (current_hour_jst == 22 and current_minute_jst >= 15) or (current_hour_jst == 23 and current_minute_jst <= 45)
 
 if is_weekend: st.error("【週末クローズ中】現在市場は休業時間帯です。表示レートは最終終値となります。")
-
 if data is None or len(data) < 10:
     st.error("データ取得に失敗しました。時間足を切り替えるか少し置いて再実行してください。")
 else:
@@ -602,35 +609,25 @@ else:
         "📋 リピート注文 (松井証券)", "🎯 デイトレ参考 (AI)", "⚡ スピード注文", "📈 チャート", "🔍 全ペアスキャン", "📊 バックテスト", "📋 運用サマリー"
     ])
 
-    # AI推奨の注文値幅（pips）
     ai_recommended_width = int(max(round(raw_atr_pips * atr_cfg["atr_mult"], 1), atr_cfg["min_pips"]))
 
-    # =========================================================
-    # 【完全改修版】AI推奨注文本数 自動算出ロジック
-    # =========================================================
-    # 1. 過去一定期間（直近50期間）の最高値・最安値から「想定カバーレンジ」を算出
     c_low, c_high = clean_series(data["Low"]), clean_series(data["High"])
     recent_50_high = float(c_high.iloc[-50:].max())
     recent_50_low = float(c_low.iloc[-50:].min())
     range_pips = (recent_50_high - recent_50_low) / pip_unit
 
-    # 2. カバーレンジと注文値幅から「必要最低限の注文本数」を算出
     base_grids = int(range_pips / ai_recommended_width)
     
-    # 3. 資金（証拠金）制約からの上限本数を算出
     uj_rate = float(clean_series(usdjpy_data["Close"]).iloc[-1]) if (usdjpy_data is not None and not usdjpy_data.empty) else 155.0
     jpy_rate = latest_price if is_jpy_pair else latest_price * uj_rate
     margin_per_unit = (jpy_rate * custom_quantity) / 25.0
     
-    # 資金の50%までを証拠金として許容する安全設計
     max_allowable_grids = max(3, int((account_balance * 0.5) / max(margin_per_unit, 1.0)))
 
-    # 4. AI推奨本数の決定 (資金限界を超えないようにキャップ)
     ai_grids = min(max_allowable_grids, max(3, base_grids))
 
-    # 5. 松井証券の仕様（中心1本＋上下同数）に合わせるため必ず「奇数」に調整
     if ai_grids % 2 == 0:
-        ai_grids -= 1  # 偶数なら1引いて奇数にする (安全側に倒す)
+        ai_grids -= 1
     if ai_grids < 3:
         ai_grids = 3
         
@@ -639,20 +636,16 @@ else:
     with tab_repeat:
         st.subheader("📋 松井証券FX 自動売買（リピート注文）最適化ヘルパー")
         
-        # 松井証券の仕組み：区間数 ＝ 本数 - 1（必ず偶数）
         side_grids = (target_grids - 1) // 2  
         
         p_decimals = 3 if is_jpy_pair else 5
         grid_width_val = round(ai_recommended_width * pip_unit, p_decimals)
 
-        # 現在価格を中心基準としてスナップ（綺麗に割り切れる価格に調整）
         center_price = round(round(latest_price / grid_width_val) * grid_width_val, p_decimals)
         
-        # 中心価格から上下同数（side_grids）ずつレンジ幅を延ばす
         rep_lower = round(center_price - (side_grids * grid_width_val), p_decimals)
         rep_upper = round(center_price + (side_grids * grid_width_val), p_decimals)
 
-        # 運用停止（損切り）バッファー価格の算出
         buffer_val = max(latest_atr * 1.5, 0.4 if is_jpy_pair else 0.04)
         rep_buy_stop = round(rep_lower - buffer_val, p_decimals)
         rep_sell_stop = round(rep_upper + buffer_val, p_decimals)
@@ -700,7 +693,6 @@ else:
             </div>
             """, unsafe_allow_html=True)
             
-        # 資金管理の警告
         total_margin_req = margin_per_unit * target_grids
         usage_percent = (total_margin_req / account_balance) * 100
         if usage_percent > 70:
@@ -708,9 +700,13 @@ else:
         elif usage_percent > 40:
             st.warning(f"⚠️ 注意: 証拠金使用率が約 {usage_percent:.1f}% です。急変動時の含み損に注意してください。")
 
-    conf_factor, adx_bonus = confidence / 50.0, 0.2 if latest_adx > 25 else 0.0
-    ai_tp_mult = round(max(1.0, min(2.5, 1.2 * conf_factor + adx_bonus)), 2)
-    ai_sl_mult = round(max(0.6, min(1.5, 0.8 / (conf_factor * 0.8))), 2)
+    conf_factor = confidence / 50.0
+    adx_bonus = 0.2 if latest_adx > 25 else 0.0
+    
+    # 単発トレード用: リスクリワード1:2を基本としたTP/SL幅設定
+    ai_tp_mult = 1.0  # 1.0 ATR Target
+    ai_sl_mult = 0.5  # 0.5 ATR Stop
+    
     buffer_margin = 10 * pip_unit
     structural_buy_sl = round(float(c_low.iloc[-20:].min()) - buffer_margin, 3 if is_jpy_pair else 5)
     structural_sell_sl = round(float(c_high.iloc[-20:].max()) + buffer_margin, 3 if is_jpy_pair else 5)
@@ -725,7 +721,7 @@ else:
         calc_tp = latest_price + (latest_atr * ai_tp_mult)
         calc_sl = latest_price - (latest_atr * ai_sl_mult)
 
-    sl_distance_pips = max(20.0, round((latest_atr * ai_sl_mult) / pip_unit, 1))
+    sl_distance_pips = max(10.0, round((latest_atr * ai_sl_mult) / pip_unit, 1))
     pip_value_per_unit = 0.01 if is_jpy_pair else 0.0001 * uj_rate
     safe_single_units = max(100, min(int((account_balance * 0.02) / (sl_distance_pips * pip_value_per_unit)), 50000))
     safe_single_wan = round(safe_single_units / 10000.0, 4)
