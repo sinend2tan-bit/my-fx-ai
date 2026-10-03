@@ -50,7 +50,6 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { padding: 10px 12px; font-size: 0.95rem !important; font-weight: 700; border-radius: 6px 6px 0 0; white-space: nowrap; }
     .stTabs [aria-selected="true"] { color: #38bdf8 !important; border-bottom-color: #38bdf8 !important; background-color: rgba(56, 189, 248, 0.05); }
 
-    /* モバイル(スマホ)向けの最適化 */
     @media (max-width: 768px) {
         [data-testid="stMetricValue"] { font-size: 1.3rem !important; }
         .param-box { font-size: 0.9rem; padding: 12px; }
@@ -163,7 +162,7 @@ def get_upcoming_market_events(now_jst, is_summer):
 @st.cache_data(ttl=60, show_spinner=False)
 def load_and_process_data(symbol, period, interval, tf_name=""):
     try:
-        df = yf.download(symbol, period=period, interval=interval, progress=False)
+        df = yfinance = yf.download(symbol, period=period, interval=interval, progress=False)
         if df.empty: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         df = df.loc[:, ~df.columns.duplicated()]
@@ -280,7 +279,6 @@ def get_mtf_trends(symbol):
 # ==========================================
 # 3. UI構築 & メイン処理
 # ==========================================
-# 📱 トップナビゲーション (スマホ考慮)
 col_nav1, col_nav2 = st.columns([1, 1])
 with col_nav1:
     selected_label = st.selectbox("通貨ペア (共通)", list(PAIRS.keys()), key="selected_pair_label", on_change=save_user_settings)
@@ -339,13 +337,13 @@ with st.container():
     col_h3.metric("相場判定", market_type, f"ボラティリティ: {latest_atr/pip_unit:.1f}pips")
 
 # ==========================================
-# 4. メインタブ構成 (スマホ横幅考慮)
+# 4. メインタブ構成
 # ==========================================
 tab_daytrade, tab_repeat, tab_chart, tab_risk = st.tabs([
     "🎯 デイトレAI", "🔁 リピート(松井)", "📈 チャート", "🛡️ リスク管理"
 ])
 
-# 🎯 Tab 1: デイトレAI分析 (パターンB)
+# 🎯 Tab 1: デイトレAI分析
 with tab_daytrade:
     st.subheader("🎯 デイトレード 裁量補助")
     tp_mult, sl_mult = 1.0, 0.5
@@ -365,11 +363,10 @@ with tab_daytrade:
     mtf_cols = st.columns(len(TIMEFRAMES))
     for idx, (k, v) in enumerate(mtf_trends.items()): mtf_cols[idx].metric(k, v)
 
-# 🔁 Tab 2: リピートFX設定 (パターンA)
+# 🔁 Tab 2: リピートFX設定
 with tab_repeat:
     st.subheader("📋 松井証券 自動売買パラメータ算出")
     
-    # 4時間足ベースのレンジ算出
     c_4h, h_4h, l_4h = clean_series(data_4h["Close"]), clean_series(data_4h["High"]), clean_series(data_4h["Low"])
     atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
     swing_high = float(h_4h.iloc[-100:].max())
@@ -380,7 +377,6 @@ with tab_repeat:
     user_lower = r_col1.number_input("レンジ下限", value=swing_low, step=0.1 if is_jpy else 0.001, format=price_fmt)
     user_upper = r_col2.number_input("レンジ上限", value=swing_high, step=0.1 if is_jpy else 0.001, format=price_fmt)
     
-    # 値幅と本数の計算
     density_mult = 1.5 if grid_density == "広め" else 0.7 if grid_density == "狭め" else 1.0
     atr_pips_4h = atr_4h / pip_unit
     trap_width_pips = max(PAIR_ATR_CONFIG[ticker]["min_pips"], int(round(atr_pips_4h * density_mult)))
@@ -446,24 +442,25 @@ with tab_repeat:
             </div>
             """, unsafe_allow_html=True)
 
-# 📈 Tab 3: チャート分析
+# 📈 Tab 3: チャート分析（★直感的な操作性に大幅改善）
 with tab_chart:
     st.subheader(f"📈 {tf_label.split(' ')[0]} チャート")
-    df_chart = data.tail(80).copy()
+    
+    # ズームした際に過去の傾向がわかるよう、表示本数を150本に拡張
+    df_chart = data.tail(150).copy()
+    
+    # 時間軸（DatetimeIndex）をそのまま維持することで、連続したスクロール・ズームを可能にする
     if df_chart.index.tz is None: df_chart.index = df_chart.index.tz_localize("UTC")
     df_chart.index = df_chart.index.tz_convert("Asia/Tokyo")
-    cx = df_chart.index.strftime("%m/%d %H:%M" if "足" in tf_label and "日" not in tf_label else "%Y-%m-%d")
+    cx = df_chart.index
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.05)
+    # グラフの余白を詰め、高さを拡張
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.03)
     
     # ローソク足
     fig.add_trace(go.Candlestick(
-        x=cx, 
-        open=clean_series(df_chart["Open"]), 
-        high=clean_series(df_chart["High"]), 
-        low=clean_series(df_chart["Low"]), 
-        close=clean_series(df_chart["Close"]), 
-        name="ローソク足"
+        x=cx, open=clean_series(df_chart["Open"]), high=clean_series(df_chart["High"]), 
+        low=clean_series(df_chart["Low"]), close=clean_series(df_chart["Close"]), name="価格"
     ), row=1, col=1)
     
     # 移動平均線
@@ -474,62 +471,65 @@ with tab_chart:
     fig.add_hline(y=user_upper, line_dash="dash", line_color="#ef4444", annotation_text="上限", row=1, col=1)
     fig.add_hline(y=user_lower, line_dash="dash", line_color="#22c55e", annotation_text="下限", row=1, col=1)
     
-    # ==========================================
-    # 💡 追加: 買い・売りサインのプロット処理
-    # ==========================================
-    
-    # 【1】最新のAI判定シグナルをチャート右端（最新の足）に矢印付きで表示
+    # AI判定シグナル表示
     latest_x = cx[-1]
     latest_high = clean_series(df_chart["High"]).iloc[-1]
     latest_low = clean_series(df_chart["Low"]).iloc[-1]
-    
     if market_status.startswith("BUY"):
-        # ローソク足の下から上に向けて矢印を描画
         fig.add_annotation(
-            x=latest_x, y=latest_low,
-            text="AI: BUY", showarrow=True, arrowhead=1, arrowsize=2, arrowwidth=2,
-            arrowcolor="#22c55e", ax=0, ay=40,
-            font=dict(size=14, color="#22c55e", family="sans-serif", weight="bold"),
-            row=1, col=1
+            x=latest_x, y=latest_low, text="AI: BUY", showarrow=True, arrowhead=1, arrowsize=2, arrowwidth=2,
+            arrowcolor="#22c55e", ax=0, ay=40, font=dict(size=14, color="#22c55e", family="sans-serif", weight="bold"), row=1, col=1
         )
     elif market_status.startswith("SELL"):
-        # ローソク足の上から下に向けて矢印を描画
         fig.add_annotation(
-            x=latest_x, y=latest_high,
-            text="AI: SELL", showarrow=True, arrowhead=1, arrowsize=2, arrowwidth=2,
-            arrowcolor="#ef4444", ax=0, ay=-40,
-            font=dict(size=14, color="#ef4444", family="sans-serif", weight="bold"),
-            row=1, col=1
+            x=latest_x, y=latest_high, text="AI: SELL", showarrow=True, arrowhead=1, arrowsize=2, arrowwidth=2,
+            arrowcolor="#ef4444", ax=0, ay=-40, font=dict(size=14, color="#ef4444", family="sans-serif", weight="bold"), row=1, col=1
         )
         
-    # 【2】過去のローソク足へのサイン描画（散布図マーカーを利用）
+    # 過去のサイン描画
     buy_signals = (clean_series(df_chart["Close"]) > clean_series(df_chart["SMA_20"])) & (clean_series(df_chart["Close"]).shift(1) <= clean_series(df_chart["SMA_20"]).shift(1))
     sell_signals = (clean_series(df_chart["Close"]) < clean_series(df_chart["SMA_20"])) & (clean_series(df_chart["Close"]).shift(1) >= clean_series(df_chart["SMA_20"]).shift(1))
-    
     if buy_signals.any():
-        fig.add_trace(go.Scatter(
-            x=cx[buy_signals], 
-            y=clean_series(df_chart["Low"])[buy_signals] - (latest_atr * 0.2), # 安値の少し下に表示
-            mode='markers', marker=dict(symbol='triangle-up', size=12, color='#22c55e'),
-            name='過去の買サイン'
-        ), row=1, col=1)
-        
+        fig.add_trace(go.Scatter(x=cx[buy_signals], y=clean_series(df_chart["Low"])[buy_signals] - (latest_atr * 0.2), mode='markers', marker=dict(symbol='triangle-up', size=12, color='#22c55e'), name='買サイン'), row=1, col=1)
     if sell_signals.any():
-        fig.add_trace(go.Scatter(
-            x=cx[sell_signals], 
-            y=clean_series(df_chart["High"])[sell_signals] + (latest_atr * 0.2), # 高値の少し上に表示
-            mode='markers', marker=dict(symbol='triangle-down', size=12, color='#ef4444'),
-            name='過去の売サイン'
-        ), row=1, col=1)
-    # ==========================================
+        fig.add_trace(go.Scatter(x=cx[sell_signals], y=clean_series(df_chart["High"])[sell_signals] + (latest_atr * 0.2), mode='markers', marker=dict(symbol='triangle-down', size=12, color='#ef4444'), name='売サイン'), row=1, col=1)
 
     # RSI
     if "RSI" in df_chart.columns: fig.add_trace(go.Scatter(x=cx, y=clean_series(df_chart["RSI"]), line=dict(color="#9b59b6", width=1.5), name="RSI"), row=2, col=1)
     fig.add_hline(y=70, line_dash="dot", line_color="gray", row=2, col=1)
     fig.add_hline(y=30, line_dash="dot", line_color="gray", row=2, col=1)
     
-    fig.update_layout(xaxis_rangeslider_visible=False, height=450, margin=dict(l=10, r=10, t=10, b=10), template="plotly_dark")
-    st.plotly_chart(fig, use_container_width=True)
+    # ==============================
+    # ★ TradingViewライクなレイアウト設定
+    # ==============================
+    fig.update_layout(
+        xaxis_rangeslider_visible=False,
+        height=600, # 高さを広くして見やすく
+        margin=dict(l=10, r=60, t=10, b=10), # 右軸用にマージンを確保
+        template="plotly_dark",
+        hovermode="x unified", # 縦のクロスヘアに沿ってデータを一括表示（超重要）
+        dragmode="pan",        # デフォルトで画面のドラッグ移動（パン）を有効化
+        showlegend=False       # ツールチップにすべて表示されるため凡例は隠して広く使う
+    )
+    
+    # 週末（土・日）のギャップを詰めて表示
+    fig.update_xaxes(
+        rangebreaks=[dict(bounds=["sat", "mon"])],
+        showspikes=True, spikemode="across", spikesnap="cursor", showline=True
+    )
+    
+    # 価格軸（Y軸）を右側に配置する（一般的なチャートソフトの配置）
+    fig.update_yaxes(side="right")
+    
+    # マウスホイールでのズーム操作を有効化するオプション
+    plotly_config = {
+        'scrollZoom': True,
+        'displayModeBar': True,
+        'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+        'displaylogo': False
+    }
+    
+    st.plotly_chart(fig, use_container_width=True, config=plotly_config)
 
 # 🛡️ Tab 4: リスク管理
 with tab_risk:
