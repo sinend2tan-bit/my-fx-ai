@@ -291,7 +291,7 @@ ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
 is_jpy = "JPY" in ticker
 pip_unit = 0.01 if is_jpy else 0.0001
-price_fmt = "%.3f" if is_jpy else "%.5f" # エラー防止: printf形式を徹底[span_1](start_span)[span_1](end_span)
+price_fmt = "%.3f" if is_jpy else "%.5f"
 
 # ⚙️ サイドバー設定
 st.sidebar.header("⚙️ 資金・リピート設定")
@@ -375,7 +375,6 @@ with tab_repeat:
     swing_high = float(h_4h.iloc[-100:].max())
     swing_low = float(l_4h.iloc[-100:].min())
     
-    # UIでレンジを微調整可能に（前回のエラー対策済）[span_2](start_span)[span_2](end_span)
     st.markdown("###### 🎯 予想レンジの微調整")
     r_col1, r_col2 = st.columns(2)
     user_lower = r_col1.number_input("レンジ下限", value=swing_low, step=0.1 if is_jpy else 0.001, format=price_fmt)
@@ -456,8 +455,18 @@ with tab_chart:
     cx = df_chart.index.strftime("%m/%d %H:%M" if "足" in tf_label and "日" not in tf_label else "%Y-%m-%d")
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.05)
-    fig.add_trace(go.Candlestick(x=cx, open=clean_series(df_chart["Open"]), high=clean_series(df_chart["High"]), low=clean_series(df_chart["Low"]), close=clean_series(df_chart["Close"]), name="ローソク足"), row=1, col=1)
     
+    # ローソク足
+    fig.add_trace(go.Candlestick(
+        x=cx, 
+        open=clean_series(df_chart["Open"]), 
+        high=clean_series(df_chart["High"]), 
+        low=clean_series(df_chart["Low"]), 
+        close=clean_series(df_chart["Close"]), 
+        name="ローソク足"
+    ), row=1, col=1)
+    
+    # 移動平均線
     if "SMA_20" in df_chart.columns: fig.add_trace(go.Scatter(x=cx, y=clean_series(df_chart["SMA_20"]), line=dict(color="orange", width=1.5), name="SMA20"), row=1, col=1)
     if "EMA_200" in df_chart.columns: fig.add_trace(go.Scatter(x=cx, y=clean_series(df_chart["EMA_200"]), line=dict(color="#3498db", width=2), name="EMA200"), row=1, col=1)
     
@@ -465,6 +474,56 @@ with tab_chart:
     fig.add_hline(y=user_upper, line_dash="dash", line_color="#ef4444", annotation_text="上限", row=1, col=1)
     fig.add_hline(y=user_lower, line_dash="dash", line_color="#22c55e", annotation_text="下限", row=1, col=1)
     
+    # ==========================================
+    # 💡 追加: 買い・売りサインのプロット処理
+    # ==========================================
+    
+    # 【1】最新のAI判定シグナルをチャート右端（最新の足）に矢印付きで表示
+    latest_x = cx[-1]
+    latest_high = clean_series(df_chart["High"]).iloc[-1]
+    latest_low = clean_series(df_chart["Low"]).iloc[-1]
+    
+    if market_status.startswith("BUY"):
+        # ローソク足の下から上に向けて矢印を描画
+        fig.add_annotation(
+            x=latest_x, y=latest_low,
+            text="AI: BUY", showarrow=True, arrowhead=1, arrowsize=2, arrowwidth=2,
+            arrowcolor="#22c55e", ax=0, ay=40,
+            font=dict(size=14, color="#22c55e", family="sans-serif", weight="bold"),
+            row=1, col=1
+        )
+    elif market_status.startswith("SELL"):
+        # ローソク足の上から下に向けて矢印を描画
+        fig.add_annotation(
+            x=latest_x, y=latest_high,
+            text="AI: SELL", showarrow=True, arrowhead=1, arrowsize=2, arrowwidth=2,
+            arrowcolor="#ef4444", ax=0, ay=-40,
+            font=dict(size=14, color="#ef4444", family="sans-serif", weight="bold"),
+            row=1, col=1
+        )
+        
+    # 【2】過去のローソク足へのサイン描画（散布図マーカーを利用）
+    buy_signals = (clean_series(df_chart["Close"]) > clean_series(df_chart["SMA_20"])) & (clean_series(df_chart["Close"]).shift(1) <= clean_series(df_chart["SMA_20"]).shift(1))
+    sell_signals = (clean_series(df_chart["Close"]) < clean_series(df_chart["SMA_20"])) & (clean_series(df_chart["Close"]).shift(1) >= clean_series(df_chart["SMA_20"]).shift(1))
+    
+    if buy_signals.any():
+        fig.add_trace(go.Scatter(
+            x=cx[buy_signals], 
+            y=clean_series(df_chart["Low"])[buy_signals] - (latest_atr * 0.2), # 安値の少し下に表示
+            mode='markers', marker=dict(symbol='triangle-up', size=12, color='#22c55e'),
+            name='過去の買サイン'
+        ), row=1, col=1)
+        
+    if sell_signals.any():
+        fig.add_trace(go.Scatter(
+            x=cx[sell_signals], 
+            y=clean_series(df_chart["High"])[sell_signals] + (latest_atr * 0.2), # 高値の少し上に表示
+            mode='markers', marker=dict(symbol='triangle-down', size=12, color='#ef4444'),
+            name='過去の売サイン'
+        ), row=1, col=1)
+    # ==========================================
+
+    # RSI
     if "RSI" in df_chart.columns: fig.add_trace(go.Scatter(x=cx, y=clean_series(df_chart["RSI"]), line=dict(color="#9b59b6", width=1.5), name="RSI"), row=2, col=1)
     fig.add_hline(y=70, line_dash="dot", line_color="gray", row=2, col=1)
     fig.add_hline(y=30, line_dash="dot", line_color="gray", row=2, col=1)
