@@ -29,14 +29,14 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1280px; }
-    [data-testid="stMetricValue"] { font-size: 1.5rem !important; font-weight: 800 !important; }
+    [data-testid="stMetricValue"] { font-size: 1.4rem !important; font-weight: 800 !important; }
     
-    .badge-buy { background-color: #16a34a; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.1rem; display: inline-block; }
-    .badge-sell { background-color: #dc2626; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.1rem; display: inline-block; }
-    .badge-wait { background-color: #475569; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.1rem; display: inline-block; }
+    .badge-buy { background-color: #16a34a; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
+    .badge-sell { background-color: #dc2626; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
+    .badge-wait { background-color: #475569; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
     
     .param-box { background-color: rgba(30, 41, 59, 0.8) !important; border-left: 5px solid #3b82f6; padding: 12px; border-radius: 6px; font-family: monospace; line-height: 1.8; color: #f8fafc !important; }
-    .param-box code { font-size: 1.0rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: rgba(51, 65, 85, 0.9) !important; }
+    .param-box code { font-size: 0.95rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: rgba(51, 65, 85, 0.9) !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -45,15 +45,6 @@ FEATURE_COLUMNS = [
     "RSI", "RSI_Diff", "MACD_Hist_Ratio", "BB_PctB", "ADX",
     "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio", "Stoch_K"
 ]
-
-SETTINGS_FILE = "user_settings.json"
-DEFAULT_SETTINGS = {
-    "account_balance": 500000,
-    "quantity_wan": 0.10,
-    "selected_pair_label": "米ドル / 円 (USD/JPY)",
-    "selected_tf_label": "15分足 (デイトレエントリー用)",
-    "grid_density": "標準",
-}
 
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
@@ -137,7 +128,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
-        # 正解ラベル（Target）: 5本先までに1.0*ATRの利益が出るか
         lookahead = 5
         f_high = pd.concat([h.shift(-i) for i in range(1, lookahead + 1)], axis=1).max(axis=1) - c
         f_low = c - pd.concat([l.shift(-i) for i in range(1, lookahead + 1)], axis=1).min(axis=1)
@@ -158,7 +148,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
         X, y = df_current[avail], df_current["Target"]
         
-        # 直近の学習データ
         train_mask = ~y.isna()
         X_train, y_train = X[train_mask].iloc[:-100], y[train_mask].iloc[:-100]
         X_test, y_test = X[train_mask].iloc[-100:], y[train_mask].iloc[-100:]
@@ -168,22 +157,18 @@ def analyze_signal_with_backtest(df_current, df_htf):
         model = RandomForestClassifier(n_estimators=100, max_depth=5, min_samples_leaf=5, random_state=42)
         model.fit(X_train, y_train)
 
-        # 簡易バックテスト勝率計算
         preds = model.predict(X_test)
         valid_eval = (preds != 0) & (y_test != 0)
         win_rate = (preds[valid_eval] == y_test[valid_eval]).mean() * 100 if valid_eval.sum() > 0 else 50.0
 
-        # 最新足の予測
         probs = dict(zip(model.classes_, model.predict_proba(X.iloc[[-1]])[0]))
         prob_up, prob_down = probs.get(1.0, 0.0), probs.get(-1.0, 0.0)
         conf = max(prob_up, prob_down) * 100
 
-        # 上位足（日足）トレンド判定（上位足EMA200）
         htf_close = clean_series(df_htf["Close"]).iloc[-1]
         htf_ema200 = clean_series(df_htf["EMA_200"]).iloc[-1]
         htf_uptrend = htf_close > htf_ema200
 
-        # 厳格なフィルター（確信度70%以上 & 上位足と同方向のみ採用）
         if prob_up >= 0.70 and htf_uptrend:
             status = "BUY (買い)"
         elif prob_down >= 0.70 and not htf_uptrend:
@@ -201,8 +186,11 @@ def analyze_signal_with_backtest(df_current, df_htf):
 # ==========================================
 # 2. UI構築
 # ==========================================
-selected_label = st.selectbox("通貨ペア", list(PAIRS.keys()), key="selected_pair_label")
-tf_label = st.selectbox("時間足", list(TIMEFRAMES.keys()), key="selected_tf_label")
+col_sel1, col_sel2 = st.columns(2)
+with col_sel1:
+    selected_label = st.selectbox("通貨ペア", list(PAIRS.keys()), key="selected_pair_label")
+with col_sel2:
+    tf_label = st.selectbox("時間足", list(TIMEFRAMES.keys()), key="selected_tf_label")
 
 ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
@@ -210,15 +198,17 @@ is_jpy = "JPY" in ticker
 pip_unit = 0.01 if is_jpy else 0.0001
 price_fmt = "%.3f" if is_jpy else "%.5f"
 
-# サイドバー
+# サイドバー設定
+st.sidebar.header("⚙️ 資金 & リスク設定")
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, value=500000, step=50000)
 quantity_wan = st.sidebar.number_input("1注文の数量 (万通貨)", min_value=0.01, value=0.10, step=0.01)
 
 # データ取得
 data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
+data_4h = load_and_process_data(ticker, "2y", "1h", "4時間足 (中期・リピート用)")
 data_htf = load_and_process_data(ticker, "2y", "1d", "日足")
 
-if data is None or data_htf is None:
+if data is None or data_4h is None or data_htf is None:
     st.error("データの取得に失敗しました。時間足を変更してください。")
     st.stop()
 
@@ -242,15 +232,22 @@ m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 
 st.markdown("---")
 
-# --- 2. リピート想定レンジの設定 ---
-swing_high = float(clean_series(data["High"]).iloc[-100:].max())
-swing_low = float(clean_series(data["Low"]).iloc[-100:].min())
+# --- 2. リピート想定レンジの設定 (4時間足基準) ---
+swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
+swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
+atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
 with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=False):
     rc1, rc2 = st.columns(2)
-    user_lower = rc1.number_input("レンジ下限", value=swing_low, step=0.1 if is_jpy else 0.001, format=price_fmt)
-    user_upper = rc2.number_input("レンジ上限", value=swing_high, step=0.1 if is_jpy else 0.001, format=price_fmt)
+    user_lower = rc1.number_input("レンジ下限", value=swing_low_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
+    user_upper = rc2.number_input("レンジ上限", value=swing_high_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
     user_half = (user_upper + user_lower) / 2.0
+
+# 運用停止ライン（SL）の算出（4H足ATR × 1.5倍のバッファ）
+stop_buffer_pips = round((atr_4h / pip_unit) * 1.5, 1)
+stop_buffer_val = stop_buffer_pips * pip_unit
+buy_stop_loss = user_lower - stop_buffer_val   # 買ゾーンの運用停止ライン
+sell_stop_loss = user_upper + stop_buffer_val  # 売ゾーンの運用停止ライン
 
 # --- 3. メインチャート表示 ---
 df_chart = data.tail(120).copy()
@@ -270,11 +267,13 @@ fig.add_trace(go.Candlestick(
 if "EMA_200" in df_chart.columns:
     fig.add_trace(go.Scatter(x=cx, y=clean_series(df_chart["EMA_200"]), line=dict(color="#38bdf8", width=1.5), name="EMA200"), row=1, col=1)
 
-# ★ チャート上へのリピートレンジ可視化 (カラー帯＆破線)
+# ★ チャート上へのリピートレンジ & 運用停止ライン描画
 fig.add_hrect(y0=user_lower, y1=user_upper, fillcolor="rgba(56, 189, 248, 0.05)", line_width=0, row=1, col=1)
+fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#b91c1c", annotation_text="売 運用停止", row=1, col=1)
 fig.add_hline(y=user_upper, line_dash="dash", line_color="#ef4444", annotation_text="リピート上限", row=1, col=1)
 fig.add_hline(y=user_half, line_dash="dot", line_color="#a855f7", annotation_text="ハーフライン", row=1, col=1)
 fig.add_hline(y=user_lower, line_dash="dash", line_color="#22c55e", annotation_text="リピート下限", row=1, col=1)
+fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#15803d", annotation_text="買 運用停止", row=1, col=1)
 
 # RSI
 if "RSI" in df_chart.columns:
@@ -285,7 +284,7 @@ if "RSI" in df_chart.columns:
 fig.update_layout(
     xaxis_rangeslider_visible=False,
     height=550,
-    margin=dict(l=10, r=60, t=10, b=10),
+    margin=dict(l=10, r=70, t=10, b=10),
     template="plotly_dark",
     hovermode="x unified",
     dragmode="pan",
@@ -296,17 +295,43 @@ fig.update_yaxes(side="right")
 
 st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
 
-# --- 4. 注文パラメータ生成 (アコーディオン化) ---
-with st.expander("📋 松井証券 リピート注文設定値（コピー用）"):
-    trap_width_pips = max(15, int(round(latest_atr / pip_unit)))
+# --- 4. 注文パラメータ & リスクシミュレーション ---
+with st.expander("📋 松井証券 リピート注文設定値 & リスク管理（詳細）", expanded=True):
+    trap_width_pips = max(15, int(round((atr_4h / pip_unit))))
     range_pips = abs(user_upper - user_lower) / pip_unit
     grid_count = max(2, int(range_pips // trap_width_pips) + 1)
+    half_grid_count = max(1, grid_count // 2)
+
+    # 簡易リスク計算
+    order_units = int(quantity_wan * 10000)
+    usd_rate = float(clean_series(yf.download("USDJPY=X", period="1d", progress=False)["Close"]).iloc[-1]) if not is_jpy else 1.0
+    pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
     
+    # 片側全トラップ捕まった場合の最大含み損（概算）
+    max_loss_yen = 0.0
+    for i in range(half_grid_count):
+        max_loss_yen += (i * trap_width_pips + stop_buffer_pips) * pip_value_yen
+        
+    margin_per_order = (latest_price * order_units) / 25.0 if is_jpy else (latest_price * usd_rate * order_units) / 25.0
+    total_margin_yen = margin_per_order * half_grid_count
+    risk_ratio = (max_loss_yen / account_balance) * 100 if account_balance > 0 else 0.0
+
     st.markdown(f"""
     <div class="param-box">
-    <b>【ハーフ＆ハーフ推奨設定】</b><br>
-    ・買い設定（下半）: <code>{price_fmt % user_lower}</code> ～ <code>{price_fmt % user_half}</code><br>
-    ・売り設定（上半）: <code>{price_fmt % user_half}</code> ～ <code>{price_fmt % user_upper}</code><br>
-    ・注文/益出し幅: <code>{trap_width_pips} pips</code> | 注文本数: 約 <code>{grid_count} 本</code>
+    <b>【ハーフ＆ハーフ推奨設定値】</b><br>
+    ・<b>買い設定（下半）</b>: レンジ <code>{price_fmt % user_lower}</code> ～ <code>{price_fmt % user_half}</code> | <b>運用停止(SL)</b>: <code>{price_fmt % buy_stop_loss}</code> (-{stop_buffer_pips}pips)<br>
+    ・<b>売り設定（上半）</b>: レンジ <code>{price_fmt % user_half}</code> ～ <code>{price_fmt % user_upper}</code> | <b>運用停止(SL)</b>: <code>{price_fmt % sell_stop_loss}</code> (+{stop_buffer_pips}pips)<br>
+    ・<b>注文/益出し幅</b>: <code>{trap_width_pips} pips</code> | <b>片側注文本数</b>: 約 <code>{half_grid_count} 本</code> (計 {grid_count}本)
     </div>
     """, unsafe_allow_html=True)
+    
+    st.markdown("##### 🛡️ リスク・資金シミュレーション")
+    rc1, rc2, rc3 = st.columns(3)
+    rc1.metric("想定最大含み損", f"約 {int(max_loss_yen):,} 円")
+    rc2.metric("片側最大 必要証拠金", f"約 {int(total_margin_yen):,} 円")
+    rc3.metric("資金リスク比率", f"{risk_ratio:.1f}%")
+
+    if risk_ratio > 40.0:
+        st.error("🚨 警告: 撤退時の最大損失が口座資金の40%を超えています。数量(万通貨)を減らすか口座資金を増やしてください。")
+    else:
+        st.success("🟢 資金管理チェック: 適切なリスク範囲内です。")
