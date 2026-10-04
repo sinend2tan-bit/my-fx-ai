@@ -226,7 +226,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_down = float(class_prob_map.get(-1.0, 0.0))
         prob_wait = float(class_prob_map.get(0.0, 0.0))
         
-        # 確率は合計1.0(100%)に確実に規一化
+        # 確率は合計1.0(100%)に確実に正規化
         total_p = prob_up + prob_down + prob_wait
         if total_p > 0:
             prob_up, prob_down, prob_wait = prob_up/total_p, prob_down/total_p, prob_wait/total_p
@@ -399,8 +399,8 @@ with tab_chart:
         dragmode="pan",
         showlegend=False
     )
-    # カテゴリー軸の描画・ラベル間引き最適化
-    fig.update_xaxes(type='category', maxnticks=10, tickangle=-30, showspikes=True)
+    # カテゴリー軸の描画・ラベル間引き最適化（修正：nticks を使用）
+    fig.update_xaxes(type='category', nticks=10, tickangle=-30, showspikes=True)
     fig.update_yaxes(side="right")
 
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
@@ -478,4 +478,4 @@ with tab_ai:
     with pcol2:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
         st.metric("直近テスト100足の方向勝率", f"{win_rate:.1f}%")
-        st.caption("※ 先読みデータ（Lookahead Leak）を排除した厳格なバックテスト精度です。70%以上の確率スコアと日足トレンドが一致した場合のみ推奨シリアルが発動します。")
+        st.caption("※ 先読みデータ（Lookahead Leak）を排除した厳格なバックテスト精度です。70%以上の確率スコアと日足トレンドが一致した場合のみ推奨シグナルが発動します。")
