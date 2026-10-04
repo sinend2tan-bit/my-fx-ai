@@ -59,7 +59,7 @@ TIMEFRAMES = {
     "5分足 (スキャル用)": {"period": "7d", "interval": "5m"},
     "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
     "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
-    "4時間足 (中期・リピート用)": {"period": "2y", "interval": "1h"},
+    "4時間足 (中期・リピート用)": {"period": "1y", "interval": "1h"},
 }
 
 def clean_series(s):
@@ -177,13 +177,19 @@ def analyze_signal_with_backtest(df_current, df_htf):
 
     try:
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
-        X, y = df_current[avail], df_current["Target"]
         
-        train_mask = y.notna()
-        X_train, y_train = X[train_mask].iloc[:-100], y[train_mask].iloc[:-100]
-        X_test, y_test = X[train_mask].iloc[-100:], y[train_mask].iloc[-100:]
+        # TargetがNaNでないデータ（確定した過去バー）のみを学習対象にする
+        df_valid = df_current.dropna(subset=["Target"])
+        if len(df_valid) < 120:
+            return "WAIT (学習データ不足)", 0.0, 0.0, "判定不可"
 
-        if len(np.unique(y_train)) < 2: return "WAIT", 0.0, 0.0, "判定不可"
+        X = df_valid[avail]
+        y = df_valid["Target"]
+        
+        X_train, y_train = X.iloc[:-100], y.iloc[:-100]
+        X_test, y_test = X.iloc[-100:], y.iloc[-100:]
+
+        if len(np.unique(y_train)) < 2: return "WAIT (データ偏り)", 0.0, 0.0, "判定不可"
 
         model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42)
         model.fit(X_train, y_train)
@@ -192,7 +198,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
         valid_eval = (preds != 0) & (y_test != 0)
         win_rate = (preds[valid_eval] == y_test[valid_eval]).mean() * 100 if valid_eval.sum() > 0 else 50.0
 
-        probs = dict(zip(model.classes_, model.predict_proba(X.iloc[[-1]])[0]))
+        # 最新バー（未確定バー含むリアルタイム足）の入力データで予測
+        latest_X = df_current[avail].iloc[[-1]]
+        probs = dict(zip(model.classes_, model.predict_proba(latest_X)[0]))
         prob_up, prob_down = probs.get(1.0, 0.0), probs.get(-1.0, 0.0)
         conf = max(prob_up, prob_down) * 100
 
@@ -231,8 +239,8 @@ price_fmt = "%.3f" if is_jpy else "%.5f"
 
 # サイドバー設定
 st.sidebar.header("⚙️ 資金 & リスク設定")
-account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, value=500000, step=50000)
-quantity_wan = st.sidebar.number_input("1注文の数量 (万通貨)", min_value=0.01, value=0.10, step=0.01)
+account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, value=500000, step=50000, help="運用予定の口座残高を入力してください。")
+quantity_wan = st.sidebar.number_input("1注文の数量 (万通貨)", min_value=0.01, value=0.10, step=0.01, help="1回の注文あたりの数量です。松井証券では100通貨(0.01万)単位で指定可能です。")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新設定")
@@ -247,11 +255,15 @@ if st.sidebar.button("🔄 最新データに手動更新"):
 
 # データ取得
 data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
-data_4h = load_and_process_data(ticker, "2y", "1h", "4時間足 (中期・リピート用)")
+data_4h = load_and_process_data(ticker, "1y", "1h", "4時間足 (中期・リピート用)")
 data_htf = load_and_process_data(ticker, "2y", "1d", "日足")
 
-if data is None or data_4h is None or data_htf is None:
-    st.error("データの取得に失敗しました。時間足を変更してください。")
+# 4時間足データのフォールバック（通信障害等のバックアップ）
+if data_4h is None and data is not None:
+    data_4h = data
+
+if data is None or data_htf is None:
+    st.error("データの取得に失敗しました。時間足または通貨ペアを変更してください。")
     st.stop()
 
 now_jst = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S")
@@ -284,12 +296,18 @@ atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
 with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=False):
     rc1, rc2 = st.columns(2)
-    user_lower = rc1.number_input("レンジ下限", value=swing_low_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
-    user_upper = rc2.number_input("レンジ上限", value=swing_high_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
+    in_lower = rc1.number_input("レンジ下限", value=swing_low_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
+    in_upper = rc2.number_input("レンジ上限", value=swing_high_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
+    
+    # ユーザー入力の逆転・同一値に対する防御コード
+    user_lower = min(in_lower, in_upper)
+    user_upper = max(in_lower, in_upper)
+    if user_lower == user_upper:
+        user_upper += pip_unit * 100.0
     user_half = (user_upper + user_lower) / 2.0
 
 # 運用停止ライン（SL）の算出（4H足ATR × 1.5倍のバッファ）
-stop_buffer_pips = round((atr_4h / pip_unit) * 1.5, 1)
+stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
 stop_buffer_val = stop_buffer_pips * pip_unit
 buy_stop_loss = user_lower - stop_buffer_val   # 買ゾーンの運用停止ライン
 sell_stop_loss = user_upper + stop_buffer_val  # 売ゾーンの運用停止ライン
@@ -300,7 +318,7 @@ cx = df_chart.index
 
 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.03)
 
-# ローソク足（プロ向け明瞭なカラー配色）
+# ローソク足
 fig.add_trace(go.Candlestick(
     x=cx,
     open=clean_series(df_chart["Open"]),
@@ -339,7 +357,7 @@ fig.update_layout(
     dragmode="pan",
     showlegend=False
 )
-fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], showspikes=True)
+fig.update_xaxes(rangebreaks=[dict(bounds=[6, 1], pattern="day of week")], showspikes=True)
 fig.update_yaxes(side="right")
 
 st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
@@ -351,7 +369,7 @@ with st.expander("📋 松井証券 リピート注文設定値 & リスク管�
     grid_count = max(2, int(range_pips // trap_width_pips) + 1)
     half_grid_count = max(1, grid_count // 2)
 
-    # 簡易リスク計算（安全なキャッシュ取得関数を使用）
+    # 簡易リスク計算
     order_units = int(quantity_wan * 10000)
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
@@ -374,6 +392,16 @@ with st.expander("📋 松井証券 リピート注文設定値 & リスク管�
     </div>
     """, unsafe_allow_html=True)
     
+    # 松井証券発注用のコピペ用データ
+    st.caption("▼ 松井証券の注文画面へ入力する際にご活用ください（コピー可能）")
+    st.code(f"""[松井証券リピート注文 設定値]
+通貨ペア: {selected_label.split(' ')[0]}
+注文種別: ハーフ＆ハーフ
+買いレンジ: {price_fmt % user_lower} - {price_fmt % user_half} (SL: {price_fmt % buy_stop_loss})
+売りレンジ: {price_fmt % user_half} - {price_fmt % user_upper} (SL: {price_fmt % sell_stop_loss})
+注文幅 / 利確幅: {trap_width_pips} pips
+1本あたりの数量: {quantity_wan:.2f} 万通貨""", language="text")
+
     st.markdown("##### 🛡️ リスク・資金シミュレーション")
     rc1, rc2, rc3 = st.columns(3)
     rc1.metric("想定最大含み損", f"約 {int(max_loss_yen):,} 円")
