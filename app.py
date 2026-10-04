@@ -162,18 +162,20 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
-        # Target作成ロジック（未来データの欠損による学習ノイズを防止）
+        # Target作成ロジック（TP/SL同時到達の不完全シグナル排除）
         f_high = pd.concat([h.shift(-i) for i in range(1, LOOKAHEAD_BARS + 1)], axis=1).max(axis=1) - c
         f_low = c - pd.concat([l.shift(-i) for i in range(1, LOOKAHEAD_BARS + 1)], axis=1).min(axis=1)
         tp_t, sl_t = new_cols["ATR"] * 1.0, new_cols["ATR"] * 0.5
-        cond_buy = (f_high >= tp_t) & (f_low < sl_t)
-        cond_sell = (f_low >= tp_t) & (f_high < sl_t)
+        
+        cond_buy_only = (f_high >= tp_t) & (f_low < sl_t)
+        cond_sell_only = (f_low >= tp_t) & (f_high < sl_t)
         
         target_series = pd.Series(np.nan, index=df.index)
         valid_future = f_high.notna() & f_low.notna()
-        target_series[valid_future & cond_buy] = 1
-        target_series[valid_future & cond_sell] = -1
-        target_series[valid_future & ~cond_buy & ~cond_sell] = 0
+        
+        target_series[valid_future & cond_buy_only] = 1
+        target_series[valid_future & cond_sell_only] = -1
+        target_series[valid_future & ~cond_buy_only & ~cond_sell_only] = 0
         df["Target"] = target_series
         
         return df.dropna(subset=[col for col in df.columns if col != "Target"])
@@ -223,6 +225,12 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_up = float(class_prob_map.get(1.0, 0.0))
         prob_down = float(class_prob_map.get(-1.0, 0.0))
         prob_wait = float(class_prob_map.get(0.0, 0.0))
+        
+        # 確率は合計1.0(100%)に確実に規一化
+        total_p = prob_up + prob_down + prob_wait
+        if total_p > 0:
+            prob_up, prob_down, prob_wait = prob_up/total_p, prob_down/total_p, prob_wait/total_p
+
         conf = max(prob_up, prob_down) * 100
 
         prob_dict = {
@@ -348,7 +356,6 @@ tab_chart, tab_repeat, tab_ai = st.tabs(["📈 メインチャート", "📋 松
 # --- タブ1: メインチャート ---
 with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(120))
-    # 週末ギャップ排除のためインデックスを年月日・時間を含む一意な文字列カテゴリーに変換
     x_labels = df_chart.index.strftime('%Y-%m-%d %H:%M')
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.03)
@@ -392,8 +399,8 @@ with tab_chart:
         dragmode="pan",
         showlegend=False
     )
-    # カテゴリー軸化により週末の隙間を自動スキップ
-    fig.update_xaxes(type='category', nticks=12, showspikes=True)
+    # カテゴリー軸の描画・ラベル間引き最適化
+    fig.update_xaxes(type='category', maxnticks=10, tickangle=-30, showspikes=True)
     fig.update_yaxes(side="right")
 
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
@@ -403,20 +410,16 @@ with tab_repeat:
     trap_width_pips = max(15, int(round((atr_4h / pip_unit))))
     half_range_pips = abs(user_upper - user_half) / pip_unit
     
-    # 松井証券の実仕様に合わせた片側格子数の厳格計算
     half_grid_count = max(1, int(np.floor(half_range_pips / trap_width_pips)))
     total_grid_count = half_grid_count * 2
 
-    # リスク計算
     order_units = int(quantity_wan * 10000)
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
     
-    # 片側全トラップ保持状態で運用停止ライン(SL)に達した際の最大想定含み損
-    max_loss_yen = 0.0
-    for i in range(1, half_grid_count + 1):
-        dist_pips = (i * trap_width_pips) + stop_buffer_pips
-        max_loss_yen += dist_pips * pip_value_yen
+    # 【修正】幾何学的に厳格な最大想定含み損算出
+    # 各トラップ k (0 ～ N-1) から運用停止ライン(SL)までの距離: k * trap_width + stop_buffer
+    max_loss_yen = sum((k * trap_width_pips + stop_buffer_pips) * pip_value_yen for k in range(half_grid_count))
         
     margin_per_order = (latest_price * order_units) / 25.0 if is_jpy else (latest_price * usd_rate * order_units) / 25.0
     total_margin_yen = margin_per_order * half_grid_count
@@ -459,7 +462,6 @@ with tab_ai:
     with pcol1:
         st.markdown("**最新バーの分類判定確率**")
         
-        # 安全クランプ処理（0~100に制限）
         val_buy = max(0, min(100, int(prob_dict['buy'])))
         val_sell = max(0, min(100, int(prob_dict['sell'])))
         val_wait = max(0, min(100, int(prob_dict['wait'])))
