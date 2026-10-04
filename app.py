@@ -65,7 +65,10 @@ TIMEFRAMES = {
 LOOKAHEAD_BARS = 5  # Target予測の先読み足数
 
 def clean_series(s):
-    return s.iloc[:, 0] if isinstance(s, pd.DataFrame) else s
+    """DataFrameやMultiIndexから確実に単一のpd.Seriesを取り出す関数"""
+    if isinstance(s, pd.DataFrame):
+        return s.iloc[:, 0]
+    return s
 
 def safe_to_tokyo_tz(df):
     """タイムゾーンの安全変換処理"""
@@ -97,16 +100,21 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
         if df.empty: return None
-        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        if isinstance(df.columns, pd.MultiIndex): 
+            df.columns = df.columns.get_level_values(0)
         df = df.loc[:, ~df.columns.duplicated()]
         
         if "4時間足" in tf_name and interval == "1h":
             tz_before = df.index.tz
-            df = df.resample("4h", closed="left", label="left").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
-            if tz_before is not None and df.index.tz is None: df.index = df.index.tz_localize(tz_before)
+            df = df.resample("4h", closed="left", label="left").agg({
+                "Open": "first", "High": "max", "Low": "min", "Close": "last"
+            }).dropna()
+            if tz_before is not None and df.index.tz is None: 
+                df.index = df.index.tz_localize(tz_before)
             
         if len(df) < 50: return None
         
+        # 確実に1次元のpd.Seriesとして抽出
         c = clean_series(df["Close"])
         h = clean_series(df["High"])
         l = clean_series(df["Low"])
@@ -169,7 +177,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df["Target"] = target_series
         
         return df.dropna(subset=[col for col in df.columns if col != "Target"])
-    except Exception: return None
+    except Exception: 
+        return None
 
 @st.cache_data(ttl=30, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
@@ -180,7 +189,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
     try:
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
         
-        # TargetがNaNでない確定した過去バーのみを検証・学習に使用
         df_valid = df_current.dropna(subset=["Target"])
         test_size = 100
         min_required = test_size + LOOKAHEAD_BARS + 50
@@ -191,7 +199,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         X = df_valid[avail]
         y = df_valid["Target"]
         
-        # 未来データのリークを防ぐため、TrainとTestの間に LOOKAHEAD_BARS 分のギャップを設置
+        # データリーク防止用ギャップ設置
         X_train = X.iloc[: -(test_size + LOOKAHEAD_BARS)]
         y_train = y.iloc[: -(test_size + LOOKAHEAD_BARS)]
         X_test = X.iloc[-test_size:]
@@ -223,13 +231,13 @@ def analyze_signal_with_backtest(df_current, df_htf):
             "wait": round(prob_wait * 100, 1)
         }
 
-        # 日足上位足のトレンド確認（安全ガード付き）
-        htf_close = clean_series(df_htf["Close"]).iloc[-1]
-        if "EMA_200" in df_htf.columns and not np.isnan(df_htf["EMA_200"].iloc[-1]):
-            htf_ema200 = clean_series(df_htf["EMA_200"]).iloc[-1]
+        # 日足上位足のトレンド確認
+        htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
+        if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
+            htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
             htf_uptrend = htf_close > htf_ema200
         else:
-            htf_uptrend = htf_close > clean_series(df_htf["SMA_20"]).iloc[-1]
+            htf_uptrend = htf_close > float(clean_series(df_htf["SMA_20"]).iloc[-1])
 
         if prob_up >= 0.70 and htf_uptrend:
             status = "BUY (買い)"
@@ -281,7 +289,6 @@ data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"],
 data_4h = load_and_process_data(ticker, "1y", "1h", "4時間足 (中期・リピート用)")
 data_htf = load_and_process_data(ticker, "3y", "1d", "日足")
 
-# 4時間足データのフォールバック（通信障害等のバックアップ）
 if data_4h is None and data is not None:
     data_4h = data
 
@@ -341,8 +348,8 @@ tab_chart, tab_repeat, tab_ai = st.tabs(["📈 メインチャート", "📋 松
 # --- タブ1: メインチャート ---
 with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(120))
-    # 週末ギャップ排除のためインデックスを文字列カテゴリーに変換
-    x_labels = df_chart.index.strftime('%m/%d %H:%M')
+    # 週末ギャップ排除のためインデックスを年月日・時間を含む一意な文字列カテゴリーに変換
+    x_labels = df_chart.index.strftime('%Y-%m-%d %H:%M')
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.03)
 
@@ -385,7 +392,7 @@ with tab_chart:
         dragmode="pan",
         showlegend=False
     )
-    # カテゴリー軸化により週末の隙間を完璧に自動スキップ
+    # カテゴリー軸化により週末の隙間を自動スキップ
     fig.update_xaxes(type='category', nticks=12, showspikes=True)
     fig.update_yaxes(side="right")
 
@@ -395,7 +402,9 @@ with tab_chart:
 with tab_repeat:
     trap_width_pips = max(15, int(round((atr_4h / pip_unit))))
     half_range_pips = abs(user_upper - user_half) / pip_unit
-    half_grid_count = max(1, int(half_range_pips // trap_width_pips) + 1)
+    
+    # 松井証券の実仕様に合わせた片側格子数の厳格計算
+    half_grid_count = max(1, int(np.floor(half_range_pips / trap_width_pips)))
     total_grid_count = half_grid_count * 2
 
     # リスク計算
@@ -403,10 +412,11 @@ with tab_repeat:
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
     
-    # 片側全トラップ捕まった場合の最大含み損（正確な累計距離で算出）
+    # 片側全トラップ保持状態で運用停止ライン(SL)に達した際の最大想定含み損
     max_loss_yen = 0.0
-    for i in range(half_grid_count):
-        max_loss_yen += (i * trap_width_pips + stop_buffer_pips) * pip_value_yen
+    for i in range(1, half_grid_count + 1):
+        dist_pips = (i * trap_width_pips) + stop_buffer_pips
+        max_loss_yen += dist_pips * pip_value_yen
         
     margin_per_order = (latest_price * order_units) / 25.0 if is_jpy else (latest_price * usd_rate * order_units) / 25.0
     total_margin_yen = margin_per_order * half_grid_count
@@ -448,14 +458,20 @@ with tab_ai:
     pcol1, pcol2 = st.columns(2)
     with pcol1:
         st.markdown("**最新バーの分類判定確率**")
+        
+        # 安全クランプ処理（0~100に制限）
+        val_buy = max(0, min(100, int(prob_dict['buy'])))
+        val_sell = max(0, min(100, int(prob_dict['sell'])))
+        val_wait = max(0, min(100, int(prob_dict['wait'])))
+
         st.write(f"🟢 **BUY (買い)**: {prob_dict['buy']}%")
-        st.progress(int(prob_dict['buy']))
+        st.progress(val_buy)
         
         st.write(f"🔴 **SELL (売り)**: {prob_dict['sell']}%")
-        st.progress(int(prob_dict['sell']))
+        st.progress(val_sell)
         
         st.write(f"⚪ **WAIT (様子見)**: {prob_dict['wait']}%")
-        st.progress(int(prob_dict['wait']))
+        st.progress(val_wait)
 
     with pcol2:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
