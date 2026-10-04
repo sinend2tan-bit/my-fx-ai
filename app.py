@@ -18,7 +18,7 @@ except ImportError:
     HAS_AUTOREFRESH = False
 
 # ==========================================
-# 0. 画面基本設定
+# 0. 画面基本設定 & CSS
 # ==========================================
 st.set_page_config(
     page_title="Pro FX Analyzer & Signal",
@@ -173,8 +173,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
 @st.cache_data(ttl=30, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
+    empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0})
     if df_current is None or len(df_current) < 200:
-        return "WAIT (データ不足)", 0.0, 0.0, "不明"
+        return empty_res
 
     try:
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
@@ -185,7 +186,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         min_required = test_size + LOOKAHEAD_BARS + 50
         
         if len(df_valid) < min_required:
-            return "WAIT (学習データ不足)", 0.0, 0.0, "判定不可"
+            return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0})
 
         X = df_valid[avail]
         y = df_valid["Target"]
@@ -196,7 +197,8 @@ def analyze_signal_with_backtest(df_current, df_htf):
         X_test = X.iloc[-test_size:]
         y_test = y.iloc[-test_size:]
 
-        if len(np.unique(y_train)) < 2: return "WAIT (データ偏り)", 0.0, 0.0, "判定不可"
+        if len(np.unique(y_train)) < 2: 
+            return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0})
 
         model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42)
         model.fit(X_train, y_train)
@@ -210,9 +212,16 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_array = model.predict_proba(latest_X)[0]
         class_prob_map = dict(zip(model.classes_, prob_array))
         
-        prob_up = class_prob_map.get(1.0, 0.0)
-        prob_down = class_prob_map.get(-1.0, 0.0)
+        prob_up = float(class_prob_map.get(1.0, 0.0))
+        prob_down = float(class_prob_map.get(-1.0, 0.0))
+        prob_wait = float(class_prob_map.get(0.0, 0.0))
         conf = max(prob_up, prob_down) * 100
+
+        prob_dict = {
+            "buy": round(prob_up * 100, 1),
+            "sell": round(prob_down * 100, 1),
+            "wait": round(prob_wait * 100, 1)
+        }
 
         # 日足上位足のトレンド確認（安全ガード付き）
         htf_close = clean_series(df_htf["Close"]).iloc[-1]
@@ -232,9 +241,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1])
         m_type = "トレンド相場" if adx_val > 22 else "レンジ相場"
 
-        return status, conf, win_rate, m_type
+        return status, conf, win_rate, m_type, prob_dict
     except Exception:
-        return "WAIT (エラー)", 0.0, 0.0, "エラー"
+        return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0})
 
 # ==========================================
 # 2. UI構築
@@ -286,9 +295,9 @@ st.markdown(f'<div class="update-time">最終データ取得日時: <b>{now_jst}
 latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1])
 
-status, conf, win_rate, m_type = analyze_signal_with_backtest(data, data_htf)
+status, conf, win_rate, m_type, prob_dict = analyze_signal_with_backtest(data, data_htf)
 
-# --- 1. サマリーダッシュボード ---
+# --- サマリーダッシュボード ---
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("現在レート", price_fmt % latest_price)
 
@@ -303,92 +312,98 @@ m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 
 st.markdown("---")
 
-# --- 2. リピート想定レンジの設定 (4時間足基準) ---
+# --- 4時間足基準のリピートレンジ計算 ---
 swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
+# レンジ設定UI
 with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=False):
     rc1, rc2 = st.columns(2)
     in_lower = rc1.number_input("レンジ下限", value=swing_low_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
     in_upper = rc2.number_input("レンジ上限", value=swing_high_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
     
-    # ユーザー入力の逆転・同一値に対する防御コード
     user_lower = min(in_lower, in_upper)
     user_upper = max(in_lower, in_upper)
     if user_lower == user_upper:
         user_upper += pip_unit * 100.0
     user_half = (user_upper + user_lower) / 2.0
 
-# 運用停止ライン（SL）の算出（4H足ATR × 1.5倍のバッファ）
+# 運用停止ライン（SL）の算出
 stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
 stop_buffer_val = stop_buffer_pips * pip_unit
-buy_stop_loss = user_lower - stop_buffer_val   # 買ゾーンの運用停止ライン
-sell_stop_loss = user_upper + stop_buffer_val  # 売ゾーンの運用停止ライン
+buy_stop_loss = user_lower - stop_buffer_val
+sell_stop_loss = user_upper + stop_buffer_val
 
-# --- 3. メインチャート表示 ---
-df_chart = safe_to_tokyo_tz(data.tail(120))
-cx = df_chart.index
+# --- タブ構造によるUI構築 ---
+tab_chart, tab_repeat, tab_ai = st.tabs(["📈 メインチャート", "📋 松井証券 リピート設定 & リスク管理", "🤖 AIモデル分析詳細"])
 
-fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.03)
+# --- タブ1: メインチャート ---
+with tab_chart:
+    df_chart = safe_to_tokyo_tz(data.tail(120))
+    # 週末ギャップ排除のためインデックスを文字列カテゴリーに変換
+    x_labels = df_chart.index.strftime('%m/%d %H:%M')
 
-# ローソク足
-fig.add_trace(go.Candlestick(
-    x=cx,
-    open=clean_series(df_chart["Open"]),
-    high=clean_series(df_chart["High"]),
-    low=clean_series(df_chart["Low"]),
-    close=clean_series(df_chart["Close"]),
-    increasing_line_color='#22c55e', increasing_fillcolor='#22c55e',
-    decreasing_line_color='#ef4444', decreasing_fillcolor='#ef4444',
-    name="価格"
-), row=1, col=1)
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.03)
 
-# EMA200
-if "EMA_200" in df_chart.columns:
-    fig.add_trace(go.Scatter(x=cx, y=clean_series(df_chart["EMA_200"]), line=dict(color="#38bdf8", width=1.5), name="EMA200"), row=1, col=1)
+    # ローソク足
+    fig.add_trace(go.Candlestick(
+        x=x_labels,
+        open=clean_series(df_chart["Open"]),
+        high=clean_series(df_chart["High"]),
+        low=clean_series(df_chart["Low"]),
+        close=clean_series(df_chart["Close"]),
+        increasing_line_color='#22c55e', increasing_fillcolor='#22c55e',
+        decreasing_line_color='#ef4444', decreasing_fillcolor='#ef4444',
+        name="価格"
+    ), row=1, col=1)
 
-# チャート上へのリピートレンジ & 運用停止ライン描画
-fig.add_hrect(y0=user_lower, y1=user_upper, fillcolor="rgba(56, 189, 248, 0.05)", line_width=0, row=1, col=1)
-fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#b91c1c", annotation_text="売 運用停止", row=1, col=1)
-fig.add_hline(y=user_upper, line_dash="dash", line_color="#ef4444", annotation_text="リピート上限", row=1, col=1)
-fig.add_hline(y=user_half, line_dash="dot", line_color="#a855f7", annotation_text="ハーフライン", row=1, col=1)
-fig.add_hline(y=user_lower, line_dash="dash", line_color="#22c55e", annotation_text="リピート下限", row=1, col=1)
-fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#15803d", annotation_text="買 運用停止", row=1, col=1)
+    # EMA200
+    if "EMA_200" in df_chart.columns:
+        fig.add_trace(go.Scatter(x=x_labels, y=clean_series(df_chart["EMA_200"]), line=dict(color="#38bdf8", width=1.5), name="EMA200"), row=1, col=1)
 
-# RSI
-if "RSI" in df_chart.columns:
-    fig.add_trace(go.Scatter(x=cx, y=clean_series(df_chart["RSI"]), line=dict(color="#a855f7", width=1.5), name="RSI"), row=2, col=1)
-    fig.add_hline(y=70, line_dash="dot", line_color="gray", row=2, col=1)
-    fig.add_hline(y=30, line_dash="dot", line_color="gray", row=2, col=1)
+    # リピートレンジ & 運用停止ライン描画
+    fig.add_hrect(y0=user_lower, y1=user_upper, fillcolor="rgba(56, 189, 248, 0.05)", line_width=0, row=1, col=1)
+    fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#b91c1c", annotation_text="売 運用停止", row=1, col=1)
+    fig.add_hline(y=user_upper, line_dash="dash", line_color="#ef4444", annotation_text="リピート上限", row=1, col=1)
+    fig.add_hline(y=user_half, line_dash="dot", line_color="#a855f7", annotation_text="ハーフライン", row=1, col=1)
+    fig.add_hline(y=user_lower, line_dash="dash", line_color="#22c55e", annotation_text="リピート下限", row=1, col=1)
+    fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#15803d", annotation_text="買 運用停止", row=1, col=1)
 
-fig.update_layout(
-    xaxis_rangeslider_visible=False,
-    height=550,
-    margin=dict(l=10, r=70, t=10, b=10),
-    template="plotly_dark",
-    hovermode="x unified",
-    dragmode="pan",
-    showlegend=False
-)
-fig.update_xaxes(rangebreaks=[dict(bounds=[6, 1], pattern="day of week")], showspikes=True)
-fig.update_yaxes(side="right")
+    # RSI
+    if "RSI" in df_chart.columns:
+        fig.add_trace(go.Scatter(x=x_labels, y=clean_series(df_chart["RSI"]), line=dict(color="#a855f7", width=1.5), name="RSI"), row=2, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="gray", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="gray", row=2, col=1)
 
-st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
+    fig.update_layout(
+        xaxis_rangeslider_visible=False,
+        height=560,
+        margin=dict(l=10, r=70, t=10, b=10),
+        template="plotly_dark",
+        hovermode="x unified",
+        dragmode="pan",
+        showlegend=False
+    )
+    # カテゴリー軸化により週末の隙間を完璧に自動スキップ
+    fig.update_xaxes(type='category', nticks=12, showspikes=True)
+    fig.update_yaxes(side="right")
 
-# --- 4. 注文パラメータ & リスクシミュレーション ---
-with st.expander("📋 松井証券 リピート注文設定値 & リスク管理（詳細）", expanded=True):
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
+
+# --- タブ2: 松井証券 リピート設定 & リスク管理 ---
+with tab_repeat:
     trap_width_pips = max(15, int(round((atr_4h / pip_unit))))
-    range_pips = abs(user_upper - user_lower) / pip_unit
-    grid_count = max(2, int(range_pips // trap_width_pips) + 1)
-    half_grid_count = max(1, grid_count // 2)
+    half_range_pips = abs(user_upper - user_half) / pip_unit
+    half_grid_count = max(1, int(half_range_pips // trap_width_pips) + 1)
+    total_grid_count = half_grid_count * 2
 
-    # 簡易リスク計算
+    # リスク計算
     order_units = int(quantity_wan * 10000)
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
     
-    # 片側全トラップ捕まった場合の最大含み損（概算）
+    # 片側全トラップ捕まった場合の最大含み損（正確な累計距離で算出）
     max_loss_yen = 0.0
     for i in range(half_grid_count):
         max_loss_yen += (i * trap_width_pips + stop_buffer_pips) * pip_value_yen
@@ -402,12 +417,11 @@ with st.expander("📋 松井証券 リピート注文設定値 & リスク管�
     <b>【ハーフ＆ハーフ推奨設定値】</b><br>
     ・<b>買い設定（下半）</b>: レンジ <code>{price_fmt % user_lower}</code> ～ <code>{price_fmt % user_half}</code> | <b>運用停止(SL)</b>: <code>{price_fmt % buy_stop_loss}</code> (-{stop_buffer_pips}pips)<br>
     ・<b>売り設定（上半）</b>: レンジ <code>{price_fmt % user_half}</code> ～ <code>{price_fmt % user_upper}</code> | <b>運用停止(SL)</b>: <code>{price_fmt % sell_stop_loss}</code> (+{stop_buffer_pips}pips)<br>
-    ・<b>注文/益出し幅</b>: <code>{trap_width_pips} pips</code> | <b>片側注文本数</b>: 約 <code>{half_grid_count} 本</code> (計 {grid_count}本)
+    ・<b>注文幅 / 利確幅</b>: <code>{trap_width_pips} pips</code> | <b>片側注文本数</b>: 約 <code>{half_grid_count} 本</code> (全 {total_grid_count}本)
     </div>
     """, unsafe_allow_html=True)
     
-    # 松井証券発注用のコピペ用データ
-    st.caption("▼ 松井証券の注文画面へ入力する際にご活用ください（コピー可能）")
+    st.caption("▼ 松井証券の自動売買設定画面へそのままコピー＆ペーストしてご使用ください")
     st.code(f"""[松井証券リピート注文 設定値]
 通貨ペア: {selected_label.split(' ')[0]}
 注文種別: ハーフ＆ハーフ
@@ -426,3 +440,24 @@ with st.expander("📋 松井証券 リピート注文設定値 & リスク管�
         st.error("🚨 警告: 撤退時の最大損失が口座資金の40%を超えています。数量(万通貨)を減らすか口座資金を増やしてください。")
     else:
         st.success("🟢 資金管理チェック: 適切なリスク範囲内です。")
+
+# --- タブ3: AIモデル分析詳細 ---
+with tab_ai:
+    st.markdown("##### 🤖 AI予測モデル（Random Forest）の評価と内訳")
+    
+    pcol1, pcol2 = st.columns(2)
+    with pcol1:
+        st.markdown("**最新バーの分類判定確率**")
+        st.write(f"🟢 **BUY (買い)**: {prob_dict['buy']}%")
+        st.progress(int(prob_dict['buy']))
+        
+        st.write(f"🔴 **SELL (売り)**: {prob_dict['sell']}%")
+        st.progress(int(prob_dict['sell']))
+        
+        st.write(f"⚪ **WAIT (様子見)**: {prob_dict['wait']}%")
+        st.progress(int(prob_dict['wait']))
+
+    with pcol2:
+        st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
+        st.metric("直近テスト100足の方向勝率", f"{win_rate:.1f}%")
+        st.caption("※ 先読みデータ（Lookahead Leak）を排除した厳格なバックテスト精度です。70%以上の確率スコアと日足トレンドが一致した場合のみ推奨シリアルが発動します。")
