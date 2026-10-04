@@ -61,12 +61,25 @@ TIMEFRAMES = {
     "4時間足 (中期・リピート用)": {"period": "2y", "interval": "1h"},
 }
 
-def clean_series(s): return s.iloc[:, 0] if isinstance(s, pd.DataFrame) else s
+def clean_series(s):
+    return s.iloc[:, 0] if isinstance(s, pd.DataFrame) else s
+
+# クロス通貨リスク計算用のドル円レート取得・キャッシュ関数（通信遅延防止）
+@st.cache_data(ttl=60, show_spinner=False)
+def get_usdjpy_rate():
+    try:
+        df = yf.download("USDJPY=X", period="1d", progress=False)
+        if not df.empty:
+            c = clean_series(df["Close"])
+            return float(c.iloc[-1])
+    except Exception:
+        pass
+    return 155.0  # エラー時のフォールバック値
 
 # ==========================================
 # 1. データ処理 & バックテスト付きAIモデル
 # ==========================================
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def load_and_process_data(symbol, period, interval, tf_name=""):
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
@@ -128,18 +141,25 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
+        # Target作成ロジックの修正（未来データの欠損による学習ノイズを排除）
         lookahead = 5
         f_high = pd.concat([h.shift(-i) for i in range(1, lookahead + 1)], axis=1).max(axis=1) - c
         f_low = c - pd.concat([l.shift(-i) for i in range(1, lookahead + 1)], axis=1).min(axis=1)
         tp_t, sl_t = new_cols["ATR"] * 1.0, new_cols["ATR"] * 0.5
         cond_buy = (f_high >= tp_t) & (f_low < sl_t)
         cond_sell = (f_low >= tp_t) & (f_high < sl_t)
-        df["Target"] = np.select([cond_buy, cond_sell], [1, -1], default=0)
+        
+        target_series = pd.Series(np.nan, index=df.index)
+        valid_future = f_high.notna() & f_low.notna()
+        target_series[valid_future & cond_buy] = 1
+        target_series[valid_future & cond_sell] = -1
+        target_series[valid_future & ~cond_buy & ~cond_sell] = 0
+        df["Target"] = target_series
         
         return df.dropna(subset=[col for col in df.columns if col != "Target"])
     except Exception: return None
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
     if df_current is None or len(df_current) < 200:
         return "WAIT (データ不足)", 0.0, 0.0, "不明"
@@ -148,13 +168,13 @@ def analyze_signal_with_backtest(df_current, df_htf):
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
         X, y = df_current[avail], df_current["Target"]
         
-        train_mask = ~y.isna()
+        train_mask = y.notna()
         X_train, y_train = X[train_mask].iloc[:-100], y[train_mask].iloc[:-100]
         X_test, y_test = X[train_mask].iloc[-100:], y[train_mask].iloc[-100:]
 
         if len(np.unique(y_train)) < 2: return "WAIT", 0.0, 0.0, "判定不可"
 
-        model = RandomForestClassifier(n_estimators=100, max_depth=5, min_samples_leaf=5, random_state=42)
+        model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42)
         model.fit(X_train, y_train)
 
         preds = model.predict(X_test)
@@ -202,6 +222,17 @@ price_fmt = "%.3f" if is_jpy else "%.5f"
 st.sidebar.header("⚙️ 資金 & リスク設定")
 account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, value=500000, step=50000)
 quantity_wan = st.sidebar.number_input("1注文の数量 (万通貨)", min_value=0.01, value=0.10, step=0.01)
+
+st.sidebar.markdown("---")
+st.sidebar.header("🔄 更新設定")
+if HAS_AUTOREFRESH:
+    auto_refresh = st.sidebar.checkbox("60秒ごとに自動更新", value=False)
+    if auto_refresh:
+        st_autorefresh(interval=60000, key="datarefresh")
+
+if st.sidebar.button("🔄 最新データに手動更新"):
+    st.cache_data.clear()
+    st.rerun()
 
 # データ取得
 data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
@@ -302,9 +333,9 @@ with st.expander("📋 松井証券 リピート注文設定値 & リスク管�
     grid_count = max(2, int(range_pips // trap_width_pips) + 1)
     half_grid_count = max(1, grid_count // 2)
 
-    # 簡易リスク計算
+    # 簡易リスク計算（通信遅延を防ぐキャッシュ取得関数を利用）
     order_units = int(quantity_wan * 10000)
-    usd_rate = float(clean_series(yf.download("USDJPY=X", period="1d", progress=False)["Close"]).iloc[-1]) if not is_jpy else 1.0
+    usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
     
     # 片側全トラップ捕まった場合の最大含み損（概算）
