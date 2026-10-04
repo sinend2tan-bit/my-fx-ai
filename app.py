@@ -62,6 +62,8 @@ TIMEFRAMES = {
     "4時間足 (中期・リピート用)": {"period": "1y", "interval": "1h"},
 }
 
+LOOKAHEAD_BARS = 5  # Target予測の先読み足数
+
 def clean_series(s):
     return s.iloc[:, 0] if isinstance(s, pd.DataFrame) else s
 
@@ -153,9 +155,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
         # Target作成ロジック（未来データの欠損による学習ノイズを防止）
-        lookahead = 5
-        f_high = pd.concat([h.shift(-i) for i in range(1, lookahead + 1)], axis=1).max(axis=1) - c
-        f_low = c - pd.concat([l.shift(-i) for i in range(1, lookahead + 1)], axis=1).min(axis=1)
+        f_high = pd.concat([h.shift(-i) for i in range(1, LOOKAHEAD_BARS + 1)], axis=1).max(axis=1) - c
+        f_low = c - pd.concat([l.shift(-i) for i in range(1, LOOKAHEAD_BARS + 1)], axis=1).min(axis=1)
         tp_t, sl_t = new_cols["ATR"] * 1.0, new_cols["ATR"] * 0.5
         cond_buy = (f_high >= tp_t) & (f_low < sl_t)
         cond_sell = (f_low >= tp_t) & (f_high < sl_t)
@@ -178,16 +179,22 @@ def analyze_signal_with_backtest(df_current, df_htf):
     try:
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
         
-        # TargetがNaNでないデータ（確定した過去バー）のみを学習対象にする
+        # TargetがNaNでない確定した過去バーのみを検証・学習に使用
         df_valid = df_current.dropna(subset=["Target"])
-        if len(df_valid) < 120:
+        test_size = 100
+        min_required = test_size + LOOKAHEAD_BARS + 50
+        
+        if len(df_valid) < min_required:
             return "WAIT (学習データ不足)", 0.0, 0.0, "判定不可"
 
         X = df_valid[avail]
         y = df_valid["Target"]
         
-        X_train, y_train = X.iloc[:-100], y.iloc[:-100]
-        X_test, y_test = X.iloc[-100:], y.iloc[-100:]
+        # 未来データのリークを防ぐため、TrainとTestの間に LOOKAHEAD_BARS 分のギャップを設置
+        X_train = X.iloc[: -(test_size + LOOKAHEAD_BARS)]
+        y_train = y.iloc[: -(test_size + LOOKAHEAD_BARS)]
+        X_test = X.iloc[-test_size:]
+        y_test = y.iloc[-test_size:]
 
         if len(np.unique(y_train)) < 2: return "WAIT (データ偏り)", 0.0, 0.0, "判定不可"
 
@@ -198,15 +205,22 @@ def analyze_signal_with_backtest(df_current, df_htf):
         valid_eval = (preds != 0) & (y_test != 0)
         win_rate = (preds[valid_eval] == y_test[valid_eval]).mean() * 100 if valid_eval.sum() > 0 else 50.0
 
-        # 最新バー（未確定バー含むリアルタイム足）の入力データで予測
+        # 最新バー（リアルタイム足）の予測
         latest_X = df_current[avail].iloc[[-1]]
-        probs = dict(zip(model.classes_, model.predict_proba(latest_X)[0]))
-        prob_up, prob_down = probs.get(1.0, 0.0), probs.get(-1.0, 0.0)
+        prob_array = model.predict_proba(latest_X)[0]
+        class_prob_map = dict(zip(model.classes_, prob_array))
+        
+        prob_up = class_prob_map.get(1.0, 0.0)
+        prob_down = class_prob_map.get(-1.0, 0.0)
         conf = max(prob_up, prob_down) * 100
 
+        # 日足上位足のトレンド確認（安全ガード付き）
         htf_close = clean_series(df_htf["Close"]).iloc[-1]
-        htf_ema200 = clean_series(df_htf["EMA_200"]).iloc[-1]
-        htf_uptrend = htf_close > htf_ema200
+        if "EMA_200" in df_htf.columns and not np.isnan(df_htf["EMA_200"].iloc[-1]):
+            htf_ema200 = clean_series(df_htf["EMA_200"]).iloc[-1]
+            htf_uptrend = htf_close > htf_ema200
+        else:
+            htf_uptrend = htf_close > clean_series(df_htf["SMA_20"]).iloc[-1]
 
         if prob_up >= 0.70 and htf_uptrend:
             status = "BUY (買い)"
@@ -256,7 +270,7 @@ if st.sidebar.button("🔄 最新データに手動更新"):
 # データ取得
 data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
 data_4h = load_and_process_data(ticker, "1y", "1h", "4時間足 (中期・リピート用)")
-data_htf = load_and_process_data(ticker, "2y", "1d", "日足")
+data_htf = load_and_process_data(ticker, "3y", "1d", "日足")
 
 # 4時間足データのフォールバック（通信障害等のバックアップ）
 if data_4h is None and data is not None:
