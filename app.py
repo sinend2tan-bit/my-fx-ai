@@ -35,8 +35,9 @@ st.markdown("""
     .badge-sell { background-color: #dc2626; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
     .badge-wait { background-color: #475569; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
     
-    .param-box { background-color: rgba(30, 41, 59, 0.8) !important; border-left: 5px solid #3b82f6; padding: 12px; border-radius: 6px; font-family: monospace; line-height: 1.8; color: #f8fafc !important; }
-    .param-box code { font-size: 0.95rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: rgba(51, 65, 85, 0.9) !important; }
+    .param-box { background-color: rgba(30, 41, 59, 0.8) !important; border-left: 5px solid #3b82f6; padding: 14px; border-radius: 6px; font-family: monospace; line-height: 1.8; color: #f8fafc !important; }
+    .param-box code { font-size: 0.95rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: rgba(51, 65, 85, 0.9) !important; padding: 2px 6px; border-radius: 4px; }
+    .update-time { font-size: 0.85rem; color: #94a3b8; text-align: right; margin-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -64,17 +65,27 @@ TIMEFRAMES = {
 def clean_series(s):
     return s.iloc[:, 0] if isinstance(s, pd.DataFrame) else s
 
-# クロス通貨リスク計算用のドル円レート取得・キャッシュ関数（通信遅延防止）
+def safe_to_tokyo_tz(df):
+    """タイムゾーンの安全変換処理"""
+    df_out = df.copy()
+    if df_out.index.tz is None:
+        df_out.index = df_out.index.tz_localize("UTC")
+    df_out.index = df_out.index.tz_convert("Asia/Tokyo")
+    return df_out
+
+# クロス通貨リスク計算用のドル円レート取得・キャッシュ関数
 @st.cache_data(ttl=60, show_spinner=False)
 def get_usdjpy_rate():
     try:
         df = yf.download("USDJPY=X", period="1d", progress=False)
         if not df.empty:
             c = clean_series(df["Close"])
-            return float(c.iloc[-1])
+            val = float(c.iloc[-1])
+            if not np.isnan(val) and val > 0:
+                return val
     except Exception:
         pass
-    return 155.0  # エラー時のフォールバック値
+    return 155.0  # 通信失敗時の標準フォールバック値
 
 # ==========================================
 # 1. データ処理 & バックテスト付きAIモデル
@@ -141,7 +152,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
-        # Target作成ロジックの修正（未来データの欠損による学習ノイズを排除）
+        # Target作成ロジック（未来データの欠損による学習ノイズを防止）
         lookahead = 5
         f_high = pd.concat([h.shift(-i) for i in range(1, lookahead + 1)], axis=1).max(axis=1) - c
         f_low = c - pd.concat([l.shift(-i) for i in range(1, lookahead + 1)], axis=1).min(axis=1)
@@ -243,6 +254,9 @@ if data is None or data_4h is None or data_htf is None:
     st.error("データの取得に失敗しました。時間足を変更してください。")
     st.stop()
 
+now_jst = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S")
+st.markdown(f'<div class="update-time">最終データ取得日時: <b>{now_jst} JST</b></div>', unsafe_allow_html=True)
+
 latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1])
 
@@ -281,24 +295,28 @@ buy_stop_loss = user_lower - stop_buffer_val   # 買ゾーンの運用停止ラ�
 sell_stop_loss = user_upper + stop_buffer_val  # 売ゾーンの運用停止ライン
 
 # --- 3. メインチャート表示 ---
-df_chart = data.tail(120).copy()
-if df_chart.index.tz is None: df_chart.index = df_chart.index.tz_localize("UTC")
-df_chart.index = df_chart.index.tz_convert("Asia/Tokyo")
+df_chart = safe_to_tokyo_tz(data.tail(120))
 cx = df_chart.index
 
 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.03)
 
-# ローソク足
+# ローソク足（プロ向け明瞭なカラー配色）
 fig.add_trace(go.Candlestick(
-    x=cx, open=clean_series(df_chart["Open"]), high=clean_series(df_chart["High"]),
-    low=clean_series(df_chart["Low"]), close=clean_series(df_chart["Close"]), name="価格"
+    x=cx,
+    open=clean_series(df_chart["Open"]),
+    high=clean_series(df_chart["High"]),
+    low=clean_series(df_chart["Low"]),
+    close=clean_series(df_chart["Close"]),
+    increasing_line_color='#22c55e', increasing_fillcolor='#22c55e',
+    decreasing_line_color='#ef4444', decreasing_fillcolor='#ef4444',
+    name="価格"
 ), row=1, col=1)
 
 # EMA200
 if "EMA_200" in df_chart.columns:
     fig.add_trace(go.Scatter(x=cx, y=clean_series(df_chart["EMA_200"]), line=dict(color="#38bdf8", width=1.5), name="EMA200"), row=1, col=1)
 
-# ★ チャート上へのリピートレンジ & 運用停止ライン描画
+# チャート上へのリピートレンジ & 運用停止ライン描画
 fig.add_hrect(y0=user_lower, y1=user_upper, fillcolor="rgba(56, 189, 248, 0.05)", line_width=0, row=1, col=1)
 fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#b91c1c", annotation_text="売 運用停止", row=1, col=1)
 fig.add_hline(y=user_upper, line_dash="dash", line_color="#ef4444", annotation_text="リピート上限", row=1, col=1)
@@ -333,7 +351,7 @@ with st.expander("📋 松井証券 リピート注文設定値 & リスク管�
     grid_count = max(2, int(range_pips // trap_width_pips) + 1)
     half_grid_count = max(1, grid_count // 2)
 
-    # 簡易リスク計算（通信遅延を防ぐキャッシュ取得関数を利用）
+    # 簡易リスク計算（安全なキャッシュ取得関数を使用）
     order_units = int(quantity_wan * 10000)
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
