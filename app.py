@@ -18,8 +18,42 @@ except ImportError:
     HAS_AUTOREFRESH = False
 
 # ==========================================
-# 0. 画面基本設定 & Session State 初期化
+# 0. 設定ファイルの読み書き & 永続化処理
 # ==========================================
+SETTINGS_FILE = "user_settings.json"
+
+def load_settings():
+    """ローカルのJSONファイルから設定を読み込み"""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "account_balance": 500000,
+        "quantity_wan": 0.10,
+        "auto_refresh": False,
+        "ranges": {}
+    }
+
+def save_settings():
+    """現在の Session State を JSON ファイルへ保存"""
+    settings = {
+        "account_balance": st.session_state.get("account_balance", 500000),
+        "quantity_wan": st.session_state.get("quantity_wan", 0.10),
+        "auto_refresh": st.session_state.get("auto_refresh", False),
+        "ranges": st.session_state.get("ranges", {})
+    }
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"設定の保存に失敗しました: {e}")
+
+# 初期設定のロード
+saved_config = load_settings()
+
 st.set_page_config(
     page_title="Pro FX Analyzer & Signal",
     layout="wide",
@@ -41,13 +75,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Session State の初期設定（再描画時の初期化防止）
+# Session State の初期化 (ファイルから復元)
 if "account_balance" not in st.session_state:
-    st.session_state["account_balance"] = 500000
+    st.session_state["account_balance"] = saved_config.get("account_balance", 500000)
 if "quantity_wan" not in st.session_state:
-    st.session_state["quantity_wan"] = 0.10
+    st.session_state["quantity_wan"] = saved_config.get("quantity_wan", 0.10)
 if "auto_refresh" not in st.session_state:
-    st.session_state["auto_refresh"] = False
+    st.session_state["auto_refresh"] = saved_config.get("auto_refresh", False)
+if "ranges" not in st.session_state:
+    st.session_state["ranges"] = saved_config.get("ranges", {})
 if "prev_selected_pair" not in st.session_state:
     st.session_state["prev_selected_pair"] = None
 
@@ -72,23 +108,20 @@ TIMEFRAMES = {
     "4時間足 (中期・リピート用)": {"period": "1y", "interval": "1h"},
 }
 
-LOOKAHEAD_BARS = 5  # Target予測の先読み足数
+LOOKAHEAD_BARS = 5
 
 def clean_series(s):
-    """DataFrameやMultiIndexから確実に単一のpd.Series（1次元配列）を取り出す関数"""
     if isinstance(s, pd.DataFrame):
         return s.iloc[:, 0].squeeze()
     return s
 
 def safe_to_tokyo_tz(df):
-    """タイムゾーンの安全変換処理"""
     df_out = df.copy()
     if df_out.index.tz is None:
         df_out.index = df_out.index.tz_localize("UTC")
     df_out.index = df_out.index.tz_convert("Asia/Tokyo")
     return df_out
 
-# クロス通貨リスク計算用のドル円レート取得・キャッシュ関数
 @st.cache_data(ttl=60, show_spinner=False)
 def get_usdjpy_rate():
     try:
@@ -100,7 +133,7 @@ def get_usdjpy_rate():
                 return val
     except Exception:
         pass
-    return 155.0  # 通信失敗時の標準フォールバック値
+    return 155.0
 
 # ==========================================
 # 1. データ処理 & バックテスト付きAIモデル
@@ -124,7 +157,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             
         if len(df) < 50: return None
         
-        # 確実に1次元のpd.Seriesとして抽出
         c = clean_series(df["Close"])
         h = clean_series(df["High"])
         l = clean_series(df["Low"])
@@ -170,12 +202,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["Lower_Wick_Ratio"] = (open_close_min - l) / total_range
         new_cols["ATR_Ratio"] = new_cols["ATR"] / c
 
-        df_feat = pd.DataFrame(new_cols, index=df.index)
-        # 無限大・NaNの安全置換
-        df_feat = df_feat.replace([np.inf, -np.inf], np.nan)
+        df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan)
         df = pd.concat([df, df_feat], axis=1)
 
-        # Target作成ロジック（TP/SL同時到達の不完全シグナル排除）
         f_high = pd.concat([h.shift(-i) for i in range(1, LOOKAHEAD_BARS + 1)], axis=1).max(axis=1) - c
         f_low = c - pd.concat([l.shift(-i) for i in range(1, LOOKAHEAD_BARS + 1)], axis=1).min(axis=1)
         tp_t, sl_t = new_cols["ATR"] * 1.0, new_cols["ATR"] * 0.5
@@ -203,7 +232,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
 
     try:
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
-        
         df_valid = df_current.dropna(subset=["Target"])
         test_size = 100
         min_required = test_size + 50
@@ -214,7 +242,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         X = df_valid[avail].fillna(0)
         y = df_valid["Target"]
         
-        # データ分割（時系列順）
         X_train = X.iloc[:-test_size]
         y_train = y.iloc[:-test_size]
         X_test = X.iloc[-test_size:]
@@ -230,7 +257,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         valid_eval = (preds != 0) & (y_test != 0)
         win_rate = (preds[valid_eval] == y_test[valid_eval]).mean() * 100 if valid_eval.sum() > 0 else 50.0
 
-        # 最新バー（リアルタイム足）の予測（欠損値ガード適用）
         latest_X = df_current[avail].iloc[[-1]].fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         class_prob_map = dict(zip(model.classes_, prob_array))
@@ -239,23 +265,19 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_down = float(class_prob_map.get(-1.0, 0.0))
         prob_wait = float(class_prob_map.get(0.0, 0.0))
         
-        # 確率は合計1.0(100%)に確実に正規化
         total_p = prob_up + prob_down + prob_wait
         if total_p > 0:
             prob_up, prob_down, prob_wait = prob_up/total_p, prob_down/total_p, prob_wait/total_p
 
         conf = max(prob_up, prob_down) * 100
-
         prob_dict = {
             "buy": round(prob_up * 100, 1),
             "sell": round(prob_down * 100, 1),
             "wait": round(prob_wait * 100, 1)
         }
 
-        # 特徴量重要度の抽出
         importances = pd.Series(model.feature_importances_, index=avail).sort_values(ascending=True)
 
-        # 日足上位足のトレンド確認
         htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
         if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
             htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
@@ -278,7 +300,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
 
 # ==========================================
-# 2. UI構築
+# 2. UI構築 & 状態永続化連動
 # ==========================================
 col_sel1, col_sel2 = st.columns(2)
 with col_sel1:
@@ -292,31 +314,35 @@ is_jpy = "JPY" in ticker
 pip_unit = 0.01 if is_jpy else 0.0001
 price_fmt = "%.3f" if is_jpy else "%.5f"
 
-# サイドバー設定（key を割り当てて Session State に接続）
+# サイドバー設定
 st.sidebar.header("⚙️ 資金 & リスク設定")
-account_balance = st.sidebar.number_input(
+st.sidebar.number_input(
     "口座資金 (円)", 
     min_value=10000, 
     step=50000, 
     key="account_balance",
-    help="運用予定の口座残高を入力してください。"
+    on_change=save_settings
 )
-quantity_wan = st.sidebar.number_input(
+st.sidebar.number_input(
     "1注文の数量 (万通貨)", 
     min_value=0.01, 
     step=0.01, 
     key="quantity_wan",
-    help="1回の注文あたりの数量です。松井証券では100通貨(0.01万)単位で指定可能です。"
+    on_change=save_settings
 )
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新設定")
 if HAS_AUTOREFRESH:
-    auto_refresh = st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh")
-    if auto_refresh:
+    st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh", on_change=save_settings)
+    if st.session_state["auto_refresh"]:
         st_autorefresh(interval=60000, key="datarefresh")
 
-if st.sidebar.button("🔄 最新データに手動更新"):
+if st.sidebar.button("💾 設定を即時手動保存"):
+    save_settings()
+    st.sidebar.success("設定を物理ファイルに保存しました！")
+
+if st.sidebar.button("🔄 最新データに更新"):
     st.cache_data.clear()
     st.rerun()
 
@@ -340,7 +366,7 @@ latest_atr = float(clean_series(data["ATR"]).iloc[-1])
 
 status, conf, win_rate, m_type, prob_dict, feature_importances = analyze_signal_with_backtest(data, data_htf)
 
-# --- サマリーダッシュボード ---
+# サマリー表示
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("現在レート", price_fmt % latest_price)
 
@@ -355,40 +381,65 @@ m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 
 st.markdown("---")
 
-# --- 4時間足基準のリピートレンジ計算 & 通貨ペア変更時の連動処理 ---
+# ==========================================
+# 3. 通貨ペア毎のレンジ管理 & 設定保存ロジック
+# ==========================================
 swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
-# 通貨ペアが切り替わった場合、レンジ下限・上限をその通貨ペア用に再設定
-pair_changed = (st.session_state["prev_selected_pair"] != selected_label)
-if pair_changed:
-    st.session_state["prev_selected_pair"] = selected_label
-    st.session_state["in_lower"] = swing_low_4h
-    st.session_state["in_upper"] = swing_high_4h
+# 通貨ペア毎のレンジ設定が保存されていなければ初期生成
+if ticker not in st.session_state["ranges"]:
+    st.session_state["ranges"][ticker] = {
+        "lower": swing_low_4h,
+        "upper": swing_high_4h
+    }
+    save_settings()
 
-# レンジ設定UI（State管理）
+# 通貨ペア切り替え時、または初回時に表示用 Session State を同期
+if st.session_state["prev_selected_pair"] != ticker:
+    st.session_state["prev_selected_pair"] = ticker
+    st.session_state["in_lower"] = st.session_state["ranges"][ticker]["lower"]
+    st.session_state["in_upper"] = st.session_state["ranges"][ticker]["upper"]
+
+# レンジ調整UI
 with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=False):
     rc1, rc2 = st.columns(2)
-    in_lower = rc1.number_input("レンジ下限", step=0.1 if is_jpy else 0.001, format=price_fmt, key="in_lower")
-    in_upper = rc2.number_input("レンジ上限", step=0.1 if is_jpy else 0.001, format=price_fmt, key="in_upper")
     
+    def update_range():
+        st.session_state["ranges"][ticker] = {
+            "lower": st.session_state["in_lower"],
+            "upper": st.session_state["in_upper"]
+        }
+        save_settings()
+
+    in_lower = rc1.number_input("レンジ下限", step=0.1 if is_jpy else 0.001, format=price_fmt, key="in_lower", on_change=update_range)
+    in_upper = rc2.number_input("レンジ上限", step=0.1 if is_jpy else 0.001, format=price_fmt, key="in_upper", on_change=update_range)
+    
+    if st.button("✨ 4時間足高値・安値からレンジを自動計算"):
+        st.session_state["in_lower"] = swing_low_4h
+        st.session_state["in_upper"] = swing_high_4h
+        update_range()
+        st.rerun()
+
     user_lower = min(in_lower, in_upper)
     user_upper = max(in_lower, in_upper)
     if user_lower == user_upper:
         user_upper += pip_unit * 100.0
     user_half = (user_upper + user_lower) / 2.0
 
-# 運用停止ライン（SL）の算出
+# 運用停止ライン（SL）
 stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
 stop_buffer_val = stop_buffer_pips * pip_unit
 buy_stop_loss = user_lower - stop_buffer_val
 sell_stop_loss = user_upper + stop_buffer_val
 
-# --- タブ構造によるUI構築 ---
+# ==========================================
+# 4. タブ描画
+# ==========================================
 tab_chart, tab_repeat, tab_ai = st.tabs(["📈 メインチャート", "📋 松井証券 リピート設定 & リスク管理", "🤖 AIモデル分析詳細"])
 
-# --- タブ1: メインチャート ---
+# --- タブ1: チャート ---
 with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(120))
     fmt_str = '%Y-%m-%d' if '日足' in tf_label else '%m-%d %H:%M'
@@ -396,7 +447,6 @@ with tab_chart:
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.03)
 
-    # ローソク足
     fig.add_trace(go.Candlestick(
         x=x_labels,
         open=clean_series(df_chart["Open"]),
@@ -408,11 +458,9 @@ with tab_chart:
         name="価格"
     ), row=1, col=1)
 
-    # EMA200
     if "EMA_200" in df_chart.columns:
         fig.add_trace(go.Scatter(x=x_labels, y=clean_series(df_chart["EMA_200"]), line=dict(color="#38bdf8", width=1.5), name="EMA200"), row=1, col=1)
 
-    # リピートレンジ & 運用停止ライン描画
     fig.add_hrect(y0=user_lower, y1=user_upper, fillcolor="rgba(56, 189, 248, 0.05)", line_width=0, row=1, col=1)
     fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#b91c1c", annotation_text="売 運用停止", row=1, col=1)
     fig.add_hline(y=user_upper, line_dash="dash", line_color="#ef4444", annotation_text="リピート上限", row=1, col=1)
@@ -420,7 +468,6 @@ with tab_chart:
     fig.add_hline(y=user_lower, line_dash="dash", line_color="#22c55e", annotation_text="リピート下限", row=1, col=1)
     fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#15803d", annotation_text="買 運用停止", row=1, col=1)
 
-    # RSI
     if "RSI" in df_chart.columns:
         fig.add_trace(go.Scatter(x=x_labels, y=clean_series(df_chart["RSI"]), line=dict(color="#a855f7", width=1.5), name="RSI"), row=2, col=1)
         fig.add_hline(y=70, line_dash="dot", line_color="gray", row=2, col=1)
@@ -435,13 +482,12 @@ with tab_chart:
         dragmode="pan",
         showlegend=False
     )
-    # カテゴリー軸の描画・ラベル間引き最適化
     fig.update_xaxes(type='category', nticks=10, tickangle=-30, showspikes=True)
     fig.update_yaxes(side="right")
 
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
 
-# --- タブ2: 松井証券 リピート設定 & リスク管理 ---
+# --- タブ2: リピート設定 & リスク管理 ---
 with tab_repeat:
     trap_width_pips = max(15, int(round((atr_4h / pip_unit))))
     half_range_pips = abs(user_upper - user_half) / pip_unit
@@ -449,16 +495,18 @@ with tab_repeat:
     half_grid_count = max(1, int(np.floor(half_range_pips / trap_width_pips)))
     total_grid_count = half_grid_count * 2
 
-    order_units = int(quantity_wan * 10000)
+    quantity_wan_val = st.session_state["quantity_wan"]
+    account_balance_val = st.session_state["account_balance"]
+
+    order_units = int(quantity_wan_val * 10000)
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
     
-    # 最大想定含み損算出
     max_loss_yen = sum((k * trap_width_pips + stop_buffer_pips) * pip_value_yen for k in range(half_grid_count))
         
     margin_per_order = (latest_price * order_units) / 25.0 if is_jpy else (latest_price * usd_rate * order_units) / 25.0
     total_margin_yen = margin_per_order * half_grid_count
-    risk_ratio = (max_loss_yen / account_balance) * 100 if account_balance > 0 else 0.0
+    risk_ratio = (max_loss_yen / account_balance_val) * 100 if account_balance_val > 0 else 0.0
 
     st.markdown(f"""
     <div class="param-box">
@@ -476,7 +524,7 @@ with tab_repeat:
 買いレンジ: {price_fmt % user_lower} - {price_fmt % user_half} (SL: {price_fmt % buy_stop_loss})
 売りレンジ: {price_fmt % user_half} - {price_fmt % user_upper} (SL: {price_fmt % sell_stop_loss})
 注文幅 / 利確幅: {trap_width_pips} pips
-1本あたりの数量: {quantity_wan:.2f} 万通貨""", language="text")
+1本あたりの数量: {quantity_wan_val:.2f} 万通貨""", language="text")
 
     st.markdown("##### 🛡️ リスク・資金シミュレーション")
     rc1, rc2, rc3 = st.columns(3)
@@ -496,8 +544,6 @@ with tab_ai:
     pcol1, pcol2 = st.columns(2)
     with pcol1:
         st.markdown("**最新バーの分類判定確率**")
-        
-        # 安全な float クリップ処理 (0.0 ～ 1.0)
         p_buy = max(0.0, min(1.0, prob_dict['buy'] / 100.0))
         p_sell = max(0.0, min(1.0, prob_dict['sell'] / 100.0))
         p_wait = max(0.0, min(1.0, prob_dict['wait'] / 100.0))
