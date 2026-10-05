@@ -160,7 +160,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["Lower_Wick_Ratio"] = (open_close_min - l) / total_range
         new_cols["ATR_Ratio"] = new_cols["ATR"] / c
 
-        df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
+        df_feat = pd.DataFrame(new_cols, index=df.index)
+        # 無限大・NaNの安全置換
+        df_feat = df_feat.replace([np.inf, -np.inf], np.nan)
+        df = pd.concat([df, df_feat], axis=1)
 
         # Target作成ロジック（TP/SL同時到達の不完全シグナル排除）
         f_high = pd.concat([h.shift(-i) for i in range(1, LOOKAHEAD_BARS + 1)], axis=1).max(axis=1) - c
@@ -193,17 +196,17 @@ def analyze_signal_with_backtest(df_current, df_htf):
         
         df_valid = df_current.dropna(subset=["Target"])
         test_size = 100
-        min_required = test_size + LOOKAHEAD_BARS + 50
+        min_required = test_size + 50
         
         if len(df_valid) < min_required:
             return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0})
 
-        X = df_valid[avail]
+        X = df_valid[avail].fillna(0)
         y = df_valid["Target"]
         
-        # データリーク防止用ギャップ設置
-        X_train = X.iloc[: -(test_size + LOOKAHEAD_BARS)]
-        y_train = y.iloc[: -(test_size + LOOKAHEAD_BARS)]
+        # データ分割（時系列順）
+        X_train = X.iloc[:-test_size]
+        y_train = y.iloc[:-test_size]
         X_test = X.iloc[-test_size:]
         y_test = y.iloc[-test_size:]
 
@@ -217,8 +220,8 @@ def analyze_signal_with_backtest(df_current, df_htf):
         valid_eval = (preds != 0) & (y_test != 0)
         win_rate = (preds[valid_eval] == y_test[valid_eval]).mean() * 100 if valid_eval.sum() > 0 else 50.0
 
-        # 最新バー（リアルタイム足）の予測
-        latest_X = df_current[avail].iloc[[-1]]
+        # 最新バー（リアルタイム足）の予測（欠損値ガード適用）
+        latest_X = df_current[avail].iloc[[-1]].fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         class_prob_map = dict(zip(model.classes_, prob_array))
         
@@ -356,7 +359,8 @@ tab_chart, tab_repeat, tab_ai = st.tabs(["📈 メインチャート", "📋 松
 # --- タブ1: メインチャート ---
 with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(120))
-    x_labels = df_chart.index.strftime('%Y-%m-%d %H:%M')
+    fmt_str = '%Y-%m-%d' if '日足' in tf_label else '%m-%d %H:%M'
+    x_labels = df_chart.index.strftime(fmt_str)
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.03)
 
@@ -399,7 +403,7 @@ with tab_chart:
         dragmode="pan",
         showlegend=False
     )
-    # カテゴリー軸の描画・ラベル間引き最適化（修正：nticks を使用）
+    # カテゴリー軸の描画・ラベル間引き最適化
     fig.update_xaxes(type='category', nticks=10, tickangle=-30, showspikes=True)
     fig.update_yaxes(side="right")
 
@@ -417,8 +421,7 @@ with tab_repeat:
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
     
-    # 【修正】幾何学的に厳格な最大想定含み損算出
-    # 各トラップ k (0 ～ N-1) から運用停止ライン(SL)までの距離: k * trap_width + stop_buffer
+    # 幾何学的に厳格な最大想定含み損算出
     max_loss_yen = sum((k * trap_width_pips + stop_buffer_pips) * pip_value_yen for k in range(half_grid_count))
         
     margin_per_order = (latest_price * order_units) / 25.0 if is_jpy else (latest_price * usd_rate * order_units) / 25.0
@@ -462,18 +465,19 @@ with tab_ai:
     with pcol1:
         st.markdown("**最新バーの分類判定確率**")
         
-        val_buy = max(0, min(100, int(prob_dict['buy'])))
-        val_sell = max(0, min(100, int(prob_dict['sell'])))
-        val_wait = max(0, min(100, int(prob_dict['wait'])))
+        # 安全な float クリップ処理 (0.0 ～ 1.0)
+        p_buy = max(0.0, min(1.0, prob_dict['buy'] / 100.0))
+        p_sell = max(0.0, min(1.0, prob_dict['sell'] / 100.0))
+        p_wait = max(0.0, min(1.0, prob_dict['wait'] / 100.0))
 
         st.write(f"🟢 **BUY (買い)**: {prob_dict['buy']}%")
-        st.progress(val_buy)
+        st.progress(p_buy)
         
         st.write(f"🔴 **SELL (売り)**: {prob_dict['sell']}%")
-        st.progress(val_sell)
+        st.progress(p_sell)
         
         st.write(f"⚪ **WAIT (様子見)**: {prob_dict['wait']}%")
-        st.progress(val_wait)
+        st.progress(p_wait)
 
     with pcol2:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
