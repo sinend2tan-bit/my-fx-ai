@@ -127,7 +127,11 @@ def get_usdjpy_rate():
     try:
         df = yf.download("USDJPY=X", period="1d", progress=False)
         if not df.empty:
-            c = clean_series(df["Close"])
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            cols = {str(c).lower(): c for c in df.columns}
+            close_col = cols.get("close", df.columns[0])
+            c = clean_series(df[close_col])
             val = float(c.iloc[-1]) if len(c) > 0 else 155.0
             if not np.isnan(val) and val > 0:
                 return val
@@ -142,10 +146,19 @@ def get_usdjpy_rate():
 def load_and_process_data(symbol, period, interval, tf_name=""):
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False)
-        if df.empty: return None
+        if df.empty:
+            return None
+            
         if isinstance(df.columns, pd.MultiIndex): 
             df.columns = df.columns.get_level_values(0)
+        
         df = df.loc[:, ~df.columns.duplicated()]
+        # カラム名を頭文字大文字に統一 (open -> Open 等)
+        df.columns = [str(c).capitalize() for c in df.columns]
+
+        required_cols = ["Open", "High", "Low", "Close"]
+        if not all(col in df.columns for col in required_cols):
+            return None
         
         if "4時間足" in tf_name and interval == "1h":
             tz_before = df.index.tz
@@ -155,7 +168,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             if tz_before is not None and df.index.tz is None: 
                 df.index = df.index.tz_localize(tz_before)
             
-        if len(df) < 50: return None
+        if len(df) < 50:
+            return None
         
         c = clean_series(df["Close"])
         h = clean_series(df["High"])
@@ -250,12 +264,12 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(np.unique(y_train)) < 2: 
             return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
 
-        model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42)
+        model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42, n_jobs=-1)
         model.fit(X_train, y_train)
 
         preds = model.predict(X_test)
         valid_eval = (preds != 0) & (y_test != 0)
-        win_rate = (preds[valid_eval] == y_test[valid_eval]).mean() * 100 if valid_eval.sum() > 0 else 50.0
+        win_rate = float((preds[valid_eval] == y_test[valid_eval]).mean() * 100) if valid_eval.sum() > 0 else 50.0
 
         latest_X = df_current[avail].iloc[[-1]].fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
@@ -399,8 +413,8 @@ if ticker not in st.session_state["ranges"]:
 # 通貨ペア切り替え時、または初回時に表示用 Session State を同期
 if st.session_state["prev_selected_pair"] != ticker:
     st.session_state["prev_selected_pair"] = ticker
-    st.session_state["in_lower"] = st.session_state["ranges"][ticker]["lower"]
-    st.session_state["in_upper"] = st.session_state["ranges"][ticker]["upper"]
+    st.session_state["in_lower"] = float(st.session_state["ranges"][ticker]["lower"])
+    st.session_state["in_upper"] = float(st.session_state["ranges"][ticker]["upper"])
 
 # レンジ調整UI
 with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=False):
@@ -408,8 +422,8 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
     
     def update_range():
         st.session_state["ranges"][ticker] = {
-            "lower": st.session_state["in_lower"],
-            "upper": st.session_state["in_upper"]
+            "lower": float(st.session_state["in_lower"]),
+            "upper": float(st.session_state["in_upper"])
         }
         save_settings()
 
@@ -417,8 +431,8 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
     in_upper = rc2.number_input("レンジ上限", step=0.1 if is_jpy else 0.001, format=price_fmt, key="in_upper", on_change=update_range)
     
     if st.button("✨ 4時間足高値・安値からレンジを自動計算"):
-        st.session_state["in_lower"] = swing_low_4h
-        st.session_state["in_upper"] = swing_high_4h
+        st.session_state["in_lower"] = float(swing_low_4h)
+        st.session_state["in_upper"] = float(swing_high_4h)
         update_range()
         st.rerun()
 
