@@ -65,9 +65,9 @@ TIMEFRAMES = {
 LOOKAHEAD_BARS = 5  # Target予測の先読み足数
 
 def clean_series(s):
-    """DataFrameやMultiIndexから確実に単一のpd.Seriesを取り出す関数"""
+    """DataFrameやMultiIndexから確実に単一のpd.Series（1次元配列）を取り出す関数"""
     if isinstance(s, pd.DataFrame):
-        return s.iloc[:, 0]
+        return s.iloc[:, 0].squeeze()
     return s
 
 def safe_to_tokyo_tz(df):
@@ -85,7 +85,7 @@ def get_usdjpy_rate():
         df = yf.download("USDJPY=X", period="1d", progress=False)
         if not df.empty:
             c = clean_series(df["Close"])
-            val = float(c.iloc[-1])
+            val = float(c.iloc[-1]) if len(c) > 0 else 155.0
             if not np.isnan(val) and val > 0:
                 return val
     except Exception:
@@ -187,7 +187,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
 @st.cache_data(ttl=30, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
-    empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0})
+    empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
     if df_current is None or len(df_current) < 200:
         return empty_res
 
@@ -199,7 +199,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         min_required = test_size + 50
         
         if len(df_valid) < min_required:
-            return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0})
+            return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
 
         X = df_valid[avail].fillna(0)
         y = df_valid["Target"]
@@ -211,7 +211,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         y_test = y.iloc[-test_size:]
 
         if len(np.unique(y_train)) < 2: 
-            return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0})
+            return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
 
         model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42)
         model.fit(X_train, y_train)
@@ -242,6 +242,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
             "wait": round(prob_wait * 100, 1)
         }
 
+        # 特徴量重要度の抽出
+        importances = pd.Series(model.feature_importances_, index=avail).sort_values(ascending=True)
+
         # 日足上位足のトレンド確認
         htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
         if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
@@ -260,9 +263,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1])
         m_type = "トレンド相場" if adx_val > 22 else "レンジ相場"
 
-        return status, conf, win_rate, m_type, prob_dict
+        return status, conf, win_rate, m_type, prob_dict, importances
     except Exception:
-        return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0})
+        return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
 
 # ==========================================
 # 2. UI構築
@@ -313,7 +316,7 @@ st.markdown(f'<div class="update-time">最終データ取得日時: <b>{now_jst}
 latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1])
 
-status, conf, win_rate, m_type, prob_dict = analyze_signal_with_backtest(data, data_htf)
+status, conf, win_rate, m_type, prob_dict, feature_importances = analyze_signal_with_backtest(data, data_htf)
 
 # --- サマリーダッシュボード ---
 m1, m2, m3, m4 = st.columns(4)
@@ -335,7 +338,7 @@ swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
-# レンジ設定UI
+# レンジ設定UI（安全な上下限バリデーション付）
 with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=False):
     rc1, rc2 = st.columns(2)
     in_lower = rc1.number_input("レンジ下限", value=swing_low_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
@@ -483,3 +486,25 @@ with tab_ai:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
         st.metric("直近テスト100足の方向勝率", f"{win_rate:.1f}%")
         st.caption("※ 先読みデータ（Lookahead Leak）を排除した厳格なバックテスト精度です。70%以上の確率スコアと日足トレンドが一致した場合のみ推奨シグナルが発動します。")
+
+    if feature_importances is not None:
+        st.markdown("---")
+        st.markdown("##### 📊 AIの判断根拠（特徴量重要度 TOP 10）")
+        st.caption("AIが『買い・売り・様子見』を判断する際に、どの指標を重視したかを示す貢献度ランキングです。")
+        
+        top10_imp = feature_importances.tail(10)
+        
+        fig_imp = go.Figure(go.Bar(
+            x=top10_imp.values,
+            y=top10_imp.index,
+            orientation='h',
+            marker_color='#38bdf8'
+        ))
+        fig_imp.update_layout(
+            height=320,
+            margin=dict(l=10, r=20, t=10, b=30),
+            template="plotly_dark",
+            xaxis_title="重要度スコア",
+            yaxis=dict(autorange="reversed")
+        )
+        st.plotly_chart(fig_imp, use_container_width=True, config={'displayModeBar': False})
