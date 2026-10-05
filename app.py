@@ -18,7 +18,7 @@ except ImportError:
     HAS_AUTOREFRESH = False
 
 # ==========================================
-# 0. 画面基本設定 & CSS
+# 0. 画面基本設定 & Session State 初期化
 # ==========================================
 st.set_page_config(
     page_title="Pro FX Analyzer & Signal",
@@ -40,6 +40,16 @@ st.markdown("""
     .update-time { font-size: 0.85rem; color: #94a3b8; text-align: right; margin-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
+
+# Session State の初期設定（再描画時の初期化防止）
+if "account_balance" not in st.session_state:
+    st.session_state["account_balance"] = 500000
+if "quantity_wan" not in st.session_state:
+    st.session_state["quantity_wan"] = 0.10
+if "auto_refresh" not in st.session_state:
+    st.session_state["auto_refresh"] = False
+if "prev_selected_pair" not in st.session_state:
+    st.session_state["prev_selected_pair"] = None
 
 FEATURE_COLUMNS = [
     "Return_1", "Return_5", "Dev_SMA20", "Dev_EMA200", "Dev_EMA20_200", "Vol_Ratio",
@@ -282,15 +292,27 @@ is_jpy = "JPY" in ticker
 pip_unit = 0.01 if is_jpy else 0.0001
 price_fmt = "%.3f" if is_jpy else "%.5f"
 
-# サイドバー設定
+# サイドバー設定（key を割り当てて Session State に接続）
 st.sidebar.header("⚙️ 資金 & リスク設定")
-account_balance = st.sidebar.number_input("口座資金 (円)", min_value=10000, value=500000, step=50000, help="運用予定の口座残高を入力してください。")
-quantity_wan = st.sidebar.number_input("1注文の数量 (万通貨)", min_value=0.01, value=0.10, step=0.01, help="1回の注文あたりの数量です。松井証券では100通貨(0.01万)単位で指定可能です。")
+account_balance = st.sidebar.number_input(
+    "口座資金 (円)", 
+    min_value=10000, 
+    step=50000, 
+    key="account_balance",
+    help="運用予定の口座残高を入力してください。"
+)
+quantity_wan = st.sidebar.number_input(
+    "1注文の数量 (万通貨)", 
+    min_value=0.01, 
+    step=0.01, 
+    key="quantity_wan",
+    help="1回の注文あたりの数量です。松井証券では100通貨(0.01万)単位で指定可能です。"
+)
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新設定")
 if HAS_AUTOREFRESH:
-    auto_refresh = st.sidebar.checkbox("60秒ごとに自動更新", value=False)
+    auto_refresh = st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh")
     if auto_refresh:
         st_autorefresh(interval=60000, key="datarefresh")
 
@@ -333,16 +355,23 @@ m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 
 st.markdown("---")
 
-# --- 4時間足基準のリピートレンジ計算 ---
+# --- 4時間足基準のリピートレンジ計算 & 通貨ペア変更時の連動処理 ---
 swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
-# レンジ設定UI（安全な上下限バリデーション付）
+# 通貨ペアが切り替わった場合、レンジ下限・上限をその通貨ペア用に再設定
+pair_changed = (st.session_state["prev_selected_pair"] != selected_label)
+if pair_changed:
+    st.session_state["prev_selected_pair"] = selected_label
+    st.session_state["in_lower"] = swing_low_4h
+    st.session_state["in_upper"] = swing_high_4h
+
+# レンジ設定UI（State管理）
 with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=False):
     rc1, rc2 = st.columns(2)
-    in_lower = rc1.number_input("レンジ下限", value=swing_low_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
-    in_upper = rc2.number_input("レンジ上限", value=swing_high_4h, step=0.1 if is_jpy else 0.001, format=price_fmt)
+    in_lower = rc1.number_input("レンジ下限", step=0.1 if is_jpy else 0.001, format=price_fmt, key="in_lower")
+    in_upper = rc2.number_input("レンジ上限", step=0.1 if is_jpy else 0.001, format=price_fmt, key="in_upper")
     
     user_lower = min(in_lower, in_upper)
     user_upper = max(in_lower, in_upper)
@@ -424,7 +453,7 @@ with tab_repeat:
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
     
-    # 幾何学的に厳格な最大想定含み損算出
+    # 最大想定含み損算出
     max_loss_yen = sum((k * trap_width_pips + stop_buffer_pips) * pip_value_yen for k in range(half_grid_count))
         
     margin_per_order = (latest_price * order_units) / 25.0 if is_jpy else (latest_price * usd_rate * order_units) / 25.0
