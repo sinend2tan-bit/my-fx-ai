@@ -84,8 +84,6 @@ if "auto_refresh" not in st.session_state:
     st.session_state["auto_refresh"] = saved_config.get("auto_refresh", False)
 if "ranges" not in st.session_state:
     st.session_state["ranges"] = saved_config.get("ranges", {})
-if "prev_selected_pair" not in st.session_state:
-    st.session_state["prev_selected_pair"] = None
 
 FEATURE_COLUMNS = [
     "Return_1", "Return_5", "Dev_SMA20", "Dev_EMA200", "Dev_EMA20_200", "Vol_Ratio",
@@ -122,11 +120,11 @@ def safe_to_tokyo_tz(df):
     df_out.index = df_out.index.tz_convert("Asia/Tokyo")
     return df_out
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def get_usdjpy_rate():
     try:
-        df = yf.download("USDJPY=X", period="1d", progress=False)
-        if not df.empty:
+        df = yf.download("USDJPY=X", period="1d", progress=False, timeout=10)
+        if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             cols = {str(c).lower(): c for c in df.columns}
@@ -142,18 +140,17 @@ def get_usdjpy_rate():
 # ==========================================
 # 1. データ処理 & バックテスト付きAIモデル
 # ==========================================
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def load_and_process_data(symbol, period, interval, tf_name=""):
     try:
-        df = yf.download(symbol, period=period, interval=interval, progress=False)
-        if df.empty:
+        df = yf.download(symbol, period=period, interval=interval, progress=False, timeout=10)
+        if df is None or df.empty:
             return None
             
         if isinstance(df.columns, pd.MultiIndex): 
             df.columns = df.columns.get_level_values(0)
         
         df = df.loc[:, ~df.columns.duplicated()]
-        # カラム名を頭文字大文字に統一 (open -> Open 等)
         df.columns = [str(c).capitalize() for c in df.columns]
 
         required_cols = ["Open", "High", "Low", "Close"]
@@ -238,7 +235,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception: 
         return None
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
     empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
     if df_current is None or len(df_current) < 200:
@@ -317,8 +314,20 @@ def analyze_signal_with_backtest(df_current, df_htf):
 # 2. UI構築 & 状態永続化連動
 # ==========================================
 col_sel1, col_sel2 = st.columns(2)
+
+def on_pair_change():
+    """通貨ペア変更時の安全なSession State更新"""
+    new_label = st.session_state["selected_pair_label"]
+    new_ticker = PAIRS[new_label]
+    if new_ticker in st.session_state.get("ranges", {}):
+        st.session_state["in_lower"] = float(st.session_state["ranges"][new_ticker]["lower"])
+        st.session_state["in_upper"] = float(st.session_state["ranges"][new_ticker]["upper"])
+    else:
+        st.session_state.pop("in_lower", None)
+        st.session_state.pop("in_upper", None)
+
 with col_sel1:
-    selected_label = st.selectbox("通貨ペア", list(PAIRS.keys()), key="selected_pair_label")
+    selected_label = st.selectbox("通貨ペア", list(PAIRS.keys()), key="selected_pair_label", on_change=on_pair_change)
 with col_sel2:
     tf_label = st.selectbox("時間足", list(TIMEFRAMES.keys()), key="selected_tf_label")
 
@@ -361,15 +370,16 @@ if st.sidebar.button("🔄 最新データに更新"):
     st.rerun()
 
 # データ取得
-data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
-data_4h = load_and_process_data(ticker, "1y", "1h", "4時間足 (中期・リピート用)")
-data_htf = load_and_process_data(ticker, "3y", "1d", "日足")
+with st.spinner("最新相場データを取得中..."):
+    data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
+    data_4h = load_and_process_data(ticker, "1y", "1h", "4時間足 (中期・リピート用)")
+    data_htf = load_and_process_data(ticker, "3y", "1d", "日足")
 
 if data_4h is None and data is not None:
     data_4h = data
 
 if data is None or data_htf is None:
-    st.error("データの取得に失敗しました。時間足または通貨ペアを変更してください。")
+    st.error("データの取得に失敗しました。Yahoo Financeからの応答が遅延しているか、取引時間外の可能性があります。時間を置いて再度更新してください。")
     st.stop()
 
 now_jst = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S")
@@ -402,7 +412,7 @@ swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
-# 通貨ペア毎のレンジ設定が保存されていなければ初期生成
+# 通貨ペア毎のレンジ初期化
 if ticker not in st.session_state["ranges"]:
     st.session_state["ranges"][ticker] = {
         "lower": swing_low_4h,
@@ -410,10 +420,9 @@ if ticker not in st.session_state["ranges"]:
     }
     save_settings()
 
-# 通貨ペア切り替え時、または初回時に表示用 Session State を同期
-if st.session_state["prev_selected_pair"] != ticker:
-    st.session_state["prev_selected_pair"] = ticker
+if "in_lower" not in st.session_state:
     st.session_state["in_lower"] = float(st.session_state["ranges"][ticker]["lower"])
+if "in_upper" not in st.session_state:
     st.session_state["in_upper"] = float(st.session_state["ranges"][ticker]["upper"])
 
 # レンジ調整UI
