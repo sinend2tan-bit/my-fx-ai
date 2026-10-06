@@ -75,6 +75,8 @@ st.markdown("""
     
     .param-box { background-color: rgba(30, 41, 59, 0.8) !important; border-left: 5px solid #3b82f6; padding: 14px; border-radius: 6px; font-family: monospace; line-height: 1.8; color: #f8fafc !important; }
     .param-box code { font-size: 0.95rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: rgba(51, 65, 85, 0.9) !important; padding: 2px 6px; border-radius: 4px; }
+    
+    .ai-card { background-color: rgba(15, 23, 42, 0.6); border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
     .update-time { font-size: 0.85rem; color: #94a3b8; text-align: right; margin-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
@@ -123,9 +125,12 @@ def clean_series(s):
 
 def safe_to_tokyo_tz(df):
     df_out = df.copy()
-    if df_out.index.tz is None:
-        df_out.index = df_out.index.tz_localize("UTC")
-    df_out.index = df_out.index.tz_convert("Asia/Tokyo")
+    try:
+        if df_out.index.tz is None:
+            df_out.index = df_out.index.tz_localize("UTC")
+        df_out.index = df_out.index.tz_convert("Asia/Tokyo")
+    except Exception:
+        pass
     return df_out
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -330,9 +335,6 @@ def on_pair_change():
     if new_ticker in st.session_state.get("ranges", {}):
         st.session_state["in_lower"] = float(st.session_state["ranges"][new_ticker]["lower"])
         st.session_state["in_upper"] = float(st.session_state["ranges"][new_ticker]["upper"])
-    else:
-        st.session_state.pop("in_lower", None)
-        st.session_state.pop("in_upper", None)
 
 with col_sel1:
     selected_label = st.selectbox("通貨ペア", list(PAIRS.keys()), key="selected_pair_label", on_change=on_pair_change)
@@ -449,9 +451,9 @@ if ticker not in st.session_state["ranges"]:
     }
     save_settings()
 
-if "in_lower" not in st.session_state:
+if "in_lower" not in st.session_state or ticker not in st.session_state["ranges"]:
     st.session_state["in_lower"] = float(st.session_state["ranges"][ticker]["lower"])
-if "in_upper" not in st.session_state:
+if "in_upper" not in st.session_state or ticker not in st.session_state["ranges"]:
     st.session_state["in_upper"] = float(st.session_state["ranges"][ticker]["upper"])
 
 # レンジ調整UI
@@ -491,7 +493,7 @@ sell_stop_loss = user_upper + stop_buffer_val
 # ==========================================
 tab_chart, tab_single, tab_repeat, tab_ai = st.tabs([
     "📈 メインチャート", 
-    "⚡ 単発トレード (裁量アシスト)", 
+    "⚡ 単発トレード (AI全自動アシスト)", 
     "📋 松井証券 リピート設定 & リスク管理", 
     "🤖 AIモデル分析詳細"
 ])
@@ -544,15 +546,83 @@ with tab_chart:
 
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
 
-# --- タブ2: 単発トレード (新規追加) ---
+# --- タブ2: 単発トレード (AI全自動アシスト) ---
 with tab_single:
-    st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）発注アシスタント")
-    st.caption("AIシグナルやATR（ボラティリティ）を参考に、損切・利確レートと資金管理に沿った最適なロット数を自動計算します。")
+    st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）AI発注アシスタント")
+    st.caption("AIが現在の相場・ボラティリティ・口座資金を統合解析し、最適シグナルと注文数値をリアルタイムで自動計算します。")
 
+    # 1. AIロジックによる推奨値の自動算出
+    usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
+    pip_val_per_wan = 100.0 if is_jpy else (0.0001 * usd_rate * 10000.0)
+
+    account_bal = st.session_state["account_balance"]
+    risk_pct = st.session_state["risk_percent"]
+    max_risk_yen = account_bal * (risk_pct / 100.0)
+
+    # AI判定に基づく方向と基本ボラティリティ幅
+    ai_is_buy = "BUY" in status
+    ai_is_sell = "SELL" in status
+    
+    # 方向のデフォルト文字列
+    if ai_is_buy:
+        ai_direction = "BUY (買い)"
+    elif ai_is_sell:
+        ai_direction = "SELL (売り)"
+    else:
+        # WAITの場合はAI確率が高い方を暫定設定しつつ警告を表示
+        ai_direction = "BUY (買い)" if prob_dict["buy"] >= prob_dict["sell"] else "SELL (売り)"
+
+    ai_sl_pips = round((latest_atr / pip_unit) * 1.5, 1)  # ATR×1.5倍をAI推奨SLとする
+    ai_rr_ratio = float(st.session_state["rr_ratio"])
+    ai_tp_pips = round(ai_sl_pips * ai_rr_ratio, 1)
+
+    ai_entry = latest_price
+    ai_sl_price = ai_entry - (ai_sl_pips * pip_unit) if "BUY" in ai_direction else ai_entry + (ai_sl_pips * pip_unit)
+    ai_tp_price = ai_entry + (ai_tp_pips * pip_unit) if "BUY" in ai_direction else ai_entry - (ai_tp_pips * pip_unit)
+
+    ai_loss_per_wan = ai_sl_pips * pip_val_per_wan
+    ai_rec_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.01
+    ai_rec_wan = max(0.01, round(ai_rec_wan, 2))
+
+    ai_profit_yen = ai_tp_pips * pip_val_per_wan * ai_rec_wan
+    ai_loss_yen = ai_sl_pips * pip_val_per_wan * ai_rec_wan
+
+    # 2. AI推奨プランカードの表示
+    st.markdown('<div class="ai-card">', unsafe_allow_html=True)
+    st.markdown("#### 🤖 AI提案トレードプラン")
+    
+    if "WAIT" in status:
+        st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。** 明確なトレンドがでるまで見送りを推奨しますが、仮にトレードする場合の数値を下部に提示しています。")
+    else:
+        st.success(f"🎯 **AI判定: 【{status}】（確信度: {conf:.1f}% / 勝率目安: {win_rate:.1f}%）**")
+
+    a1, a2, a3, a4, a5 = st.columns(5)
+    a1.metric("推奨売買方向", ai_direction)
+    a2.metric("想定エントリー", price_fmt % ai_entry)
+    a3.metric("推奨損切 (SL)", price_fmt % ai_sl_price, f"-{ai_sl_pips} pips")
+    a4.metric("推奨利確 (TP)", price_fmt % ai_tp_price, f"+{ai_tp_pips} pips")
+    a5.metric("最適数量", f"{ai_rec_wan:.2f} 万通貨", f"許容リスク {risk_pct}%")
+
+    st.markdown(f"""
+    <div class="param-box">
+    <b>【AI自動提示 注文コピー用パラメータ】</b><br>
+    ・<b>通貨ペア</b>: <code>{selected_label.split(' ')[0]}</code> | <b>売買方向</b>: <code>{"買い (BUY)" if "BUY" in ai_direction else "売り (SELL)"}</code><br>
+    ・<b>新規成行価格</b>: <code>{price_fmt % ai_entry}</code><br>
+    ・<b>決済利確(TP)</b>: <code>{price_fmt % ai_tp_price}</code> (+{ai_tp_pips} pips / ＋{int(ai_profit_yen):,}円)<br>
+    ・<b>決済損切(SL)</b>: <code>{price_fmt % ai_sl_price}</code> (-{ai_sl_pips} pips / －{int(ai_loss_yen):,}円)<br>
+    ・<b>推奨発注数量</b>: <code>{ai_rec_wan:.2f} 万通貨</code> ({int(ai_rec_wan * 10000):,} 通貨)
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("##### 🛠️ 注文条件の手動微調整")
+    st.caption("AIの算出結果をベースに、エントリー価格や損切幅・リスクリワード比を自由に変更できます。")
+
+    # 手動調整用フォーム
     sc1, sc2 = st.columns(2)
     
-    # 売買方向の初期値をAIシグナルと連動
-    default_side_idx = 0 if "BUY" in status else (1 if "SELL" in status else 0)
+    default_side_idx = 0 if "BUY" in ai_direction else 1
     
     with sc1:
         trade_side = st.radio("売買方向", ["BUY (買い)", "SELL (売り)"], index=default_side_idx, horizontal=True)
@@ -570,47 +640,23 @@ with tab_single:
     rr_value = st.slider("リスクリワード比 (RR)", min_value=0.5, max_value=4.0, value=float(st.session_state["rr_ratio"]), step=0.1)
     tp_pips = round(sl_pips * rr_value, 1)
 
-    # TP/SL レート計算
+    # 手動調整値による再計算
     is_buy = "BUY" in trade_side
     sl_price = entry_price - (sl_pips * pip_unit) if is_buy else entry_price + (sl_pips * pip_unit)
     tp_price = entry_price + (tp_pips * pip_unit) if is_buy else entry_price - (tp_pips * pip_unit)
 
-    # ポジションサイズ（資金管理）計算
-    account_bal = st.session_state["account_balance"]
-    risk_pct = st.session_state["risk_percent"]
-    max_risk_yen = account_bal * (risk_pct / 100.0)
-
-    # 1pipあたりの価値 (1万通貨あたり)
-    usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
-    pip_val_per_wan = 100.0 if is_jpy else (0.0001 * usd_rate * 10000.0)
-
-    # 推奨ロット数 (万通貨)
     loss_per_wan = sl_pips * pip_val_per_wan
     recommended_wan = (max_risk_yen / loss_per_wan) if loss_per_wan > 0 else 0.01
-    recommended_wan = max(0.01, round(recommended_wan, 2))  # 最低0.01万通貨
+    recommended_wan = max(0.01, round(recommended_wan, 2))
 
     expected_profit_yen = tp_pips * pip_val_per_wan * recommended_wan
     actual_loss_yen = sl_pips * pip_val_per_wan * recommended_wan
 
-    st.markdown("---")
-    st.markdown("##### 📊 計算結果 & 推奨発注パラメータ")
-
     res_col1, res_col2, res_col3, res_col4 = st.columns(4)
-    res_col1.metric("推奨ロット数", f"{recommended_wan:.2f} 万通貨", f"許容リスク {risk_pct}%")
+    res_col1.metric("調整後の手動ロット数", f"{recommended_wan:.2f} 万通貨", f"許容リスク {risk_pct}%")
     res_col2.metric("損切(SL) レート", price_fmt % sl_price, f"-{sl_pips} pips")
     res_col3.metric("利確(TP) レート", price_fmt % tp_price, f"+{tp_pips} pips")
     res_col4.metric("想定損益", f"+{int(expected_profit_yen):,}円", f"最大損失 -{int(actual_loss_yen):,}円")
-
-    st.markdown(f"""
-    <div class="param-box">
-    <b>【単発トレード 注文コピー用パラメータ】</b><br>
-    ・<b>通貨ペア</b>: <code>{selected_label.split(' ')[0]}</code> | <b>注文種別</b>: <code>{"買い (BUY)" if is_buy else "売り (SELL)"}</code><br>
-    ・<b>新規注文価格</b>: <code>{price_fmt % entry_price}</code><br>
-    ・<b>決済利確(TP)</b>: <code>{price_fmt % tp_price}</code> (+{tp_pips} pips)<br>
-    ・<b>決済損切(SL)</b>: <code>{price_fmt % sl_price}</code> (-{sl_pips} pips)<br>
-    ・<b>推奨発注数量</b>: <code>{recommended_wan:.2f} 万通貨</code> ({int(recommended_wan * 10000):,} 通貨)
-    </div>
-    """, unsafe_allow_html=True)
 
 # --- タブ3: リピート設定 & リスク管理 ---
 with tab_repeat:
