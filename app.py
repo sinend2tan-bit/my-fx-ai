@@ -34,6 +34,8 @@ def load_settings():
         "account_balance": 500000,
         "quantity_wan": 0.10,
         "auto_refresh": False,
+        "risk_percent": 1.0,
+        "rr_ratio": 1.5,
         "ranges": {}
     }
 
@@ -43,6 +45,8 @@ def save_settings():
         "account_balance": st.session_state.get("account_balance", 500000),
         "quantity_wan": st.session_state.get("quantity_wan", 0.10),
         "auto_refresh": st.session_state.get("auto_refresh", False),
+        "risk_percent": st.session_state.get("risk_percent", 1.0),
+        "rr_ratio": st.session_state.get("rr_ratio", 1.5),
         "ranges": st.session_state.get("ranges", {})
     }
     try:
@@ -82,6 +86,10 @@ if "quantity_wan" not in st.session_state:
     st.session_state["quantity_wan"] = saved_config.get("quantity_wan", 0.10)
 if "auto_refresh" not in st.session_state:
     st.session_state["auto_refresh"] = saved_config.get("auto_refresh", False)
+if "risk_percent" not in st.session_state:
+    st.session_state["risk_percent"] = saved_config.get("risk_percent", 1.0)
+if "rr_ratio" not in st.session_state:
+    st.session_state["rr_ratio"] = saved_config.get("rr_ratio", 1.5)
 if "ranges" not in st.session_state:
     st.session_state["ranges"] = saved_config.get("ranges", {})
 
@@ -347,11 +355,32 @@ st.sidebar.number_input(
     on_change=save_settings
 )
 st.sidebar.number_input(
-    "1注文の数量 (万通貨)", 
+    "1注文の基本数量 (万通貨)", 
     min_value=0.01, 
     step=0.01, 
     key="quantity_wan",
     on_change=save_settings
+)
+
+st.sidebar.markdown("---")
+st.sidebar.header("🎯 単発トレード リスク設定")
+st.sidebar.number_input(
+    "1取引あたりの許容リスク (%)",
+    min_value=0.1,
+    max_value=10.0,
+    step=0.1,
+    key="risk_percent",
+    on_change=save_settings,
+    help="1回の単発トレードで損切になった際に許容する口座資金の割合"
+)
+st.sidebar.number_input(
+    "デフォルト リスクリワード比 (RR)",
+    min_value=0.5,
+    max_value=5.0,
+    step=0.1,
+    key="rr_ratio",
+    on_change=save_settings,
+    help="損切幅に対して狙う利確幅の比率 (例: 1.5 = 損切10pipsに対し利確15pips)"
 )
 
 st.sidebar.markdown("---")
@@ -460,7 +489,12 @@ sell_stop_loss = user_upper + stop_buffer_val
 # ==========================================
 # 4. タブ描画
 # ==========================================
-tab_chart, tab_repeat, tab_ai = st.tabs(["📈 メインチャート", "📋 松井証券 リピート設定 & リスク管理", "🤖 AIモデル分析詳細"])
+tab_chart, tab_single, tab_repeat, tab_ai = st.tabs([
+    "📈 メインチャート", 
+    "⚡ 単発トレード (裁量アシスト)", 
+    "📋 松井証券 リピート設定 & リスク管理", 
+    "🤖 AIモデル分析詳細"
+])
 
 # --- タブ1: チャート ---
 with tab_chart:
@@ -510,7 +544,75 @@ with tab_chart:
 
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
 
-# --- タブ2: リピート設定 & リスク管理 ---
+# --- タブ2: 単発トレード (新規追加) ---
+with tab_single:
+    st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）発注アシスタント")
+    st.caption("AIシグナルやATR（ボラティリティ）を参考に、損切・利確レートと資金管理に沿った最適なロット数を自動計算します。")
+
+    sc1, sc2 = st.columns(2)
+    
+    # 売買方向の初期値をAIシグナルと連動
+    default_side_idx = 0 if "BUY" in status else (1 if "SELL" in status else 0)
+    
+    with sc1:
+        trade_side = st.radio("売買方向", ["BUY (買い)", "SELL (売り)"], index=default_side_idx, horizontal=True)
+        entry_price = st.number_input("エントリー想定レート", value=latest_price, format=price_fmt, step=0.01 if is_jpy else 0.0001)
+
+    with sc2:
+        sl_mode = st.radio("損切(SL)の決め方", ["ATRベース (推奨)", "固定 pips"], horizontal=True)
+        if sl_mode == "ATRベース (推奨)":
+            atr_multiplier = st.slider("ATR倍率 (1.0 = 現在のボラティリティ相当)", min_value=0.5, max_value=3.0, value=1.5, step=0.1)
+            sl_pips = round((latest_atr / pip_unit) * atr_multiplier, 1)
+            st.info(f"現在のATR: {latest_atr/pip_unit:.1f} pips ➔ 損切幅: **{sl_pips} pips**")
+        else:
+            sl_pips = st.number_input("損切幅 (pips)", min_value=1.0, value=15.0, step=1.0)
+
+    rr_value = st.slider("リスクリワード比 (RR)", min_value=0.5, max_value=4.0, value=float(st.session_state["rr_ratio"]), step=0.1)
+    tp_pips = round(sl_pips * rr_value, 1)
+
+    # TP/SL レート計算
+    is_buy = "BUY" in trade_side
+    sl_price = entry_price - (sl_pips * pip_unit) if is_buy else entry_price + (sl_pips * pip_unit)
+    tp_price = entry_price + (tp_pips * pip_unit) if is_buy else entry_price - (tp_pips * pip_unit)
+
+    # ポジションサイズ（資金管理）計算
+    account_bal = st.session_state["account_balance"]
+    risk_pct = st.session_state["risk_percent"]
+    max_risk_yen = account_bal * (risk_pct / 100.0)
+
+    # 1pipあたりの価値 (1万通貨あたり)
+    usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
+    pip_val_per_wan = 100.0 if is_jpy else (0.0001 * usd_rate * 10000.0)
+
+    # 推奨ロット数 (万通貨)
+    loss_per_wan = sl_pips * pip_val_per_wan
+    recommended_wan = (max_risk_yen / loss_per_wan) if loss_per_wan > 0 else 0.01
+    recommended_wan = max(0.01, round(recommended_wan, 2))  # 最低0.01万通貨
+
+    expected_profit_yen = tp_pips * pip_val_per_wan * recommended_wan
+    actual_loss_yen = sl_pips * pip_val_per_wan * recommended_wan
+
+    st.markdown("---")
+    st.markdown("##### 📊 計算結果 & 推奨発注パラメータ")
+
+    res_col1, res_col2, res_col3, res_col4 = st.columns(4)
+    res_col1.metric("推奨ロット数", f"{recommended_wan:.2f} 万通貨", f"許容リスク {risk_pct}%")
+    res_col2.metric("損切(SL) レート", price_fmt % sl_price, f"-{sl_pips} pips")
+    res_col3.metric("利確(TP) レート", price_fmt % tp_price, f"+{tp_pips} pips")
+    res_col4.metric("想定損益", f"+{int(expected_profit_yen):,}円", f"最大損失 -{int(actual_loss_yen):,}円")
+
+    st.markdown(f"""
+    <div class="param-box">
+    <b>【単発トレード 注文コピー用パラメータ】</b><br>
+    ・<b>通貨ペア</b>: <code>{selected_label.split(' ')[0]}</code> | <b>注文種別</b>: <code>{"買い (BUY)" if is_buy else "売り (SELL)"}</code><br>
+    ・<b>新規注文価格</b>: <code>{price_fmt % entry_price}</code><br>
+    ・<b>決済利確(TP)</b>: <code>{price_fmt % tp_price}</code> (+{tp_pips} pips)<br>
+    ・<b>決済損切(SL)</b>: <code>{price_fmt % sl_price}</code> (-{sl_pips} pips)<br>
+    ・<b>推奨発注数量</b>: <code>{recommended_wan:.2f} 万通貨</code> ({int(recommended_wan * 10000):,} 通貨)
+    </div>
+    """, unsafe_allow_html=True)
+
+# --- タブ3: リピート設定 & リスク管理 ---
 with tab_repeat:
     trap_width_pips = max(15, int(round((atr_4h / pip_unit))))
     half_range_pips = abs(user_upper - user_half) / pip_unit
@@ -560,7 +662,7 @@ with tab_repeat:
     else:
         st.success("🟢 資金管理チェック: 適切なリスク範囲内です。")
 
-# --- タブ3: AIモデル分析詳細 ---
+# --- タブ4: AIモデル分析詳細 ---
 with tab_ai:
     st.markdown("##### 🤖 AI予測モデル（Random Forest）の評価と内訳")
     
