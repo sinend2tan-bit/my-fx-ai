@@ -104,6 +104,24 @@ FEATURE_COLUMNS = [
     "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio", "Stoch_K"
 ]
 
+FEATURE_LABELS_JA = {
+    "Return_1": "直近1足変化率",
+    "Return_5": "直近5足変化率",
+    "Dev_SMA20": "SMA20乖離率",
+    "Dev_EMA200": "EMA200乖離率",
+    "Dev_EMA20_200": "EMA20/200乖離率",
+    "Vol_Ratio": "ボラティリティ比率",
+    "RSI": "RSI(14)",
+    "RSI_Diff": "RSI変化幅",
+    "MACD_Hist_Ratio": "MACDヒストグラム比",
+    "BB_PctB": "ボリンジャー%B",
+    "ADX": "ADX(トレンド強度)",
+    "ATR_Ratio": "ATR比率",
+    "Upper_Wick_Ratio": "上ヒゲ比率",
+    "Lower_Wick_Ratio": "下ヒゲ比率",
+    "Stoch_K": "ストキャスティクス%K"
+}
+
 PAIRS = {
     "米ドル / 円 (USD/JPY)": "USDJPY=X",
     "ポンド / 円 (GBP/JPY)": "GBPJPY=X",
@@ -169,7 +187,9 @@ def fetch_news_and_impact(symbol):
         for item in news_list[:10]:
             content = item.get("content", {}) if isinstance(item.get("content"), dict) else item
             title = content.get("title") or item.get("title", "No Title")
-            publisher = content.get("provider", {}).get("displayName") or item.get("publisher", "市場ニュース")
+            publisher = content.get("provider", {}).get("displayName") if isinstance(content.get("provider"), dict) else item.get("publisher", "市場ニュース")
+            if not publisher:
+                publisher = "市場ニュース"
             
             # リンク取得
             click_url = "#"
@@ -404,7 +424,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
             "wait": round(prob_wait * 100, 1)
         }
 
-        importances = pd.Series(model.feature_importances_, index=avail).sort_values(ascending=True)
+        # 日本語ラベル化した特徴量重要度
+        ja_index = [FEATURE_LABELS_JA.get(col, col) for col in avail]
+        importances = pd.Series(model.feature_importances_, index=ja_index).sort_values(ascending=True)
 
         htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
         htf_uptrend = True
@@ -571,19 +593,23 @@ if need_reset:
 
 current_range = st.session_state["ranges"][ticker]
 
-if "active_ticker" not in st.session_state or st.session_state["active_ticker"] != ticker:
-    st.session_state["active_ticker"] = ticker
-    st.session_state["in_lower"] = float(current_range["lower"])
-    st.session_state["in_upper"] = float(current_range["upper"])
+# 通貨ペア固有のキー名で初期化（競合バグ防止）
+key_lower = f"in_lower_{ticker}"
+key_upper = f"in_upper_{ticker}"
+
+if key_lower not in st.session_state:
+    st.session_state[key_lower] = float(current_range["lower"])
+if key_upper not in st.session_state:
+    st.session_state[key_upper] = float(current_range["upper"])
 
 # レンジ調整UI
 with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=False):
     rc1, rc2 = st.columns(2)
     
-    def update_range():
+    def update_range_callback():
         st.session_state["ranges"][ticker] = {
-            "lower": float(st.session_state["in_lower"]),
-            "upper": float(st.session_state["in_upper"])
+            "lower": float(st.session_state[key_lower]),
+            "upper": float(st.session_state[key_upper])
         }
         save_settings()
 
@@ -591,20 +617,20 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         "レンジ下限", 
         step=0.1 if is_jpy else 0.001, 
         format=price_fmt, 
-        key="in_lower", 
-        on_change=update_range
+        key=key_lower, 
+        on_change=update_range_callback
     )
     in_upper = rc2.number_input(
         "レンジ上限", 
         step=0.1 if is_jpy else 0.001, 
         format=price_fmt, 
-        key="in_upper", 
-        on_change=update_range
+        key=key_upper, 
+        on_change=update_range_callback
     )
     
     if st.button("✨ 4時間足高値・安値からレンジを自動計算"):
-        st.session_state["in_lower"] = float(swing_low_4h)
-        st.session_state["in_upper"] = float(swing_high_4h)
+        st.session_state[key_lower] = float(swing_low_4h)
+        st.session_state[key_upper] = float(swing_high_4h)
         st.session_state["ranges"][ticker] = {
             "lower": float(swing_low_4h),
             "upper": float(swing_high_4h)
@@ -691,14 +717,21 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
+    # 修正点: レンジラインも含めたY軸の適切なスケール自動調整（ライン見切れバグ防止）
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
-    price_span = chart_high - chart_low
+    
+    # 描画対象の全ラインを考慮して上下限を決定
+    all_y_values = [chart_high, chart_low, user_lower, user_upper, buy_stop_loss, sell_stop_loss]
+    y_min_val = min(all_y_values)
+    y_max_val = max(all_y_values)
+    
+    price_span = y_max_val - y_min_val
     if price_span <= 0:
         price_span = chart_high * 0.002
     
-    y_min_fit = chart_low - (price_span * 0.08)
-    y_max_fit = chart_high + (price_span * 0.08)
+    y_min_fit = y_min_val - (price_span * 0.05)
+    y_max_fit = y_max_val + (price_span * 0.05)
 
     fig.update_layout(
         xaxis_rangeslider_visible=False,
@@ -786,7 +819,7 @@ with tab_single:
     </div>
     """, unsafe_allow_html=True)
     
-    # 改善: 安全にSession Stateを書き換えてフォームに反映
+    # 修正点: AIの提案値を手動フォームの各キーへ同期反映
     if st.button("🤖 AIの提案値を手動設定に反映"):
         st.session_state[f"side_{ticker}"] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
         st.session_state[f"entry_{ticker}"] = float(ai_entry)
@@ -801,7 +834,7 @@ with tab_single:
 
     sc1, sc2 = st.columns(2)
     
-    # Stateの初期化ガード
+    # 通貨ペア固有のキー初期化
     if f"side_{ticker}" not in st.session_state:
         st.session_state[f"side_{ticker}"] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
     if f"entry_{ticker}" not in st.session_state:
@@ -842,7 +875,7 @@ with tab_single:
     res_col3.metric("利確(TP) レート", price_fmt % tp_price, f"+{tp_pips} pips")
     res_col4.metric("想定損益", f"+{int(expected_profit_yen):,}円", f"最大損失 -{int(actual_loss_yen):,}円")
 
-# --- タブ3: 📰 経済指標＆為替ニュースAI予測 (新設機能) ---
+# --- タブ3: 📰 経済指標＆為替ニュースAI予測 ---
 with tab_news:
     st.markdown("##### 📰 リアルタイム為替ニュース & AI事前影響予測")
     st.caption("海外市場の最新ニュースをリアルタイム取得し、市場への影響度や値動きの方向性をAIが事前予測します。")
@@ -970,7 +1003,7 @@ with tab_ai:
             marker_color='#38bdf8'
         ))
         fig_imp.update_layout(
-            height=320,
+            height=340,
             margin=dict(l=10, r=20, t=10, b=30),
             template="plotly_dark",
             xaxis_title="重要度スコア",
