@@ -187,10 +187,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         o = clean_series(df["Open"])
 
         new_cols = {}
-        new_cols["SMA_20"] = c.rolling(20).mean()
-        new_cols["EMA_200"] = c.ewm(span=200, adjust=False).mean()
+        new_cols["SMA_20"] = c.rolling(20, min_periods=1).mean()
+        new_cols["EMA_200"] = c.ewm(span=min(200, len(c)), adjust=False).mean()
         hl = h - l
-        new_cols["ATR"] = hl.rolling(14).mean()
+        new_cols["ATR"] = hl.rolling(14, min_periods=1).mean()
         
         new_cols["Return_1"] = c.diff(1) / (c.shift(1) + 1e-10)
         new_cols["Return_5"] = c.diff(5) / (c.shift(5) + 1e-10)
@@ -203,12 +203,15 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         rs = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean() / ((-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean() + 1e-10)
         new_cols["RSI"] = 100 - (100 / (1 + rs))
         new_cols["RSI_Diff"] = new_cols["RSI"].diff(1)
-        new_cols["Stoch_K"] = 100 * (c - l.rolling(14).min()) / ((h.rolling(14).max() - l.rolling(14).min()) + 1e-10)
+        
+        l14 = l.rolling(14, min_periods=1).min()
+        h14 = h.rolling(14, min_periods=1).max()
+        new_cols["Stoch_K"] = 100 * (c - l14) / ((h14 - l14) + 1e-10)
 
         macd = c.ewm(span=12, adjust=False).mean() - c.ewm(span=26, adjust=False).mean()
         new_cols["MACD_Hist_Ratio"] = (macd - macd.ewm(span=9, adjust=False).mean()) / (c + 1e-10)
 
-        std20 = c.rolling(20).std()
+        std20 = c.rolling(20, min_periods=1).std().fillna(0)
         new_cols["Upper_Band"] = new_cols["SMA_20"] + (std20 * 2)
         new_cols["Lower_Band"] = new_cols["SMA_20"] - (std20 * 2)
         new_cols["BB_PctB"] = (c - new_cols["Lower_Band"]) / ((new_cols["Upper_Band"] - new_cols["Lower_Band"]) + 1e-10)
@@ -244,21 +247,24 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         target_series[valid_future & ~cond_buy_only & ~cond_sell_only] = 0
         df["Target"] = target_series
         
-        return df.dropna(subset=[col for col in df.columns if col != "Target"])
+        # 特徴量に必要な列のみドロップ（Targetの末尾NaNは学習時の除外に利用）
+        feat_cols = [c for c in FEATURE_COLUMNS if c in df.columns]
+        return df.dropna(subset=feat_cols)
     except Exception: 
         return None
 
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
     empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
-    if df_current is None or len(df_current) < 200:
+    if df_current is None or len(df_current) < 150:
         return empty_res
 
     try:
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
         df_valid = df_current.dropna(subset=["Target"])
-        test_size = 100
-        min_required = test_size + 50
+        test_size = 80
+        gap = LOOKAHEAD_BARS  # リーク防止用ギャップ
+        min_required = test_size + gap + 40
         
         if len(df_valid) < min_required:
             return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
@@ -266,8 +272,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
         X = df_valid[avail].fillna(0)
         y = df_valid["Target"]
         
-        X_train = X.iloc[:-test_size]
-        y_train = y.iloc[:-test_size]
+        # 時系列分割（未来漏洩を遮断するgapを設定）
+        X_train = X.iloc[: -(test_size + gap)]
+        y_train = y.iloc[: -(test_size + gap)]
         X_test = X.iloc[-test_size:]
         y_test = y.iloc[-test_size:]
 
@@ -309,9 +316,11 @@ def analyze_signal_with_backtest(df_current, df_htf):
         else:
             htf_uptrend = htf_close > float(clean_series(df_htf["SMA_20"]).iloc[-1])
 
-        if prob_up >= 0.70 and htf_uptrend:
+        # 実用的な確率閾値（50%以上＋方向の一致＋日足トレンド合致）に調整
+        threshold = 0.50
+        if prob_up >= threshold and prob_up > prob_down and htf_uptrend:
             status = "BUY (買い)"
-        elif prob_down >= 0.70 and not htf_uptrend:
+        elif prob_down >= threshold and prob_down > prob_up and not htf_uptrend:
             status = "SELL (売り)"
         else:
             status = "WAIT (様子見)"
@@ -328,16 +337,8 @@ def analyze_signal_with_backtest(df_current, df_htf):
 # ==========================================
 col_sel1, col_sel2 = st.columns(2)
 
-def on_pair_change():
-    """通貨ペア変更時の安全なSession State更新"""
-    new_label = st.session_state["selected_pair_label"]
-    new_ticker = PAIRS[new_label]
-    if new_ticker in st.session_state.get("ranges", {}):
-        st.session_state["in_lower"] = float(st.session_state["ranges"][new_ticker]["lower"])
-        st.session_state["in_upper"] = float(st.session_state["ranges"][new_ticker]["upper"])
-
 with col_sel1:
-    selected_label = st.selectbox("通貨ペア", list(PAIRS.keys()), key="selected_pair_label", on_change=on_pair_change)
+    selected_label = st.selectbox("通貨ペア", list(PAIRS.keys()), key="selected_pair_label")
 with col_sel2:
     tf_label = st.selectbox("時間足", list(TIMEFRAMES.keys()), key="selected_tf_label")
 
@@ -437,13 +438,13 @@ m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 st.markdown("---")
 
 # ==========================================
-# 3. 通貨ペア毎のレンジ管理 & 設定保存ロジック
+# 3. 通貨ペア毎のレンジ管理 & 安全な同期ロジック
 # ==========================================
 swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
-# 通貨ペア毎のレンジ初期化
+# 選択ペアのレンジ初期化
 if ticker not in st.session_state["ranges"]:
     st.session_state["ranges"][ticker] = {
         "lower": swing_low_4h,
@@ -451,10 +452,13 @@ if ticker not in st.session_state["ranges"]:
     }
     save_settings()
 
-if "in_lower" not in st.session_state or ticker not in st.session_state["ranges"]:
-    st.session_state["in_lower"] = float(st.session_state["ranges"][ticker]["lower"])
-if "in_upper" not in st.session_state or ticker not in st.session_state["ranges"]:
-    st.session_state["in_upper"] = float(st.session_state["ranges"][ticker]["upper"])
+current_range = st.session_state["ranges"][ticker]
+
+# Session State の数値入力フォーム用値をペアに合わせて更新
+if "active_ticker" not in st.session_state or st.session_state["active_ticker"] != ticker:
+    st.session_state["active_ticker"] = ticker
+    st.session_state["in_lower"] = float(current_range["lower"])
+    st.session_state["in_upper"] = float(current_range["upper"])
 
 # レンジ調整UI
 with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=False):
@@ -467,8 +471,20 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         }
         save_settings()
 
-    in_lower = rc1.number_input("レンジ下限", step=0.1 if is_jpy else 0.001, format=price_fmt, key="in_lower", on_change=update_range)
-    in_upper = rc2.number_input("レンジ上限", step=0.1 if is_jpy else 0.001, format=price_fmt, key="in_upper", on_change=update_range)
+    in_lower = rc1.number_input(
+        "レンジ下限", 
+        step=0.1 if is_jpy else 0.001, 
+        format=price_fmt, 
+        key="in_lower", 
+        on_change=update_range
+    )
+    in_upper = rc2.number_input(
+        "レンジ上限", 
+        step=0.1 if is_jpy else 0.001, 
+        format=price_fmt, 
+        key="in_upper", 
+        on_change=update_range
+    )
     
     if st.button("✨ 4時間足高値・安値からレンジを自動計算"):
         st.session_state["in_lower"] = float(swing_low_4h)
@@ -551,7 +567,6 @@ with tab_single:
     st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）AI発注アシスタント")
     st.caption("AIが現在の相場・ボラティリティ・口座資金を統合解析し、最適シグナルと注文数値をリアルタイムで自動計算します。")
 
-    # 1. AIロジックによる推奨値の自動算出
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_val_per_wan = 100.0 if is_jpy else (0.0001 * usd_rate * 10000.0)
 
@@ -559,20 +574,17 @@ with tab_single:
     risk_pct = st.session_state["risk_percent"]
     max_risk_yen = account_bal * (risk_pct / 100.0)
 
-    # AI判定に基づく方向と基本ボラティリティ幅
     ai_is_buy = "BUY" in status
     ai_is_sell = "SELL" in status
     
-    # 方向のデフォルト文字列
     if ai_is_buy:
         ai_direction = "BUY (買い)"
     elif ai_is_sell:
         ai_direction = "SELL (売り)"
     else:
-        # WAITの場合はAI確率が高い方を暫定設定しつつ警告を表示
         ai_direction = "BUY (買い)" if prob_dict["buy"] >= prob_dict["sell"] else "SELL (売り)"
 
-    ai_sl_pips = round((latest_atr / pip_unit) * 1.5, 1)  # ATR×1.5倍をAI推奨SLとする
+    ai_sl_pips = round((latest_atr / pip_unit) * 1.5, 1)
     ai_rr_ratio = float(st.session_state["rr_ratio"])
     ai_tp_pips = round(ai_sl_pips * ai_rr_ratio, 1)
 
@@ -587,12 +599,11 @@ with tab_single:
     ai_profit_yen = ai_tp_pips * pip_val_per_wan * ai_rec_wan
     ai_loss_yen = ai_sl_pips * pip_val_per_wan * ai_rec_wan
 
-    # 2. AI推奨プランカードの表示
     st.markdown('<div class="ai-card">', unsafe_allow_html=True)
     st.markdown("#### 🤖 AI提案トレードプラン")
     
     if "WAIT" in status:
-        st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。** 明確なトレンドがでるまで見送りを推奨しますが、仮にトレードする場合の数値を下部に提示しています。")
+        st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。** 明確なトレンドが出るまで見送りを推奨しますが、仮にトレードする場合の数値を下部に提示しています。")
     else:
         st.success(f"🎯 **AI判定: 【{status}】（確信度: {conf:.1f}% / 勝率目安: {win_rate:.1f}%）**")
 
@@ -619,28 +630,25 @@ with tab_single:
     st.markdown("##### 🛠️ 注文条件の手動微調整")
     st.caption("AIの算出結果をベースに、エントリー価格や損切幅・リスクリワード比を自由に変更できます。")
 
-    # 手動調整用フォーム
     sc1, sc2 = st.columns(2)
-    
     default_side_idx = 0 if "BUY" in ai_direction else 1
     
     with sc1:
-        trade_side = st.radio("売買方向", ["BUY (買い)", "SELL (売り)"], index=default_side_idx, horizontal=True)
-        entry_price = st.number_input("エントリー想定レート", value=latest_price, format=price_fmt, step=0.01 if is_jpy else 0.0001)
+        trade_side = st.radio("売買方向", ["BUY (買い)", "SELL (売り)"], index=default_side_idx, horizontal=True, key=f"side_{ticker}")
+        entry_price = st.number_input("エントリー想定レート", value=latest_price, format=price_fmt, step=0.01 if is_jpy else 0.0001, key=f"entry_{ticker}")
 
     with sc2:
-        sl_mode = st.radio("損切(SL)の決め方", ["ATRベース (推奨)", "固定 pips"], horizontal=True)
+        sl_mode = st.radio("損切(SL)の決め方", ["ATRベース (推奨)", "固定 pips"], horizontal=True, key=f"slmode_{ticker}")
         if sl_mode == "ATRベース (推奨)":
-            atr_multiplier = st.slider("ATR倍率 (1.0 = 現在のボラティリティ相当)", min_value=0.5, max_value=3.0, value=1.5, step=0.1)
+            atr_multiplier = st.slider("ATR倍率 (1.0 = 現在のボラティリティ相当)", min_value=0.5, max_value=3.0, value=1.5, step=0.1, key=f"atrmul_{ticker}")
             sl_pips = round((latest_atr / pip_unit) * atr_multiplier, 1)
             st.info(f"現在のATR: {latest_atr/pip_unit:.1f} pips ➔ 損切幅: **{sl_pips} pips**")
         else:
-            sl_pips = st.number_input("損切幅 (pips)", min_value=1.0, value=15.0, step=1.0)
+            sl_pips = st.number_input("損切幅 (pips)", min_value=1.0, value=15.0, step=1.0, key=f"slpips_{ticker}")
 
-    rr_value = st.slider("リスクリワード比 (RR)", min_value=0.5, max_value=4.0, value=float(st.session_state["rr_ratio"]), step=0.1)
+    rr_value = st.slider("リスクリワード比 (RR)", min_value=0.5, max_value=4.0, value=float(st.session_state["rr_ratio"]), step=0.1, key=f"rr_{ticker}")
     tp_pips = round(sl_pips * rr_value, 1)
 
-    # 手動調整値による再計算
     is_buy = "BUY" in trade_side
     sl_price = entry_price - (sl_pips * pip_unit) if is_buy else entry_price + (sl_pips * pip_unit)
     tp_price = entry_price + (tp_pips * pip_unit) if is_buy else entry_price - (tp_pips * pip_unit)
@@ -730,8 +738,8 @@ with tab_ai:
 
     with pcol2:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
-        st.metric("直近テスト100足の方向勝率", f"{win_rate:.1f}%")
-        st.caption("※ 先読みデータ（Lookahead Leak）を排除した厳格なバックテスト精度です。70%以上の確率スコアと日足トレンドが一致した場合のみ推奨シグナルが発動します。")
+        st.metric("直近テスト80足の方向勝率", f"{win_rate:.1f}%")
+        st.caption("※ 先読みデータ（Lookahead Leak）を防止するためのGap（ギャップ）を設定した厳格な時系列検証精度です。")
 
     if feature_importances is not None:
         st.markdown("---")
