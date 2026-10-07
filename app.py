@@ -82,7 +82,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Session State の初期化 (ファイルから復元)
+# Session State の初期化
 if "account_balance" not in st.session_state:
     st.session_state["account_balance"] = saved_config.get("account_balance", 500000)
 if "quantity_wan" not in st.session_state:
@@ -263,7 +263,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
         df_valid = df_current.dropna(subset=["Target"])
         test_size = 80
-        gap = LOOKAHEAD_BARS  # リーク防止用ギャップ
+        gap = LOOKAHEAD_BARS
         min_required = test_size + gap + 40
         
         if len(df_valid) < min_required:
@@ -272,7 +272,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         X = df_valid[avail].fillna(0)
         y = df_valid["Target"]
         
-        # 時系列分割
         X_train = X.iloc[: -(test_size + gap)]
         y_train = y.iloc[: -(test_size + gap)]
         X_test = X.iloc[-test_size:]
@@ -291,7 +290,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         latest_X = df_current[avail].iloc[[-1]].fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         
-        # 型の違い（int/float）による辞書検索ミスを防ぐため float 化してマッピング
         class_prob_map = {float(k): v for k, v in zip(model.classes_, prob_array)}
         
         prob_up = float(class_prob_map.get(1.0, 0.0))
@@ -516,14 +514,20 @@ tab_chart, tab_single, tab_repeat, tab_ai = st.tabs([
     "🤖 AIモデル分析詳細"
 ])
 
-# --- タブ1: チャート ---
+# --- タブ1: メインチャート（Y軸自動フィット修正版） ---
 with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(120))
     fmt_str = '%Y-%m-%d' if '日足' in tf_label else '%m-%d %H:%M'
     x_labels = df_chart.index.strftime(fmt_str)
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.03)
+    fig = make_subplots(
+        rows=2, cols=1, 
+        shared_xaxes=True, 
+        row_heights=[0.75, 0.25], 
+        vertical_spacing=0.05
+    )
 
+    # 1. ローソク足描画
     fig.add_trace(go.Candlestick(
         x=x_labels,
         open=clean_series(df_chart["Open"]),
@@ -535,32 +539,75 @@ with tab_chart:
         name="価格"
     ), row=1, col=1)
 
+    # 2. 移動平均線（SMA20 & EMA200）の追加
+    if "SMA_20" in df_chart.columns:
+        fig.add_trace(go.Scatter(
+            x=x_labels, y=clean_series(df_chart["SMA_20"]),
+            line=dict(color="#f59e0b", width=1.2), name="SMA20"
+        ), row=1, col=1)
+
     if "EMA_200" in df_chart.columns:
-        fig.add_trace(go.Scatter(x=x_labels, y=clean_series(df_chart["EMA_200"]), line=dict(color="#38bdf8", width=1.5), name="EMA200"), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=x_labels, y=clean_series(df_chart["EMA_200"]),
+            line=dict(color="#38bdf8", width=1.8), name="EMA200"
+        ), row=1, col=1)
 
-    fig.add_hrect(y0=user_lower, y1=user_upper, fillcolor="rgba(56, 189, 248, 0.05)", line_width=0, row=1, col=1)
-    fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#b91c1c", annotation_text="売 運用停止", row=1, col=1)
-    fig.add_hline(y=user_upper, line_dash="dash", line_color="#ef4444", annotation_text="リピート上限", row=1, col=1)
-    fig.add_hline(y=user_half, line_dash="dot", line_color="#a855f7", annotation_text="ハーフライン", row=1, col=1)
-    fig.add_hline(y=user_lower, line_dash="dash", line_color="#22c55e", annotation_text="リピート下限", row=1, col=1)
-    fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#15803d", annotation_text="買 運用停止", row=1, col=1)
+    # 3. リピート範囲・運用停止ラインの描画
+    fig.add_hrect(
+        y0=user_lower, y1=user_upper, 
+        fillcolor="rgba(56, 189, 248, 0.06)", line_width=0, 
+        row=1, col=1
+    )
+    
+    # チャート範囲内または近い場合のみ視覚補助線を明確化
+    fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#dc2626", annotation_text="売 SL", annotation_position="top right", row=1, col=1)
+    fig.add_hline(y=user_upper, line_dash="dash", line_color="#f87171", annotation_text="上限", annotation_position="bottom right", row=1, col=1)
+    fig.add_hline(y=user_half, line_dash="dot", line_color="#c084fc", annotation_text="中央", annotation_position="top right", row=1, col=1)
+    fig.add_hline(y=user_lower, line_dash="dash", line_color="#4ade80", annotation_text="下限", annotation_position="top right", row=1, col=1)
+    fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#16a34a", annotation_text="買 SL", annotation_position="bottom right", row=1, col=1)
 
+    # 4. RSI (サブチャート)
     if "RSI" in df_chart.columns:
-        fig.add_trace(go.Scatter(x=x_labels, y=clean_series(df_chart["RSI"]), line=dict(color="#a855f7", width=1.5), name="RSI"), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dot", line_color="gray", row=2, col=1)
-        fig.add_hline(y=30, line_dash="dot", line_color="gray", row=2, col=1)
+        fig.add_trace(go.Scatter(
+            x=x_labels, y=clean_series(df_chart["RSI"]),
+            line=dict(color="#a855f7", width=1.5), name="RSI"
+        ), row=2, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
+
+    # 5. Y軸可視化範囲の決定（ローソク足が潰れないよう動的に最適なズーム範囲を算出）
+    chart_high = float(clean_series(df_chart["High"]).max())
+    chart_low = float(clean_series(df_chart["Low"]).min())
+    price_span = chart_high - chart_low
+    if price_span <= 0:
+        price_span = chart_high * 0.002
+    
+    # 上下に8%ずつのマージンを持たせてフィットさせる
+    y_min_fit = chart_low - (price_span * 0.08)
+    y_max_fit = chart_high + (price_span * 0.08)
 
     fig.update_layout(
         xaxis_rangeslider_visible=False,
-        height=560,
-        margin=dict(l=10, r=70, t=10, b=10),
+        height=600,
+        margin=dict(l=10, r=80, t=20, b=10),
         template="plotly_dark",
         hovermode="x unified",
-        dragmode="pan",
-        showlegend=False
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
-    fig.update_xaxes(type='category', nticks=10, tickangle=-30, showspikes=True)
-    fig.update_yaxes(side="right")
+    
+    # カテゴリ軸で土日の空白を詰めつつ表示を改善
+    fig.update_xaxes(type='category', nticks=12, tickangle=-30, showspikes=True)
+    
+    # Y軸を現在値を中心にフィットさせ潰れを防止
+    fig.update_yaxes(
+        range=[y_min_fit, y_max_fit],
+        fixedrange=False,
+        side="right",
+        tickformat=".3f" if is_jpy else ".5f",
+        row=1, col=1
+    )
+    fig.update_yaxes(range=[0, 100], side="right", row=2, col=1)
 
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
 
