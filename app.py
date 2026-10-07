@@ -438,23 +438,42 @@ m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 st.markdown("---")
 
 # ==========================================
-# 3. 通貨ペア毎のレンジ管理 & 安全な同期ロジック
+# 3. 通貨ペア毎のレンジ管理 & 安全な自動補正ロジック
 # ==========================================
 swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
-# 選択ペアのレンジ初期化
+# --- レンジ値の健康性バリデーション（異常値検知と自動リセット） ---
+def is_valid_range(r_low, r_up, current_p):
+    """レンジ範囲が有効かチェック（0以下や現在値から極端に外れているものを検知）"""
+    if r_low <= 0 or r_up <= 0 or r_low >= r_up:
+        return False
+    # レンジが現在価格の50%未満または150%以上離れている場合は異常値とみなす
+    if r_low < current_p * 0.5 or r_up > current_p * 1.5:
+        return False
+    return True
+
+# 選択ペアのレンジ初期化/異常補正
+need_reset = False
 if ticker not in st.session_state["ranges"]:
+    need_reset = True
+else:
+    existing_low = float(st.session_state["ranges"][ticker].get("lower", 0))
+    existing_up = float(st.session_state["ranges"][ticker].get("upper", 0))
+    if not is_valid_range(existing_low, existing_up, latest_price):
+        need_reset = True
+
+if need_reset:
     st.session_state["ranges"][ticker] = {
-        "lower": swing_low_4h,
-        "upper": swing_high_4h
+        "lower": float(swing_low_4h),
+        "upper": float(swing_high_4h)
     }
     save_settings()
 
 current_range = st.session_state["ranges"][ticker]
 
-# Session State の数値入力フォーム用値をペアに合わせて更新
+# Session State の数値入力フォーム用値をペアに合わせて同期
 if "active_ticker" not in st.session_state or st.session_state["active_ticker"] != ticker:
     st.session_state["active_ticker"] = ticker
     st.session_state["in_lower"] = float(current_range["lower"])
@@ -514,7 +533,7 @@ tab_chart, tab_single, tab_repeat, tab_ai = st.tabs([
     "🤖 AIモデル分析詳細"
 ])
 
-# --- タブ1: メインチャート（Y軸自動フィット修正版） ---
+# --- タブ1: メインチャート ---
 with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(120))
     fmt_str = '%Y-%m-%d' if '日足' in tf_label else '%m-%d %H:%M'
@@ -559,7 +578,6 @@ with tab_chart:
         row=1, col=1
     )
     
-    # チャート範囲内または近い場合のみ視覚補助線を明確化
     fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#dc2626", annotation_text="売 SL", annotation_position="top right", row=1, col=1)
     fig.add_hline(y=user_upper, line_dash="dash", line_color="#f87171", annotation_text="上限", annotation_position="bottom right", row=1, col=1)
     fig.add_hline(y=user_half, line_dash="dot", line_color="#c084fc", annotation_text="中央", annotation_position="top right", row=1, col=1)
@@ -575,14 +593,13 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
-    # 5. Y軸可視化範囲の決定（ローソク足が潰れないよう動的に最適なズーム範囲を算出）
+    # 5. Y軸可視化範囲の決定（チャート潰れ防止のため現在価格レンジ基準で計算）
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     price_span = chart_high - chart_low
     if price_span <= 0:
         price_span = chart_high * 0.002
     
-    # 上下に8%ずつのマージンを持たせてフィットさせる
     y_min_fit = chart_low - (price_span * 0.08)
     y_max_fit = chart_high + (price_span * 0.08)
 
@@ -596,10 +613,8 @@ with tab_chart:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     
-    # カテゴリ軸で土日の空白を詰めつつ表示を改善
     fig.update_xaxes(type='category', nticks=12, tickangle=-30, showspikes=True)
     
-    # Y軸を現在値を中心にフィットさせ潰れを防止
     fig.update_yaxes(
         range=[y_min_fit, y_max_fit],
         fixedrange=False,
@@ -666,7 +681,7 @@ with tab_single:
     st.markdown(f"""
     <div class="param-box">
     <b>【AI自動提示 注文コピー用パラメータ】</b><br>
-    ・<b>通貨ペア</b>: <code>{selected_label.split(' ')[0]}</code> | <b>売買方向</b>: <code>{"買い (BUY)" if "BUY" in ai_direction else "売り (SELL)"}</code><br>
+    ・<b>通貨ペア</b>: <code>{selected_label}</code> | <b>売買方向</b>: <code>{"買い (BUY)" if "BUY" in ai_direction else "売り (SELL)"}</code><br>
     ・<b>新規成行価格</b>: <code>{price_fmt % ai_entry}</code><br>
     ・<b>決済利確(TP)</b>: <code>{price_fmt % ai_tp_price}</code> (+{ai_tp_pips} pips / ＋{int(ai_profit_yen):,}円)<br>
     ・<b>決済損切(SL)</b>: <code>{price_fmt % ai_sl_price}</code> (-{ai_sl_pips} pips / －{int(ai_loss_yen):,}円)<br>
@@ -747,7 +762,7 @@ with tab_repeat:
     
     st.caption("▼ 松井証券の自動売買設定画面へそのままコピー＆ペーストしてご使用ください")
     st.code(f"""[松井証券リピート注文 設定値]
-通貨ペア: {selected_label.split(' ')[0]}
+通貨ペア: {selected_label}
 注文種別: ハーフ＆ハーフ
 買いレンジ: {price_fmt % user_lower} - {price_fmt % user_half} (SL: {price_fmt % buy_stop_loss})
 売りレンジ: {price_fmt % user_half} - {price_fmt % user_upper} (SL: {price_fmt % sell_stop_loss})
