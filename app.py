@@ -14,6 +14,7 @@ from sklearn.ensemble import RandomForestClassifier
 # Streamlitのページ設定（必ず最初のStreamlitコマンドとして実行）
 st.set_page_config(
     page_title="Pro FX Analyzer & Signal",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -201,7 +202,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["Vol_Ratio"] = new_cols["ATR"] / (c + 1e-10)
 
         delta = c.diff()
-        rs = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean() / ((-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean() + 1e-10)
+        gain = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean()
+        rs = gain / (loss + 1e-10)
         new_cols["RSI"] = 100 - (100 / (1 + rs))
         new_cols["RSI_Diff"] = new_cols["RSI"].diff(1)
         
@@ -219,9 +222,19 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         
         tr = pd.concat([hl, (h - c.shift(1)).abs(), (l - c.shift(1)).abs()], axis=1).max(axis=1)
         up, down = h - h.shift(1), l.shift(1) - l
-        plus_di = 100 * pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=df.index).ewm(alpha=1/14, adjust=False).mean() / (tr.ewm(alpha=1/14, adjust=False).mean() + 1e-10)
-        minus_di = 100 * pd.Series(np.where((down > up) & (down > 0), down, 0.0), index=df.index).ewm(alpha=1/14, adjust=False).mean() / (tr.ewm(alpha=1/14, adjust=False).mean() + 1e-10)
-        new_cols["ADX"] = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-10)).ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
+        
+        up_cond = (up > down) & (up > 0)
+        down_cond = (down > up) & (down > 0)
+        
+        plus_di_raw = pd.Series(np.where(up_cond, up, 0.0), index=df.index)
+        minus_di_raw = pd.Series(np.where(down_cond, down, 0.0), index=df.index)
+        
+        tr_smooth = tr.ewm(alpha=1/14, adjust=False).mean() + 1e-10
+        plus_di = 100 * plus_di_raw.ewm(alpha=1/14, adjust=False).mean() / tr_smooth
+        minus_di = 100 * minus_di_raw.ewm(alpha=1/14, adjust=False).mean() / tr_smooth
+        
+        di_sum = (plus_di + minus_di).replace(0, 1e-10)
+        new_cols["ADX"] = (100 * (plus_di - minus_di).abs() / di_sum).ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
 
         total_range = hl + 1e-10
         open_close_max = pd.concat([o, c], axis=1).max(axis=1)
@@ -335,6 +348,8 @@ def analyze_signal_with_backtest(df_current, df_htf):
 # ==========================================
 # 2. UI構築 & 状態永続化連動
 # ==========================================
+st.title("Pro FX Analyzer & Signal Pro")
+
 col_sel1, col_sel2 = st.columns(2)
 
 with col_sel1:
@@ -392,6 +407,8 @@ if HAS_AUTOREFRESH:
     st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh", on_change=save_settings)
     if st.session_state["auto_refresh"]:
         st_autorefresh(interval=60000, key="datarefresh")
+else:
+    st.sidebar.caption("💡 `pip install streamlit-autorefresh` で自動更新が有効になります")
 
 if st.sidebar.button("💾 設定を即時手動保存"):
     save_settings()
@@ -444,17 +461,14 @@ swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
-# --- レンジ値の健康性バリデーション（異常値検知と自動リセット） ---
 def is_valid_range(r_low, r_up, current_p):
-    """レンジ範囲が有効かチェック（0以下や現在値から極端に外れているものを検知）"""
+    """レンジ範囲が有効かチェック"""
     if r_low <= 0 or r_up <= 0 or r_low >= r_up:
         return False
-    # レンジが現在価格の50%未満または150%以上離れている場合は異常値とみなす
     if r_low < current_p * 0.5 or r_up > current_p * 1.5:
         return False
     return True
 
-# 選択ペアのレンジ初期化/異常補正
 need_reset = False
 if ticker not in st.session_state["ranges"]:
     need_reset = True
@@ -473,7 +487,7 @@ if need_reset:
 
 current_range = st.session_state["ranges"][ticker]
 
-# Session State の数値入力フォーム用値をペアに合わせて同期
+# Session State の同期（安全処理）
 if "active_ticker" not in st.session_state or st.session_state["active_ticker"] != ticker:
     st.session_state["active_ticker"] = ticker
     st.session_state["in_lower"] = float(current_range["lower"])
@@ -505,10 +519,15 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         on_change=update_range
     )
     
+    # 修正: ボタン押下時にStateを直接修正し、安全に同期してリロード
     if st.button("✨ 4時間足高値・安値からレンジを自動計算"):
-        st.session_state["in_lower"] = float(swing_low_4h)
-        st.session_state["in_upper"] = float(swing_high_4h)
-        update_range()
+        st.session_state["ranges"][ticker] = {
+            "lower": float(swing_low_4h),
+            "upper": float(swing_high_4h)
+        }
+        if "active_ticker" in st.session_state:
+            del st.session_state["active_ticker"]
+        save_settings()
         st.rerun()
 
     user_lower = min(in_lower, in_upper)
@@ -558,7 +577,7 @@ with tab_chart:
         name="価格"
     ), row=1, col=1)
 
-    # 2. 移動平均線（SMA20 & EMA200）の追加
+    # 2. 移動平均線
     if "SMA_20" in df_chart.columns:
         fig.add_trace(go.Scatter(
             x=x_labels, y=clean_series(df_chart["SMA_20"]),
@@ -593,7 +612,7 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
-    # 5. Y軸可視化範囲の決定（チャート潰れ防止のため現在価格レンジ基準で計算）
+    # 5. Y軸可視化範囲決定
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     price_span = chart_high - chart_low
@@ -688,6 +707,14 @@ with tab_single:
     ・<b>推奨発注数量</b>: <code>{ai_rec_wan:.2f} 万通貨</code> ({int(ai_rec_wan * 10000):,} 通貨)
     </div>
     """, unsafe_allow_html=True)
+    
+    # 改善機能: AI提案をフォームへワンクリック反映
+    if st.button("🤖 AIの提案値を手動設定に反映"):
+        st.session_state[f"side_{ticker}"] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
+        st.session_state[f"entry_{ticker}"] = float(ai_entry)
+        st.session_state[f"slpips_{ticker}"] = float(ai_sl_pips)
+        st.rerun()
+
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
