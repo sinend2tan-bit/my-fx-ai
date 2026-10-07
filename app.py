@@ -11,6 +11,13 @@ import yfinance as yf
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 
+# Streamlitのページ設定（必ず最初のStreamlitコマンドとして実行）
+st.set_page_config(
+    page_title="Pro FX Analyzer & Signal",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
 try:
     from streamlit_autorefresh import st_autorefresh
     HAS_AUTOREFRESH = True
@@ -57,12 +64,6 @@ def save_settings():
 
 # 初期設定のロード
 saved_config = load_settings()
-
-st.set_page_config(
-    page_title="Pro FX Analyzer & Signal",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
 
 st.markdown("""
 <style>
@@ -242,12 +243,11 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         target_series = pd.Series(np.nan, index=df.index)
         valid_future = f_high.notna() & f_low.notna()
         
-        target_series[valid_future & cond_buy_only] = 1
-        target_series[valid_future & cond_sell_only] = -1
-        target_series[valid_future & ~cond_buy_only & ~cond_sell_only] = 0
+        target_series[valid_future & cond_buy_only] = 1.0
+        target_series[valid_future & cond_sell_only] = -1.0
+        target_series[valid_future & ~cond_buy_only & ~cond_sell_only] = 0.0
         df["Target"] = target_series
         
-        # 特徴量に必要な列のみドロップ（Targetの末尾NaNは学習時の除外に利用）
         feat_cols = [c for c in FEATURE_COLUMNS if c in df.columns]
         return df.dropna(subset=feat_cols)
     except Exception: 
@@ -272,7 +272,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         X = df_valid[avail].fillna(0)
         y = df_valid["Target"]
         
-        # 時系列分割（未来漏洩を遮断するgapを設定）
+        # 時系列分割
         X_train = X.iloc[: -(test_size + gap)]
         y_train = y.iloc[: -(test_size + gap)]
         X_test = X.iloc[-test_size:]
@@ -290,7 +290,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
 
         latest_X = df_current[avail].iloc[[-1]].fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
-        class_prob_map = dict(zip(model.classes_, prob_array))
+        
+        # 型の違い（int/float）による辞書検索ミスを防ぐため float 化してマッピング
+        class_prob_map = {float(k): v for k, v in zip(model.classes_, prob_array)}
         
         prob_up = float(class_prob_map.get(1.0, 0.0))
         prob_down = float(class_prob_map.get(-1.0, 0.0))
@@ -310,13 +312,13 @@ def analyze_signal_with_backtest(df_current, df_htf):
         importances = pd.Series(model.feature_importances_, index=avail).sort_values(ascending=True)
 
         htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
+        htf_uptrend = True
         if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
             htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
             htf_uptrend = htf_close > htf_ema200
-        else:
+        elif "SMA_20" in df_htf.columns and not np.isnan(clean_series(df_htf["SMA_20"]).iloc[-1]):
             htf_uptrend = htf_close > float(clean_series(df_htf["SMA_20"]).iloc[-1])
 
-        # 実用的な確率閾値（50%以上＋方向の一致＋日足トレンド合致）に調整
         threshold = 0.50
         if prob_up >= threshold and prob_up > prob_down and htf_uptrend:
             status = "BUY (買い)"
