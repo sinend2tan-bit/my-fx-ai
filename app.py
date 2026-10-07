@@ -13,7 +13,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 # Streamlitのページ設定（必ず最初のStreamlitコマンドとして実行）
 st.set_page_config(
-    page_title="Pro FX Analyzer & Signal",
+    page_title="Pro FX Analyzer & Signal Pro",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -79,6 +79,7 @@ st.markdown("""
     .param-box code { font-size: 0.95rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: rgba(51, 65, 85, 0.9) !important; padding: 2px 6px; border-radius: 4px; }
     
     .ai-card { background-color: rgba(15, 23, 42, 0.6); border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .news-card { background-color: rgba(30, 41, 59, 0.5); border: 1px solid #475569; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
     .update-time { font-size: 0.85rem; color: #94a3b8; text-align: right; margin-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
@@ -151,6 +152,89 @@ def get_usdjpy_rate():
     except Exception:
         pass
     return 155.0
+
+# ==========================================
+# ニュース＆インパクト解析モジュール
+# ==========================================
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_news_and_impact(symbol):
+    """Yahoo Financeからニュースを取得し、キーワード解析で為替影響を自動予測"""
+    try:
+        tk = yf.Ticker(symbol)
+        news_list = tk.news
+        if not news_list:
+            return []
+        
+        parsed_news = []
+        for item in news_list[:10]:
+            content = item.get("content", {}) if isinstance(item.get("content"), dict) else item
+            title = content.get("title") or item.get("title", "No Title")
+            publisher = content.get("provider", {}).get("displayName") or item.get("publisher", "市場ニュース")
+            
+            # リンク取得
+            click_url = "#"
+            if isinstance(content.get("canonicalUrl"), dict):
+                click_url = content["canonicalUrl"].get("url", "#")
+            elif "link" in item:
+                click_url = item["link"]
+
+            # 日時パース
+            pub_time = content.get("pubDate") or item.get("providerPublishTime", None)
+            if isinstance(pub_time, (int, float)):
+                dt_str = datetime.fromtimestamp(pub_time, tz=ZoneInfo("Asia/Tokyo")).strftime("%m/%d %H:%M")
+            elif isinstance(pub_time, str):
+                try:
+                    dt = datetime.fromisoformat(pub_time.replace("Z", "+00:00")).astimezone(ZoneInfo("Asia/Tokyo"))
+                    dt_str = dt.strftime("%m/%d %H:%M")
+                except Exception:
+                    dt_str = "直近"
+            else:
+                dt_str = "直近"
+
+            # 簡易AIテキスト・インパクト解析
+            t_lower = title.lower()
+            impact_level = "ℹ️ 普通"
+            direction = "↔️ 中立 / ボラティリティ注意"
+            reason = "全般的な市況ニュース"
+
+            if any(k in t_lower for k in ["fed", "powell", "cpi", "inflation", "rate", "payroll", "jobs", "fomc", "yield"]):
+                impact_level = "🔥 高（米金融政策・大変動）"
+                if any(k in t_lower for k in ["hike", "high", "rise", "strong", "inflation", "above", "beat"]):
+                    direction = "📈 ドル高 / 通貨ペア上昇要因" if "USD" in symbol else "⚡ USD強含み"
+                    reason = "米金利高止まり・インフレ懸念によるドル買い圧力"
+                elif any(k in t_lower for k in ["cut", "fall", "cool", "drop", "weak", "below", "miss"]):
+                    direction = "📉 ドル安 / 通貨ペア下落要因" if "USD" in symbol else "⚡ USD弱含み"
+                    reason = "米利下げ観測・経済減速に伴うドル売り圧力"
+                else:
+                    direction = "⚡ 急変動警戒"
+                    reason = "米国の重要指標・FRB発言に伴う相場変動"
+
+            elif any(k in t_lower for k in ["boj", "ueda", "yen", "japan", "bank of japan"]):
+                impact_level = "🔥 高（円相場直接影響）"
+                if any(k in t_lower for k in ["hike", "normalize", "taper", "intervention", "strong"]):
+                    direction = "📉 円高（USD/JPY等 下落）要因"
+                    reason = "日銀利上げ・政策正常化観測に伴う円買い"
+                else:
+                    direction = "📈 円安（USD/JPY等 上昇）要因"
+                    reason = "日銀金融緩和維持観測に伴う円売り"
+
+            elif any(k in t_lower for k in ["ecb", "lagarde", "euro", "europe"]):
+                impact_level = "⚡ 中〜高（ユーロ影響）"
+                direction = "🇪🇺 ユーロ急変動注意"
+                reason = "ECB理事会・欧州経済指標の動き"
+
+            parsed_news.append({
+                "title": title,
+                "publisher": publisher,
+                "link": click_url,
+                "time": dt_str,
+                "impact": impact_level,
+                "direction": direction,
+                "reason": reason
+            })
+        return parsed_news
+    except Exception:
+        return []
 
 # ==========================================
 # 1. データ処理 & バックテスト付きAIモデル
@@ -419,10 +503,11 @@ if st.sidebar.button("🔄 最新データに更新"):
     st.rerun()
 
 # データ取得
-with st.spinner("最新相場データを取得中..."):
+with st.spinner("最新相場データ & ニュースを取得中..."):
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
     data_4h = load_and_process_data(ticker, "1y", "1h", "4時間足 (中期・リピート用)")
     data_htf = load_and_process_data(ticker, "3y", "1d", "日足")
+    news_items = fetch_news_and_impact(ticker)
 
 if data_4h is None and data is not None:
     data_4h = data
@@ -462,7 +547,6 @@ swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
 
 def is_valid_range(r_low, r_up, current_p):
-    """レンジ範囲が有効かチェック"""
     if r_low <= 0 or r_up <= 0 or r_low >= r_up:
         return False
     if r_low < current_p * 0.5 or r_up > current_p * 1.5:
@@ -487,7 +571,6 @@ if need_reset:
 
 current_range = st.session_state["ranges"][ticker]
 
-# Session State の同期（安全処理）
 if "active_ticker" not in st.session_state or st.session_state["active_ticker"] != ticker:
     st.session_state["active_ticker"] = ticker
     st.session_state["in_lower"] = float(current_range["lower"])
@@ -519,14 +602,13 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         on_change=update_range
     )
     
-    # 修正: ボタン押下時にStateを直接修正し、安全に同期してリロード
     if st.button("✨ 4時間足高値・安値からレンジを自動計算"):
+        st.session_state["in_lower"] = float(swing_low_4h)
+        st.session_state["in_upper"] = float(swing_high_4h)
         st.session_state["ranges"][ticker] = {
             "lower": float(swing_low_4h),
             "upper": float(swing_high_4h)
         }
-        if "active_ticker" in st.session_state:
-            del st.session_state["active_ticker"]
         save_settings()
         st.rerun()
 
@@ -545,9 +627,10 @@ sell_stop_loss = user_upper + stop_buffer_val
 # ==========================================
 # 4. タブ描画
 # ==========================================
-tab_chart, tab_single, tab_repeat, tab_ai = st.tabs([
+tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
     "📈 メインチャート", 
     "⚡ 単発トレード (AI全自動アシスト)", 
+    "📰 経済指標＆為替ニュースAI予測",
     "📋 松井証券 リピート設定 & リスク管理", 
     "🤖 AIモデル分析詳細"
 ])
@@ -565,7 +648,6 @@ with tab_chart:
         vertical_spacing=0.05
     )
 
-    # 1. ローソク足描画
     fig.add_trace(go.Candlestick(
         x=x_labels,
         open=clean_series(df_chart["Open"]),
@@ -577,7 +659,6 @@ with tab_chart:
         name="価格"
     ), row=1, col=1)
 
-    # 2. 移動平均線
     if "SMA_20" in df_chart.columns:
         fig.add_trace(go.Scatter(
             x=x_labels, y=clean_series(df_chart["SMA_20"]),
@@ -590,7 +671,6 @@ with tab_chart:
             line=dict(color="#38bdf8", width=1.8), name="EMA200"
         ), row=1, col=1)
 
-    # 3. リピート範囲・運用停止ラインの描画
     fig.add_hrect(
         y0=user_lower, y1=user_upper, 
         fillcolor="rgba(56, 189, 248, 0.06)", line_width=0, 
@@ -603,7 +683,6 @@ with tab_chart:
     fig.add_hline(y=user_lower, line_dash="dash", line_color="#4ade80", annotation_text="下限", annotation_position="top right", row=1, col=1)
     fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#16a34a", annotation_text="買 SL", annotation_position="bottom right", row=1, col=1)
 
-    # 4. RSI (サブチャート)
     if "RSI" in df_chart.columns:
         fig.add_trace(go.Scatter(
             x=x_labels, y=clean_series(df_chart["RSI"]),
@@ -612,7 +691,6 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
-    # 5. Y軸可視化範囲決定
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     price_span = chart_high - chart_low
@@ -708,7 +786,7 @@ with tab_single:
     </div>
     """, unsafe_allow_html=True)
     
-    # 改善機能: AI提案をフォームへワンクリック反映
+    # 改善: 安全にSession Stateを書き換えてフォームに反映
     if st.button("🤖 AIの提案値を手動設定に反映"):
         st.session_state[f"side_{ticker}"] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
         st.session_state[f"entry_{ticker}"] = float(ai_entry)
@@ -722,11 +800,18 @@ with tab_single:
     st.caption("AIの算出結果をベースに、エントリー価格や損切幅・リスクリワード比を自由に変更できます。")
 
     sc1, sc2 = st.columns(2)
-    default_side_idx = 0 if "BUY" in ai_direction else 1
     
+    # Stateの初期化ガード
+    if f"side_{ticker}" not in st.session_state:
+        st.session_state[f"side_{ticker}"] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
+    if f"entry_{ticker}" not in st.session_state:
+        st.session_state[f"entry_{ticker}"] = float(latest_price)
+    if f"slpips_{ticker}" not in st.session_state:
+        st.session_state[f"slpips_{ticker}"] = float(ai_sl_pips)
+
     with sc1:
-        trade_side = st.radio("売買方向", ["BUY (買い)", "SELL (売り)"], index=default_side_idx, horizontal=True, key=f"side_{ticker}")
-        entry_price = st.number_input("エントリー想定レート", value=latest_price, format=price_fmt, step=0.01 if is_jpy else 0.0001, key=f"entry_{ticker}")
+        trade_side = st.radio("売買方向", ["BUY (買い)", "SELL (売り)"], key=f"side_{ticker}", horizontal=True)
+        entry_price = st.number_input("エントリー想定レート", key=f"entry_{ticker}", format=price_fmt, step=0.01 if is_jpy else 0.0001)
 
     with sc2:
         sl_mode = st.radio("損切(SL)の決め方", ["ATRベース (推奨)", "固定 pips"], horizontal=True, key=f"slmode_{ticker}")
@@ -735,7 +820,7 @@ with tab_single:
             sl_pips = round((latest_atr / pip_unit) * atr_multiplier, 1)
             st.info(f"現在のATR: {latest_atr/pip_unit:.1f} pips ➔ 損切幅: **{sl_pips} pips**")
         else:
-            sl_pips = st.number_input("損切幅 (pips)", min_value=1.0, value=15.0, step=1.0, key=f"slpips_{ticker}")
+            sl_pips = st.number_input("損切幅 (pips)", min_value=1.0, step=1.0, key=f"slpips_{ticker}")
 
     rr_value = st.slider("リスクリワード比 (RR)", min_value=0.5, max_value=4.0, value=float(st.session_state["rr_ratio"]), step=0.1, key=f"rr_{ticker}")
     tp_pips = round(sl_pips * rr_value, 1)
@@ -757,7 +842,46 @@ with tab_single:
     res_col3.metric("利確(TP) レート", price_fmt % tp_price, f"+{tp_pips} pips")
     res_col4.metric("想定損益", f"+{int(expected_profit_yen):,}円", f"最大損失 -{int(actual_loss_yen):,}円")
 
-# --- タブ3: リピート設定 & リスク管理 ---
+# --- タブ3: 📰 経済指標＆為替ニュースAI予測 (新設機能) ---
+with tab_news:
+    st.markdown("##### 📰 リアルタイム為替ニュース & AI事前影響予測")
+    st.caption("海外市場の最新ニュースをリアルタイム取得し、市場への影響度や値動きの方向性をAIが事前予測します。")
+
+    # 主要経済指標のアラートガイド
+    with st.expander("🔔 注目すべき主要経済指標と為替への影響パターン", expanded=True):
+        st.markdown("""
+        | 経済指標・イベント | 注目ポイント | ドル円(USD/JPY)への影響予測 |
+        | :--- | :--- | :--- |
+        | **FOMC (米連邦公開市場委員会)** | 政策金利発表 & パウエル議長発言 | **利上げ/タカ派** ➔ 📈 ドル高 / **利下げ/ハト派** ➔ 📉 ドル安 |
+        | **米雇用統計 (NFP)** | 非農業部門雇用者数 & 平均時給 | **予想を上回る** ➔ 📈 ドル高 / **予想を下回る** ➔ 📉 ドル安 |
+        | **米CPI (消費者物価指数)** | インフレの伸び率 | **インフレ加速** ➔ 📈 ドル高 (利上げ観測) / **鈍化** ➔ 📉 ドル安 |
+        | **日銀金融政策決定会合** | 植田総裁会見 & 政策金利 | **利上げ/政策修正** ➔ 📉 急激な円高 / **緩和維持** ➔ 📈 円安 |
+        """)
+
+    st.markdown("---")
+    st.markdown(f"##### 🌐 `{selected_label}` 関連の最新ニュース速報 & AI予測")
+
+    if not news_items:
+        st.info("現在関連する最新ニュースが取得できないか、市場が落ち着いています。")
+    else:
+        for news in news_items:
+            st.markdown(f"""
+            <div class="news-card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: bold; color: #38bdf8; font-size: 0.9rem;">{news['publisher']} ({news['time']})</span>
+                    <span style="font-weight: bold; font-size: 0.85rem;">{news['impact']}</span>
+                </div>
+                <div style="font-size: 1.05rem; font-weight: 700; margin-bottom: 8px;">
+                    <a href="{news['link']}" target="_blank" style="color: #f8fafc; text-decoration: none;">{news['title']} 🔗</a>
+                </div>
+                <div style="background-color: rgba(15, 23, 42, 0.6); padding: 8px 12px; border-radius: 4px; font-size: 0.9rem;">
+                    🎯 <b>AI予測影響</b>: <span style="color: #facc15; font-weight: bold;">{news['direction']}</span><br>
+                    💡 <b>判定理由</b>: {news['reason']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+# --- タブ4: 松井証券 リピート設定 & リスク管理 ---
 with tab_repeat:
     trap_width_pips = max(15, int(round((atr_4h / pip_unit))))
     half_range_pips = abs(user_upper - user_half) / pip_unit
@@ -807,7 +931,7 @@ with tab_repeat:
     else:
         st.success("🟢 資金管理チェック: 適切なリスク範囲内です。")
 
-# --- タブ4: AIモデル分析詳細 ---
+# --- タブ5: AIモデル分析詳細 ---
 with tab_ai:
     st.markdown("##### 🤖 AI予測モデル（Random Forest）の評価と内訳")
     
