@@ -154,6 +154,8 @@ def clean_series(s):
 
 def safe_to_tokyo_tz(df):
     """タイムゾーンの有無を判定して安全にAsia/Tokyoに変換"""
+    if df is None or df.empty:
+        return df
     df_out = df.copy()
     try:
         if isinstance(df_out.index, pd.DatetimeIndex):
@@ -199,7 +201,6 @@ def fetch_news_and_impact(symbol):
             if not isinstance(item, dict):
                 continue
             
-            # データ構造のネスト分岐に安全に対応
             content = item.get("content", {}) if isinstance(item.get("content"), dict) else item
             title = content.get("title") or item.get("title", "No Title")
             
@@ -362,10 +363,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["Lower_Wick_Ratio"] = (open_close_min - l) / total_range
         new_cols["ATR_Ratio"] = new_cols["ATR"] / c
 
-        df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan)
+        df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).fillna(0)
         df = pd.concat([df, df_feat], axis=1)
 
-        # 時系列到達順序を考慮したTarget算出（NumPy高速化）
+        # Target算出
         tp_t = new_cols["ATR"] * 1.0
         sl_t = new_cols["ATR"] * 0.5
         
@@ -435,7 +436,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(df_valid) < min_required:
             return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
 
-        X = df_valid[avail].fillna(0)
+        X = df_valid[avail].replace([np.inf, -np.inf], np.nan).fillna(0)
         y = df_valid["Target"]
         
         X_train = X.iloc[: -(test_size + gap)]
@@ -446,7 +447,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(np.unique(y_train)) < 2: 
             return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
 
-        # n_jobs=1 と指定してクラウド環境でのマルチスレッド競合・動作停止を防止
         model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42, n_jobs=1)
         model.fit(X_train, y_train)
 
@@ -460,7 +460,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         else:
             win_rate = 50.0
 
-        latest_X = df_current[avail].iloc[[-1]].fillna(0)
+        latest_X = df_current[avail].iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         
         class_prob_map = {float(k): v for k, v in zip(model.classes_, prob_array)}
@@ -482,23 +482,34 @@ def analyze_signal_with_backtest(df_current, df_htf):
         ja_index = [FEATURE_LABELS_JA.get(col, col) for col in avail]
         importances = pd.Series(model.feature_importances_, index=ja_index).sort_values(ascending=True)
 
-        htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
+        # 安全な上位足トレンドチェック（df_htfがNoneの場合もガード）
         htf_uptrend = True
-        if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
-            htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
-            htf_uptrend = htf_close > htf_ema200
-        elif "SMA_20" in df_htf.columns and not np.isnan(clean_series(df_htf["SMA_20"]).iloc[-1]):
-            htf_uptrend = htf_close > float(clean_series(df_htf["SMA_20"]).iloc[-1])
+        curr_close = float(clean_series(df_current["Close"]).iloc[-1])
+        
+        if df_htf is not None and not df_htf.empty and "Close" in df_htf.columns:
+            htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
+            if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
+                htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
+                htf_uptrend = htf_close > htf_ema200
+            elif "SMA_20" in df_htf.columns and not np.isnan(clean_series(df_htf["SMA_20"]).iloc[-1]):
+                htf_uptrend = htf_close > float(clean_series(df_htf["SMA_20"]).iloc[-1])
+        else:
+            # df_htfが取れない場合は足単体のEMA200で代替
+            if "EMA_200" in df_current.columns:
+                htf_uptrend = curr_close > float(clean_series(df_current["EMA_200"]).iloc[-1])
+
+        # RSI過熱感フィルター
+        rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
 
         threshold = 0.38
-        if prob_up >= threshold and prob_up > prob_down and htf_uptrend:
+        if prob_up >= threshold and prob_up > prob_down and htf_uptrend and rsi_val < 75.0:
             status = "BUY (買い)"
-        elif prob_down >= threshold and prob_down > prob_up and not htf_uptrend:
+        elif prob_down >= threshold and prob_down > prob_up and not htf_uptrend and rsi_val > 25.0:
             status = "SELL (売り)"
         else:
             status = "WAIT (様子見)"
 
-        adx_val = float(clean_series(df_current["ADX"]).iloc[-1])
+        adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
         m_type = "トレンド相場" if adx_val > 22 else "レンジ相場"
 
         return status, conf, win_rate, m_type, prob_dict, importances
@@ -573,7 +584,7 @@ else:
 
 if st.sidebar.button("💾 設定を即時手動保存"):
     save_settings()
-    st.sidebar.success("設定を物理ファイルに保存しました！")
+    st.sidebar.success("設定を保存しました！")
 
 if st.sidebar.button("🔄 最新データに更新"):
     st.cache_data.clear()
@@ -589,7 +600,7 @@ with st.spinner("最新相場データ & ニュースを取得中..."):
 if data_4h is None and data is not None:
     data_4h = data
 
-if data is None or data_htf is None:
+if data is None:
     st.error("データの取得に失敗しました。Yahoo Financeからの応答が遅延しているか、取引時間外の可能性があります。時間を置いて再度更新してください。")
     st.stop()
 
@@ -619,9 +630,9 @@ st.markdown("---")
 # ==========================================
 # 3. 通貨ペア毎のレンジ管理 & 安全な自動補正ロジック
 # ==========================================
-swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
-swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
-atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1]) if "ATR" in data_4h.columns else (latest_price * 0.005)
+swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max()) if data_4h is not None else latest_price * 1.02
+swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min()) if data_4h is not None else latest_price * 0.98
+atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1]) if data_4h is not None and "ATR" in data_4h.columns else (latest_price * 0.005)
 
 def is_valid_range(r_low, r_up, current_p):
     if r_low <= 0 or r_up <= 0 or r_low >= r_up:
@@ -772,13 +783,13 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
-    # Y軸スケールは表示ローソク足に最適フィット
+    # Y軸スケールの安全計算（高値安値が一致した場合のガード追加）
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
     price_span = chart_high - chart_low
     if price_span <= 0:
-        price_span = chart_high * 0.002
+        price_span = chart_high * 0.002 if chart_high > 0 else 1.0
     
     y_min_fit = chart_low - (price_span * 0.1)
     y_max_fit = chart_high + (price_span * 0.1)
@@ -843,8 +854,10 @@ with tab_single:
 
     ai_profit_yen = (ai_tp_pips - spread_pips) * pip_val_per_wan * ai_rec_wan
     ai_loss_yen = (ai_sl_pips + spread_pips) * pip_val_per_wan * ai_rec_wan
+    
+    # 必要証拠金計算（レバレッジ25倍）
+    req_margin_yen = (ai_entry * (ai_rec_wan * 10000)) / 25.0 if is_jpy else (ai_entry * usd_rate * (ai_rec_wan * 10000)) / 25.0
 
-    # Key管理
     entry_key = f"entry_{ticker}"
     side_key = f"side_{ticker}"
     slpips_key = f"slpips_{ticker}"
@@ -875,7 +888,7 @@ with tab_single:
     a2.metric("想定エントリー", price_fmt % ai_entry)
     a3.metric("推奨損切 (SL)", price_fmt % ai_sl_price, f"-{ai_sl_pips} pips")
     a4.metric("推奨利確 (TP)", price_fmt % ai_tp_price, f"+{ai_tp_pips} pips")
-    a5.metric("最適数量", f"{ai_rec_wan:.2f} 万通貨", f"許容リスク {risk_pct}%")
+    a5.metric("最適数量", f"{ai_rec_wan:.2f} 万通貨", f"必要証拠金: 約{int(req_margin_yen):,}円")
 
     st.markdown(f"""
     <div class="param-box">
@@ -884,7 +897,7 @@ with tab_single:
     ・<b>新規成行価格</b>: <code>{price_fmt % ai_entry}</code><br>
     ・<b>決済利確(TP)</b>: <code>{price_fmt % ai_tp_price}</code> (+{ai_tp_pips} pips / 純益 ＋{int(ai_profit_yen):,}円)<br>
     ・<b>決済損切(SL)</b>: <code>{price_fmt % ai_sl_price}</code> (-{ai_sl_pips} pips / 損失 －{int(ai_loss_yen):,}円)<br>
-    ・<b>推奨発注数量</b>: <code>{ai_rec_wan:.2f} 万通貨</code> ({int(ai_rec_wan * 10000):,} 通貨)
+    ・<b>推奨発注数量</b>: <code>{ai_rec_wan:.2f} 万通貨</code> ({int(ai_rec_wan * 10000):,} 通貨) | <b>必要証拠金</b>: 約 <code>{int(req_margin_yen):,}円</code>
     </div>
     """, unsafe_allow_html=True)
     
