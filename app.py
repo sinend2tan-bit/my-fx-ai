@@ -1,3 +1,4 @@
+import html
 import json
 import os
 from datetime import datetime
@@ -421,7 +422,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             tp_dist = tp_vals[i]
             sl_dist = sl_vals[i]
             
-            if np.isnan(tp_dist) or np.isnan(sl_dist):
+            if np.isnan(tp_dist) or np.isnan(sl_dist) or tp_dist <= 0 or sl_dist <= 0:
                 continue
 
             outcome = 0
@@ -432,16 +433,18 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 
                 buy_tp_hit = (curr_h - entry_p) >= tp_dist
                 buy_sl_hit = (entry_p - curr_l) >= sl_dist
-                
                 sell_tp_hit = (entry_p - curr_l) >= tp_dist
                 sell_sl_hit = (curr_h - entry_p) >= sl_dist
                 
+                # 買い優勢
                 if buy_tp_hit and not buy_sl_hit:
                     outcome = 1
                     break
+                # 売り優勢
                 elif sell_tp_hit and not sell_sl_hit:
                     outcome = -1
                     break
+                # 双方損切または不確実
                 elif buy_sl_hit or sell_sl_hit:
                     outcome = 0
                     break
@@ -459,7 +462,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
-    empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
+    empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
     if df_current is None or len(df_current) < 150:
         return empty_res
 
@@ -473,7 +476,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         min_required = test_size + gap + 40
         
         if len(df_valid) < min_required:
-            return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
+            return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
 
         X = df_valid[avail].replace([np.inf, -np.inf], np.nan).fillna(0)
         y = df_valid["Target"]
@@ -484,7 +487,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         y_test = y.iloc[-test_size:]
 
         if len(np.unique(y_train)) < 2: 
-            return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
+            return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
 
         model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42, n_jobs=1)
         model.fit(X_train, y_train)
@@ -553,7 +556,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
 
         return status, conf, win_rate, m_type, prob_dict, importances
     except Exception:
-        return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
+        return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
 
 # ==========================================
 # 2. UI構築 & 状態永続化連動
@@ -623,7 +626,7 @@ else:
 
 if st.sidebar.button("💾 設定を即時手動保存"):
     save_settings()
-    st.sidebar.success("設定を保存しました！")
+    st.toast("設定を保存しました！", icon="💾")
 
 if st.sidebar.button("🔄 最新データに更新"):
     st.cache_data.clear()
@@ -1039,18 +1042,26 @@ with tab_news:
         st.info("現在関連する最新ニュースが取得できないか、市場が落ち着いています。")
     else:
         for news in news_items:
+            safe_title = html.escape(str(news.get('title', '')))
+            safe_publisher = html.escape(str(news.get('publisher', '')))
+            safe_time = html.escape(str(news.get('time', '')))
+            safe_impact = html.escape(str(news.get('impact', '')))
+            safe_direction = html.escape(str(news.get('direction', '')))
+            safe_reason = html.escape(str(news.get('reason', '')))
+            safe_link = html.escape(str(news.get('link', '#')))
+
             st.markdown(f"""
             <div class="news-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <span style="font-weight: bold; color: #38bdf8; font-size: 0.9rem;">{news['publisher']} ({news['time']})</span>
-                    <span style="font-weight: bold; font-size: 0.85rem;">{news['impact']}</span>
+                    <span style="font-weight: bold; color: #38bdf8; font-size: 0.9rem;">{safe_publisher} ({safe_time})</span>
+                    <span style="font-weight: bold; font-size: 0.85rem;">{safe_impact}</span>
                 </div>
                 <div style="font-size: 1.05rem; font-weight: 700; margin-bottom: 8px;">
-                    <a href="{news['link']}" target="_blank" style="color: #f8fafc; text-decoration: none;">{news['title']} 🔗</a>
+                    <a href="{safe_link}" target="_blank" style="color: #f8fafc; text-decoration: none;">{safe_title} 🔗</a>
                 </div>
                 <div style="background-color: rgba(15, 23, 42, 0.6); padding: 8px 12px; border-radius: 4px; font-size: 0.9rem;">
-                    🎯 <b>AI予測影響</b>: <span style="color: #facc15; font-weight: bold;">{news['direction']}</span><br>
-                    💡 <b>判定理由</b>: {news['reason']}
+                    🎯 <b>AI予測影響</b>: <span style="color: #facc15; font-weight: bold;">{safe_direction}</span><br>
+                    💡 <b>判定理由</b>: {safe_reason}
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -1143,7 +1154,7 @@ with tab_ai:
         st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%")
         st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
 
-    if feature_importances is not None:
+    if feature_importances is not None and not feature_importances.empty:
         st.markdown("---")
         st.markdown("##### 📊 AIの判断根拠（特徴量重要度 TOP 10）")
         st.caption("AIが『買い・売り・様子見』を判断する際に、どの指標を重視したかを示す貢献度ランキングです。")
@@ -1164,3 +1175,5 @@ with tab_ai:
             yaxis=dict(autorange="reversed")
         )
         st.plotly_chart(fig_imp, use_container_width=True, config={'displayModeBar': False})
+    else:
+        st.info("💡 現在の特徴量重要度データを生成できませんでした（学習データ件数が不足している可能性があります）。")
