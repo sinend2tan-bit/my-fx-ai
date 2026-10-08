@@ -11,7 +11,7 @@ import yfinance as yf
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 
-# Streamlitのページ設定（必ず最初のStreamlitコマンドとして実行）
+# Streamlitのページ設定
 st.set_page_config(
     page_title="Pro FX Analyzer & Signal Pro",
     page_icon="📈",
@@ -240,7 +240,9 @@ def fetch_news_and_impact(symbol):
             
             content = item.get("content", {}) if isinstance(item.get("content"), dict) else item
             title = content.get("title") or item.get("title", "No Title")
-            
+            if not title or title == "No Title":
+                continue
+
             provider = content.get("provider", {}) if isinstance(content.get("provider"), dict) else {}
             publisher = provider.get("displayName") or item.get("publisher", "市場ニュース")
 
@@ -698,7 +700,7 @@ current_range = st.session_state["ranges"][ticker]
 key_lower = f"in_lower_{ticker}"
 key_upper = f"in_upper_{ticker}"
 
-# 【重要修正】ranges と Widget キーの即時同期
+# ranges と Widget キーの即時同期
 if key_lower not in st.session_state or need_reset:
     st.session_state[key_lower] = float(current_range["lower"])
 if key_upper not in st.session_state or need_reset:
@@ -769,7 +771,10 @@ with tab_chart:
     df_chart = df_chart.loc[~df_chart.index.duplicated(keep='last')]
     
     fmt_str = '%Y-%m-%d %H:%M' if '日足' not in tf_label else '%Y-%m-%d'
-    x_labels = df_chart.index.strftime(fmt_str)
+    if isinstance(df_chart.index, pd.DatetimeIndex):
+        x_labels = df_chart.index.strftime(fmt_str)
+    else:
+        x_labels = df_chart.index.astype(str)
 
     fig = make_subplots(
         rows=2, cols=1, 
@@ -801,17 +806,23 @@ with tab_chart:
             line=dict(color="#38bdf8", width=1.8), name="EMA200"
         ), row=1, col=1)
 
-    fig.add_hrect(
-        y0=user_lower, y1=user_upper, 
-        fillcolor="rgba(56, 189, 248, 0.06)", line_width=0, 
-        row=1, col=1
-    )
+    if not np.isnan(user_lower) and not np.isnan(user_upper):
+        fig.add_hrect(
+            y0=user_lower, y1=user_upper, 
+            fillcolor="rgba(56, 189, 248, 0.06)", line_width=0, 
+            row=1, col=1
+        )
     
-    fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#dc2626", annotation_text="売 SL", annotation_position="top right", row=1, col=1)
-    fig.add_hline(y=user_upper, line_dash="dash", line_color="#f87171", annotation_text="上限", annotation_position="bottom right", row=1, col=1)
-    fig.add_hline(y=user_half, line_dash="dot", line_color="#c084fc", annotation_text="中央", annotation_position="top right", row=1, col=1)
-    fig.add_hline(y=user_lower, line_dash="dash", line_color="#4ade80", annotation_text="下限", annotation_position="top right", row=1, col=1)
-    fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#16a34a", annotation_text="買 SL", annotation_position="bottom right", row=1, col=1)
+    if not np.isnan(sell_stop_loss):
+        fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#dc2626", annotation_text="売 SL", annotation_position="top right", row=1, col=1)
+    if not np.isnan(user_upper):
+        fig.add_hline(y=user_upper, line_dash="dash", line_color="#f87171", annotation_text="上限", annotation_position="bottom right", row=1, col=1)
+    if not np.isnan(user_half):
+        fig.add_hline(y=user_half, line_dash="dot", line_color="#c084fc", annotation_text="中央", annotation_position="top right", row=1, col=1)
+    if not np.isnan(user_lower):
+        fig.add_hline(y=user_lower, line_dash="dash", line_color="#4ade80", annotation_text="下限", annotation_position="top right", row=1, col=1)
+    if not np.isnan(buy_stop_loss):
+        fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#16a34a", annotation_text="買 SL", annotation_position="bottom right", row=1, col=1)
 
     if "RSI" in df_chart.columns:
         fig.add_trace(go.Scatter(
@@ -821,7 +832,7 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
-    # 【修正】Y軸スケールの最適化（ローソク足とレンジ枠を主体に計算しつぶれ防止）
+    # Y軸スケールの最適化
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
@@ -1053,7 +1064,7 @@ with tab_repeat:
     )
 
     half_range_pips = abs(user_upper - user_half) / pip_unit
-    half_grid_count = max(1, int(np.floor(half_range_pips / trap_width_pips)))
+    half_grid_count = max(1, int(np.floor(half_range_pips / max(1.0, float(trap_width_pips)))))
     total_grid_count = half_grid_count * 2
 
     quantity_wan_val = float(st.session_state["quantity_wan"])
