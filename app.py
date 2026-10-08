@@ -130,6 +130,15 @@ PAIRS = {
     "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
 }
 
+# 通貨ペア毎の一般的な標準スプレッド(pips)定義
+DEFAULT_SPREAD_PIPS = {
+    "USDJPY=X": 0.2,
+    "EURUSD=X": 0.4,
+    "GBPJPY=X": 1.0,
+    "EURJPY=X": 0.5,
+    "AUDJPY=X": 0.6,
+}
+
 TIMEFRAMES = {
     "5分足 (スキャル用)": {"period": "7d", "interval": "5m"},
     "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
@@ -195,14 +204,12 @@ def fetch_news_and_impact(symbol):
             provider = content.get("provider", {}) if isinstance(content.get("provider"), dict) else {}
             publisher = provider.get("displayName") or item.get("publisher", "市場ニュース")
 
-            # リンク取得
             click_url = "#"
             if isinstance(content.get("canonicalUrl"), dict):
                 click_url = content["canonicalUrl"].get("url", "#")
             elif "link" in item:
                 click_url = item["link"]
 
-            # 日時パース
             pub_time = content.get("pubDate") or item.get("providerPublishTime", None)
             if isinstance(pub_time, (int, float)):
                 dt_str = datetime.fromtimestamp(pub_time, tz=ZoneInfo("Asia/Tokyo")).strftime("%m/%d %H:%M")
@@ -353,9 +360,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan)
         df = pd.concat([df, df_feat], axis=1)
 
-        # ---------------------------------------------------------
-        # 改善点1: 時系列の到達順序（先読みリーク対策）を厳密化したTarget算出
-        # ---------------------------------------------------------
+        # 時系列到達順序を考慮したTarget算出
         tp_t = new_cols["ATR"] * 1.0
         sl_t = new_cols["ATR"] * 0.5
         
@@ -379,11 +384,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 curr_h = h_vals[idx]
                 curr_l = l_vals[idx]
                 
-                # 買いトレードの判定（先にTPに届けば1、先にSLに届けば不的中）
                 buy_tp_hit = (curr_h - entry_p) >= tp_dist
                 buy_sl_hit = (entry_p - curr_l) >= sl_dist
                 
-                # 売りトレードの判定（先にTPに届けば-1、先にSLに届けば不的中）
                 sell_tp_hit = (entry_p - curr_l) >= tp_dist
                 sell_sl_hit = (curr_h - entry_p) >= sl_dist
                 
@@ -399,7 +402,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             
             target_values[i] = outcome
 
-        # 末尾 LOOKAHEAD_BARS 足は未来データが不足するため NaN
         target_series = pd.Series(target_values, index=df.index)
         target_series.iloc[-LOOKAHEAD_BARS:] = np.nan
         df["Target"] = target_series
@@ -439,13 +441,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
         model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42, n_jobs=-1)
         model.fit(X_train, y_train)
 
-        # ---------------------------------------------------------
-        # 改善点2: バックテスト勝率のバイアス補正
-        # ---------------------------------------------------------
         preds = model.predict(X_test)
         preds_series = pd.Series(preds, index=y_test.index)
         
-        # モデルが売買(1 または -1)を予測した足のうち、Targetと合致したかを評価
         trade_signals = preds_series != 0
         if trade_signals.sum() > 0:
             win_count = (preds_series[trade_signals] == y_test[trade_signals]).sum()
@@ -483,10 +481,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         elif "SMA_20" in df_htf.columns and not np.isnan(clean_series(df_htf["SMA_20"]).iloc[-1]):
             htf_uptrend = htf_close > float(clean_series(df_htf["SMA_20"]).iloc[-1])
 
-        # ---------------------------------------------------------
-        # 改善点3: 3クラス分類の閾値最適化
-        # ---------------------------------------------------------
-        threshold = 0.38  # 3クラスのため38%以上かつ他方より優勢であれば判定
+        threshold = 0.38
         if prob_up >= threshold and prob_up > prob_down and htf_uptrend:
             status = "BUY (買い)"
         elif prob_down >= threshold and prob_down > prob_up and not htf_uptrend:
@@ -518,6 +513,7 @@ tf_config = TIMEFRAMES[tf_label]
 is_jpy = "JPY" in ticker
 pip_unit = 0.01 if is_jpy else 0.0001
 price_fmt = "%.3f" if is_jpy else "%.5f"
+spread_pips = DEFAULT_SPREAD_PIPS.get(ticker, 0.3)
 
 # サイドバー設定
 st.sidebar.header("⚙️ 資金 & リスク設定")
@@ -676,9 +672,6 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         on_change=update_range_callback
     )
     
-    # ---------------------------------------------------------
-    # 改善点4: ボタン押下時の即時反映（2回押し問題解消）
-    # ---------------------------------------------------------
     if st.button("✨ 4時間足高値・安値からレンジを自動計算"):
         st.session_state[key_lower] = float(swing_low_4h)
         st.session_state[key_upper] = float(swing_high_4h)
@@ -715,6 +708,8 @@ tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
 # --- タブ1: メインチャート ---
 with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(120)).ffill()
+    df_chart = df_chart.loc[~df_chart.index.duplicated(keep='last')]
+    
     fmt_str = '%Y-%m-%d %H:%M' if '日足' not in tf_label else '%Y-%m-%d'
     x_labels = df_chart.index.strftime(fmt_str)
 
@@ -835,26 +830,31 @@ with tab_single:
     ai_sl_price = ai_entry - (ai_sl_pips * pip_unit) if "BUY" in ai_direction else ai_entry + (ai_sl_pips * pip_unit)
     ai_tp_price = ai_entry + (ai_tp_pips * pip_unit) if "BUY" in ai_direction else ai_entry - (ai_tp_pips * pip_unit)
 
-    ai_loss_per_wan = ai_sl_pips * pip_val_per_wan
+    # スプレッドコストを含む実効計算
+    ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
     ai_rec_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.01
     ai_rec_wan = max(0.01, round(ai_rec_wan, 2))
 
-    ai_profit_yen = ai_tp_pips * pip_val_per_wan * ai_rec_wan
-    ai_loss_yen = ai_sl_pips * pip_val_per_wan * ai_rec_wan
+    ai_profit_yen = (ai_tp_pips - spread_pips) * pip_val_per_wan * ai_rec_wan
+    ai_loss_yen = (ai_sl_pips + spread_pips) * pip_val_per_wan * ai_rec_wan
 
-    # 通貨ペア切替時の手動設定の同期
+    # Key管理
     entry_key = f"entry_{ticker}"
     side_key = f"side_{ticker}"
     slpips_key = f"slpips_{ticker}"
+    slmode_key = f"slmode_{ticker}"
 
     if side_key not in st.session_state:
         st.session_state[side_key] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
     
-    if entry_key not in st.session_state or abs(st.session_state[entry_key] - latest_price) / latest_price > 0.2:
+    if entry_key not in st.session_state:
         st.session_state[entry_key] = float(latest_price)
         
     if slpips_key not in st.session_state:
         st.session_state[slpips_key] = float(ai_sl_pips)
+
+    if slmode_key not in st.session_state:
+        st.session_state[slmode_key] = "ATRベース (推奨)"
 
     st.markdown('<div class="ai-card">', unsafe_allow_html=True)
     st.markdown("#### 🤖 AI提案トレードプラン")
@@ -873,19 +873,21 @@ with tab_single:
 
     st.markdown(f"""
     <div class="param-box">
-    <b>【AI自動提示 注文コピー用パラメータ】</b><br>
+    <b>【AI自動提示 注文コピー用パラメータ】</b> (想定スプレッド: <code>{spread_pips:.1f} pips</code> 含む)<br>
     ・<b>通貨ペア</b>: <code>{selected_label}</code> | <b>売買方向</b>: <code>{"買い (BUY)" if "BUY" in ai_direction else "売り (SELL)"}</code><br>
     ・<b>新規成行価格</b>: <code>{price_fmt % ai_entry}</code><br>
-    ・<b>決済利確(TP)</b>: <code>{price_fmt % ai_tp_price}</code> (+{ai_tp_pips} pips / ＋{int(ai_profit_yen):,}円)<br>
-    ・<b>決済損切(SL)</b>: <code>{price_fmt % ai_sl_price}</code> (-{ai_sl_pips} pips / －{int(ai_loss_yen):,}円)<br>
+    ・<b>決済利確(TP)</b>: <code>{price_fmt % ai_tp_price}</code> (+{ai_tp_pips} pips / 純益 ＋{int(ai_profit_yen):,}円)<br>
+    ・<b>決済損切(SL)</b>: <code>{price_fmt % ai_sl_price}</code> (-{ai_sl_pips} pips / 損失 －{int(ai_loss_yen):,}円)<br>
     ・<b>推奨発注数量</b>: <code>{ai_rec_wan:.2f} 万通貨</code> ({int(ai_rec_wan * 10000):,} 通貨)
     </div>
     """, unsafe_allow_html=True)
     
+    # 修正点1: 反映ボタンでslmodeを固定pipsに変更して不整合を防ぐ
     if st.button("🤖 AIの提案値を手動設定に反映"):
         st.session_state[side_key] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
         st.session_state[entry_key] = float(ai_entry)
         st.session_state[slpips_key] = float(ai_sl_pips)
+        st.session_state[slmode_key] = "固定 pips"
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -901,7 +903,7 @@ with tab_single:
         entry_price = st.number_input("エントリー想定レート", key=entry_key, format=price_fmt, step=0.01 if is_jpy else 0.0001)
 
     with sc2:
-        sl_mode = st.radio("損切(SL)の決め方", ["ATRベース (推奨)", "固定 pips"], horizontal=True, key=f"slmode_{ticker}")
+        sl_mode = st.radio("損切(SL)の決め方", ["ATRベース (推奨)", "固定 pips"], horizontal=True, key=slmode_key)
         if sl_mode == "ATRベース (推奨)":
             atr_multiplier = st.slider("ATR倍率 (1.0 = 現在のボラティリティ相当)", min_value=0.5, max_value=3.0, value=1.5, step=0.1, key=f"atrmul_{ticker}")
             sl_pips = round((latest_atr / pip_unit) * atr_multiplier, 1)
@@ -916,18 +918,19 @@ with tab_single:
     sl_price = entry_price - (sl_pips * pip_unit) if is_buy else entry_price + (sl_pips * pip_unit)
     tp_price = entry_price + (tp_pips * pip_unit) if is_buy else entry_price - (tp_pips * pip_unit)
 
-    loss_per_wan = sl_pips * pip_val_per_wan
+    # 手動算出におけるスプレッド加味
+    loss_per_wan = (sl_pips + spread_pips) * pip_val_per_wan
     recommended_wan = (max_risk_yen / loss_per_wan) if loss_per_wan > 0 else 0.01
     recommended_wan = max(0.01, round(recommended_wan, 2))
 
-    expected_profit_yen = tp_pips * pip_val_per_wan * recommended_wan
-    actual_loss_yen = sl_pips * pip_val_per_wan * recommended_wan
+    expected_profit_yen = (tp_pips - spread_pips) * pip_val_per_wan * recommended_wan
+    actual_loss_yen = (sl_pips + spread_pips) * pip_val_per_wan * recommended_wan
 
     res_col1, res_col2, res_col3, res_col4 = st.columns(4)
     res_col1.metric("調整後の手動ロット数", f"{recommended_wan:.2f} 万通貨", f"許容リスク {risk_pct}%")
     res_col2.metric("損切(SL) レート", price_fmt % sl_price, f"-{sl_pips} pips")
     res_col3.metric("利確(TP) レート", price_fmt % tp_price, f"+{tp_pips} pips")
-    res_col4.metric("想定損益", f"+{int(expected_profit_yen):,}円", f"最大損失 -{int(actual_loss_yen):,}円")
+    res_col4.metric("想定純損益", f"+{int(expected_profit_yen):,}円", f"最大損失 -{int(actual_loss_yen):,}円")
 
 # --- タブ3: 📰 経済指標＆為替ニュースAI予測 ---
 with tab_news:
