@@ -130,7 +130,6 @@ PAIRS = {
     "ユーロ / 米ドル (EUR/USD)": "EURUSD=X",
 }
 
-# 通貨ペア毎の一般的な標準スプレッド(pips)定義
 DEFAULT_SPREAD_PIPS = {
     "USDJPY=X": 0.2,
     "EURUSD=X": 0.4,
@@ -167,14 +166,15 @@ def safe_to_tokyo_tz(df):
 
 @st.cache_data(ttl=120, show_spinner=False)
 def get_usdjpy_rate():
+    """週末・休日等の取得失敗を防ぐためperiod='5d'で最新レートを取得"""
     try:
-        df = yf.download("USDJPY=X", period="1d", progress=False, timeout=10)
+        df = yf.download("USDJPY=X", period="5d", progress=False, timeout=10)
         if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             cols = {str(c).lower(): c for c in df.columns}
             close_col = cols.get("close", df.columns[0])
-            c = clean_series(df[close_col])
+            c = clean_series(df[close_col]).dropna()
             val = float(c.iloc[-1]) if len(c) > 0 else 155.0
             if not np.isnan(val) and val > 0:
                 return val
@@ -227,11 +227,11 @@ def fetch_news_and_impact(symbol):
             direction = "↔️ 中立 / ボラティリティ注意"
             reason = "全般的な市況ニュース"
 
-            if any(k in t_lower for k in ["fed", "powell", "cpi", "inflation", "rate", "payroll", "jobs", "fomc", "yield"]):
+            if any(k in t_lower for k in ["fed", "powell", "cpi", "gdp", "pmi", "retail", "inflation", "rate", "payroll", "jobs", "fomc", "yield"]):
                 impact_level = "🔥 高（米金融政策・大変動）"
                 if any(k in t_lower for k in ["hike", "high", "rise", "strong", "inflation", "above", "beat"]):
                     direction = "📈 ドル高 / 通貨ペア上昇要因" if "USD" in symbol else "⚡ USD強含み"
-                    reason = "米金利高止まり・インフレ懸念によるドル買い圧力"
+                    reason = "米金利高止まり・経済指標好調によるドル買い圧力"
                 elif any(k in t_lower for k in ["cut", "fall", "cool", "drop", "weak", "below", "miss"]):
                     direction = "📉 ドル安 / 通貨ペア下落要因" if "USD" in symbol else "⚡ USD弱含み"
                     reason = "米利下げ観測・経済減速に伴うドル売り圧力"
@@ -763,19 +763,16 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
+    # 修正点: Y軸スケールは表示範囲のローソク足に最適フィットさせ、チャート潰れを解消
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
-    all_y_values = [chart_high, chart_low, user_lower, user_upper, buy_stop_loss, sell_stop_loss]
-    y_min_val = min(all_y_values)
-    y_max_val = max(all_y_values)
-    
-    price_span = y_max_val - y_min_val
+    price_span = chart_high - chart_low
     if price_span <= 0:
         price_span = chart_high * 0.002
     
-    y_min_fit = y_min_val - (price_span * 0.05)
-    y_max_fit = y_max_val + (price_span * 0.05)
+    y_min_fit = chart_low - (price_span * 0.1)
+    y_max_fit = chart_high + (price_span * 0.1)
 
     fig.update_layout(
         xaxis_rangeslider_visible=False,
@@ -882,13 +879,18 @@ with tab_single:
     </div>
     """, unsafe_allow_html=True)
     
-    # 修正点1: 反映ボタンでslmodeを固定pipsに変更して不整合を防ぐ
-    if st.button("🤖 AIの提案値を手動設定に反映"):
-        st.session_state[side_key] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
-        st.session_state[entry_key] = float(ai_entry)
-        st.session_state[slpips_key] = float(ai_sl_pips)
-        st.session_state[slmode_key] = "固定 pips"
-        st.rerun()
+    c_btn1, c_btn2 = st.columns(2)
+    with c_btn1:
+        if st.button("🤖 AIの提案値を手動設定に反映"):
+            st.session_state[side_key] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
+            st.session_state[entry_key] = float(ai_entry)
+            st.session_state[slpips_key] = float(ai_sl_pips)
+            st.session_state[slmode_key] = "固定 pips"
+            st.rerun()
+    with c_btn2:
+        if st.button("📍 手動設定のレートを現在価格へ更新"):
+            st.session_state[entry_key] = float(latest_price)
+            st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -972,9 +974,20 @@ with tab_news:
 
 # --- タブ4: 松井証券 リピート設定 & リスク管理 ---
 with tab_repeat:
-    trap_width_pips = max(15, int(round((atr_4h / pip_unit))))
-    half_range_pips = abs(user_upper - user_half) / pip_unit
+    default_trap_pips = max(15, int(round((atr_4h / pip_unit))))
     
+    # 修正点: リピート注文幅（トラップ幅）の手動調整UIを追加
+    trap_width_pips = st.number_input(
+        "注文幅 / 利確幅 (pips)", 
+        min_value=5, 
+        max_value=500, 
+        value=default_trap_pips, 
+        step=5,
+        key=f"trap_width_{ticker}",
+        help="松井証券リピート自動売買の1本あたりの注文間隔および利確幅"
+    )
+
+    half_range_pips = abs(user_upper - user_half) / pip_unit
     half_grid_count = max(1, int(np.floor(half_range_pips / trap_width_pips)))
     total_grid_count = half_grid_count * 2
 
