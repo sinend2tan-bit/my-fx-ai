@@ -145,11 +145,13 @@ def clean_series(s):
     return s
 
 def safe_to_tokyo_tz(df):
+    """タイムゾーンの有無を判定して安全にAsia/Tokyoに変換"""
     df_out = df.copy()
     try:
-        if df_out.index.tz is None:
-            df_out.index = df_out.index.tz_localize("UTC")
-        df_out.index = df_out.index.tz_convert("Asia/Tokyo")
+        if isinstance(df_out.index, pd.DatetimeIndex):
+            if df_out.index.tz is None:
+                df_out.index = df_out.index.tz_localize("UTC")
+            df_out.index = df_out.index.tz_convert("Asia/Tokyo")
     except Exception:
         pass
     return df_out
@@ -180,17 +182,19 @@ def fetch_news_and_impact(symbol):
     try:
         tk = yf.Ticker(symbol)
         news_list = tk.news
-        if not news_list:
+        if not news_list or not isinstance(news_list, list):
             return []
         
         parsed_news = []
         for item in news_list[:10]:
+            if not isinstance(item, dict):
+                continue
             content = item.get("content", {}) if isinstance(item.get("content"), dict) else item
             title = content.get("title") or item.get("title", "No Title")
-            publisher = content.get("provider", {}).get("displayName") if isinstance(content.get("provider"), dict) else item.get("publisher", "市場ニュース")
-            if not publisher:
-                publisher = "市場ニュース"
             
+            provider = content.get("provider", {}) if isinstance(content.get("provider"), dict) else {}
+            publisher = provider.get("displayName") or item.get("publisher", "市場ニュース")
+
             # リンク取得
             click_url = "#"
             if isinstance(content.get("canonicalUrl"), dict):
@@ -211,8 +215,7 @@ def fetch_news_and_impact(symbol):
             else:
                 dt_str = "直近"
 
-            # 簡易AIテキスト・インパクト解析
-            t_lower = title.lower()
+            t_lower = str(title).lower()
             impact_level = "ℹ️ 普通"
             direction = "↔️ 中立 / ボラティリティ注意"
             reason = "全般的な市況ニュース"
@@ -394,6 +397,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         X_test = X.iloc[-test_size:]
         y_test = y.iloc[-test_size:]
 
+        # クラス数の検証（少なくとも2つのクラスが必要）
         if len(np.unique(y_train)) < 2: 
             return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
 
@@ -407,8 +411,8 @@ def analyze_signal_with_backtest(df_current, df_htf):
         latest_X = df_current[avail].iloc[[-1]].fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         
+        # 安全な確率マッピング（存在しないクラスは0.0で補完）
         class_prob_map = {float(k): v for k, v in zip(model.classes_, prob_array)}
-        
         prob_up = float(class_prob_map.get(1.0, 0.0))
         prob_down = float(class_prob_map.get(-1.0, 0.0))
         prob_wait = float(class_prob_map.get(0.0, 0.0))
@@ -424,7 +428,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
             "wait": round(prob_wait * 100, 1)
         }
 
-        # 日本語ラベル化した特徴量重要度
         ja_index = [FEATURE_LABELS_JA.get(col, col) for col in avail]
         importances = pd.Series(model.feature_importances_, index=ja_index).sort_values(ascending=True)
 
@@ -475,15 +478,13 @@ st.sidebar.number_input(
     "口座資金 (円)", 
     min_value=10000, 
     step=50000, 
-    key="account_balance",
-    on_change=save_settings
+    key="account_balance"
 )
 st.sidebar.number_input(
     "1注文の基本数量 (万通貨)", 
     min_value=0.01, 
     step=0.01, 
-    key="quantity_wan",
-    on_change=save_settings
+    key="quantity_wan"
 )
 
 st.sidebar.markdown("---")
@@ -494,7 +495,6 @@ st.sidebar.number_input(
     max_value=10.0,
     step=0.1,
     key="risk_percent",
-    on_change=save_settings,
     help="1回の単発トレードで損切になった際に許容する口座資金の割合"
 )
 st.sidebar.number_input(
@@ -503,14 +503,13 @@ st.sidebar.number_input(
     max_value=5.0,
     step=0.1,
     key="rr_ratio",
-    on_change=save_settings,
     help="損切幅に対して狙う利確幅の比率 (例: 1.5 = 損切10pipsに対し利確15pips)"
 )
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新設定")
 if HAS_AUTOREFRESH:
-    st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh", on_change=save_settings)
+    st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh")
     if st.session_state["auto_refresh"]:
         st_autorefresh(interval=60000, key="datarefresh")
 else:
@@ -589,11 +588,10 @@ if need_reset:
         "lower": float(swing_low_4h),
         "upper": float(swing_high_4h)
     }
-    save_settings()
 
 current_range = st.session_state["ranges"][ticker]
 
-# 通貨ペア固有のキー名で初期化（競合バグ防止）
+# 通貨ペア固有のキー名で初期化
 key_lower = f"in_lower_{ticker}"
 key_upper = f"in_upper_{ticker}"
 
@@ -611,7 +609,6 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
             "lower": float(st.session_state[key_lower]),
             "upper": float(st.session_state[key_upper])
         }
-        save_settings()
 
     in_lower = rc1.number_input(
         "レンジ下限", 
@@ -635,7 +632,6 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
             "lower": float(swing_low_4h),
             "upper": float(swing_high_4h)
         }
-        save_settings()
         st.rerun()
 
     user_lower = min(in_lower, in_upper)
@@ -663,7 +659,7 @@ tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
 
 # --- タブ1: メインチャート ---
 with tab_chart:
-    df_chart = safe_to_tokyo_tz(data.tail(120))
+    df_chart = safe_to_tokyo_tz(data.tail(120)).ffill()
     fmt_str = '%Y-%m-%d' if '日足' in tf_label else '%m-%d %H:%M'
     x_labels = df_chart.index.strftime(fmt_str)
 
@@ -717,11 +713,9 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
-    # 修正点: レンジラインも含めたY軸の適切なスケール自動調整（ライン見切れバグ防止）
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
-    # 描画対象の全ラインを考慮して上下限を決定
     all_y_values = [chart_high, chart_low, user_lower, user_upper, buy_stop_loss, sell_stop_loss]
     y_min_val = min(all_y_values)
     y_max_val = max(all_y_values)
@@ -793,6 +787,14 @@ with tab_single:
     ai_profit_yen = ai_tp_pips * pip_val_per_wan * ai_rec_wan
     ai_loss_yen = ai_sl_pips * pip_val_per_wan * ai_rec_wan
 
+    # 手動設定用の初期化（順序の正常化）
+    if f"side_{ticker}" not in st.session_state:
+        st.session_state[f"side_{ticker}"] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
+    if f"entry_{ticker}" not in st.session_state:
+        st.session_state[f"entry_{ticker}"] = float(latest_price)
+    if f"slpips_{ticker}" not in st.session_state:
+        st.session_state[f"slpips_{ticker}"] = float(ai_sl_pips)
+
     st.markdown('<div class="ai-card">', unsafe_allow_html=True)
     st.markdown("#### 🤖 AI提案トレードプラン")
     
@@ -819,7 +821,6 @@ with tab_single:
     </div>
     """, unsafe_allow_html=True)
     
-    # 修正点: AIの提案値を手動フォームの各キーへ同期反映
     if st.button("🤖 AIの提案値を手動設定に反映"):
         st.session_state[f"side_{ticker}"] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
         st.session_state[f"entry_{ticker}"] = float(ai_entry)
@@ -833,14 +834,6 @@ with tab_single:
     st.caption("AIの算出結果をベースに、エントリー価格や損切幅・リスクリワード比を自由に変更できます。")
 
     sc1, sc2 = st.columns(2)
-    
-    # 通貨ペア固有のキー初期化
-    if f"side_{ticker}" not in st.session_state:
-        st.session_state[f"side_{ticker}"] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
-    if f"entry_{ticker}" not in st.session_state:
-        st.session_state[f"entry_{ticker}"] = float(latest_price)
-    if f"slpips_{ticker}" not in st.session_state:
-        st.session_state[f"slpips_{ticker}"] = float(ai_sl_pips)
 
     with sc1:
         trade_side = st.radio("売買方向", ["BUY (買い)", "SELL (売り)"], key=f"side_{ticker}", horizontal=True)
@@ -880,7 +873,6 @@ with tab_news:
     st.markdown("##### 📰 リアルタイム為替ニュース & AI事前影響予測")
     st.caption("海外市場の最新ニュースをリアルタイム取得し、市場への影響度や値動きの方向性をAIが事前予測します。")
 
-    # 主要経済指標のアラートガイド
     with st.expander("🔔 注目すべき主要経済指標と為替への影響パターン", expanded=True):
         st.markdown("""
         | 経済指標・イベント | 注目ポイント | ドル円(USD/JPY)への影響予測 |
