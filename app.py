@@ -196,6 +196,9 @@ def flatten_yf_df(df):
             
     df_out = df_out.loc[:, ~df_out.columns.duplicated()]
     df_out.columns = [str(c).capitalize() for c in df_out.columns]
+    
+    # 重複インデックスの除去
+    df_out = df_out.loc[~df_out.index.duplicated(keep='last')]
     return df_out
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -244,6 +247,10 @@ def fetch_news_and_impact(symbol):
                 click_url = canonical
             elif "link" in item:
                 click_url = str(item["link"])
+
+            # 相対URLの場合の補正 (https:// 補完)
+            if click_url.startswith("/"):
+                click_url = f"https://finance.yahoo.com{click_url}"
 
             pub_time = content.get("pubDate") or item.get("providerPublishTime", None)
             if isinstance(pub_time, (int, float)):
@@ -487,14 +494,15 @@ def analyze_signal_with_backtest(df_current, df_htf):
         latest_X = df_current[avail].iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         
-        class_prob_map = {float(k): v for k, v in zip(model.classes_, prob_array)}
-        prob_up = float(class_prob_map.get(1.0, 0.0))
-        prob_down = float(class_prob_map.get(-1.0, 0.0))
-        prob_wait = float(class_prob_map.get(0.0, 0.0))
+        # 安全なクラス確率マッピング（モデルに含まれないクラスを0.0として堅牢に処理）
+        class_prob_map = {float(cls_val): float(p) for cls_val, p in zip(model.classes_, prob_array)}
+        prob_up = class_prob_map.get(1.0, 0.0)
+        prob_down = class_prob_map.get(-1.0, 0.0)
+        prob_wait = class_prob_map.get(0.0, 0.0)
         
         total_p = prob_up + prob_down + prob_wait
         if total_p > 0:
-            prob_up, prob_down, prob_wait = prob_up/total_p, prob_down/total_p, prob_wait/total_p
+            prob_up, prob_down, prob_wait = prob_up / total_p, prob_down / total_p, prob_wait / total_p
 
         conf = max(prob_up, prob_down) * 100
         prob_dict = {
