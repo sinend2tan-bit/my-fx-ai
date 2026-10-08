@@ -33,7 +33,7 @@ SETTINGS_FILE = "user_settings.json"
 def convert_to_builtin_type(obj):
     """NumPy型などをPython組み込み型へ変換してJSONシリアライズエラーを防止"""
     if isinstance(obj, dict):
-        return {k: convert_to_builtin_type(v) for k, v in obj.items()}
+        return {str(k): convert_to_builtin_type(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [convert_to_builtin_type(i) for i in obj]
     elif isinstance(obj, (np.integer, np.int64, np.int32)):
@@ -695,15 +695,27 @@ if need_reset:
         "upper": float(swing_high_4h)
     }
 
-current_range = st.session_state["ranges"][ticker]
-
 key_lower = f"in_lower_{ticker}"
 key_upper = f"in_upper_{ticker}"
 
-# ranges と Widget キーの即時同期
-if key_lower not in st.session_state or need_reset:
+# フラグの確認（4時間足自動計算ボタン押下時の安全な値反映）
+auto_calc_flag_key = f"do_auto_calc_{ticker}"
+if st.session_state.get(auto_calc_flag_key, False):
+    st.session_state["ranges"][ticker] = {
+        "lower": float(swing_low_4h),
+        "upper": float(swing_high_4h)
+    }
+    st.session_state[key_lower] = float(swing_low_4h)
+    st.session_state[key_upper] = float(swing_high_4h)
+    st.session_state[auto_calc_flag_key] = False
+    save_settings()
+
+current_range = st.session_state["ranges"][ticker]
+
+# ranges と Widget キーの初期同期
+if key_lower not in st.session_state:
     st.session_state[key_lower] = float(current_range["lower"])
-if key_upper not in st.session_state or need_reset:
+if key_upper not in st.session_state:
     st.session_state[key_upper] = float(current_range["upper"])
 
 # レンジ調整UI
@@ -732,15 +744,10 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         on_change=update_range_callback
     )
     
-    if st.button("✨ 4時間足高値・安値からレンジを自動計算"):
-        st.session_state[key_lower] = float(swing_low_4h)
-        st.session_state[key_upper] = float(swing_high_4h)
-        st.session_state["ranges"][ticker] = {
-            "lower": float(swing_low_4h),
-            "upper": float(swing_high_4h)
-        }
-        save_settings()
-        st.rerun()
+    def trigger_auto_calc():
+        st.session_state[auto_calc_flag_key] = True
+
+    st.button("✨ 4時間足高値・安値からレンジを自動計算", on_click=trigger_auto_calc)
 
     user_lower = min(in_lower, in_upper)
     user_upper = max(in_lower, in_upper)
@@ -954,18 +961,20 @@ with tab_single:
     </div>
     """, unsafe_allow_html=True)
     
+    def apply_ai_proposal():
+        st.session_state[side_key] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
+        st.session_state[entry_key] = float(ai_entry)
+        st.session_state[slpips_key] = float(ai_sl_pips)
+        st.session_state[slmode_key] = "固定 pips"
+
+    def reset_entry_to_latest():
+        st.session_state[entry_key] = float(latest_price)
+
     c_btn1, c_btn2 = st.columns(2)
     with c_btn1:
-        if st.button("🤖 AIの提案値を手動設定に反映"):
-            st.session_state[side_key] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
-            st.session_state[entry_key] = float(ai_entry)
-            st.session_state[slpips_key] = float(ai_sl_pips)
-            st.session_state[slmode_key] = "固定 pips"
-            st.rerun()
+        st.button("🤖 AIの提案値を手動設定に反映", on_click=apply_ai_proposal)
     with c_btn2:
-        if st.button("📍 手動設定のレートを現在価格へ更新"):
-            st.session_state[entry_key] = float(latest_price)
-            st.rerun()
+        st.button("📍 手動設定のレートを現在価格へ更新", on_click=reset_entry_to_latest)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
