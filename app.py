@@ -360,12 +360,13 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         cond_buy_only = (f_high >= tp_t) & (f_low < sl_t)
         cond_sell_only = (f_low >= tp_t) & (f_high < sl_t)
         
+        # 改善点: 両方の条件を満たす(乱高下相場)場合は0.0(様子見)にする
         target_series = pd.Series(np.nan, index=df.index)
         valid_future = f_high.notna() & f_low.notna()
         
-        target_series[valid_future & cond_buy_only] = 1.0
-        target_series[valid_future & cond_sell_only] = -1.0
-        target_series[valid_future & ~cond_buy_only & ~cond_sell_only] = 0.0
+        target_series[valid_future] = 0.0
+        target_series[valid_future & cond_buy_only & ~cond_sell_only] = 1.0
+        target_series[valid_future & cond_sell_only & ~cond_buy_only] = -1.0
         df["Target"] = target_series
         
         feat_cols = [c for c in FEATURE_COLUMNS if c in df.columns]
@@ -405,8 +406,10 @@ def analyze_signal_with_backtest(df_current, df_htf):
         model.fit(X_train, y_train)
 
         preds = model.predict(X_test)
-        valid_eval = (preds != 0) & (y_test != 0)
-        win_rate = float((preds[valid_eval] == y_test[valid_eval]).mean() * 100) if valid_eval.sum() > 0 else 50.0
+        # 改善点: インデックスの整合性を保つため Pandas Series にラップ
+        preds_series = pd.Series(preds, index=y_test.index)
+        valid_eval = (preds_series != 0) & (y_test != 0)
+        win_rate = float((preds_series[valid_eval] == y_test[valid_eval]).mean() * 100) if valid_eval.sum() > 0 else 50.0
 
         latest_X = df_current[avail].iloc[[-1]].fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
@@ -472,19 +475,21 @@ is_jpy = "JPY" in ticker
 pip_unit = 0.01 if is_jpy else 0.0001
 price_fmt = "%.3f" if is_jpy else "%.5f"
 
-# サイドバー設定
+# サイドバー設定 (改善点: on_change で即座に物理ファイルへオートセーブ)
 st.sidebar.header("⚙️ 資金 & リスク設定")
 st.sidebar.number_input(
     "口座資金 (円)", 
     min_value=10000, 
     step=50000, 
-    key="account_balance"
+    key="account_balance",
+    on_change=save_settings
 )
 st.sidebar.number_input(
     "1注文の基本数量 (万通貨)", 
     min_value=0.01, 
     step=0.01, 
-    key="quantity_wan"
+    key="quantity_wan",
+    on_change=save_settings
 )
 
 st.sidebar.markdown("---")
@@ -495,6 +500,7 @@ st.sidebar.number_input(
     max_value=10.0,
     step=0.1,
     key="risk_percent",
+    on_change=save_settings,
     help="1回の単発トレードで損切になった際に許容する口座資金の割合"
 )
 st.sidebar.number_input(
@@ -503,13 +509,14 @@ st.sidebar.number_input(
     max_value=5.0,
     step=0.1,
     key="rr_ratio",
+    on_change=save_settings,
     help="損切幅に対して狙う利確幅の比率 (例: 1.5 = 損切10pipsに対し利確15pips)"
 )
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新設定")
 if HAS_AUTOREFRESH:
-    st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh")
+    st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh", on_change=save_settings)
     if st.session_state["auto_refresh"]:
         st_autorefresh(interval=60000, key="datarefresh")
 else:
@@ -541,7 +548,7 @@ now_jst = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S")
 st.markdown(f'<div class="update-time">最終データ取得日時: <b>{now_jst} JST</b></div>', unsafe_allow_html=True)
 
 latest_price = float(clean_series(data["Close"]).iloc[-1])
-latest_atr = float(clean_series(data["ATR"]).iloc[-1])
+latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns else (latest_price * 0.005)
 
 status, conf, win_rate, m_type, prob_dict, feature_importances = analyze_signal_with_backtest(data, data_htf)
 
@@ -565,7 +572,7 @@ st.markdown("---")
 # ==========================================
 swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min())
-atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1])
+atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1]) if "ATR" in data_4h.columns else (latest_price * 0.005)
 
 def is_valid_range(r_low, r_up, current_p):
     if r_low <= 0 or r_up <= 0 or r_low >= r_up:
@@ -609,6 +616,7 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
             "lower": float(st.session_state[key_lower]),
             "upper": float(st.session_state[key_upper])
         }
+        save_settings()
 
     in_lower = rc1.number_input(
         "レンジ下限", 
@@ -632,6 +640,7 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
             "lower": float(swing_low_4h),
             "upper": float(swing_high_4h)
         }
+        save_settings()
         st.rerun()
 
     user_lower = min(in_lower, in_upper)
@@ -787,13 +796,20 @@ with tab_single:
     ai_profit_yen = ai_tp_pips * pip_val_per_wan * ai_rec_wan
     ai_loss_yen = ai_sl_pips * pip_val_per_wan * ai_rec_wan
 
-    # 手動設定用の初期化（順序の正常化）
-    if f"side_{ticker}" not in st.session_state:
-        st.session_state[f"side_{ticker}"] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
-    if f"entry_{ticker}" not in st.session_state:
-        st.session_state[f"entry_{ticker}"] = float(latest_price)
-    if f"slpips_{ticker}" not in st.session_state:
-        st.session_state[f"slpips_{ticker}"] = float(ai_sl_pips)
+    # 改善点: 通貨ペア切替時の手動設定の同期＆安全な初期化
+    entry_key = f"entry_{ticker}"
+    side_key = f"side_{ticker}"
+    slpips_key = f"slpips_{ticker}"
+
+    if side_key not in st.session_state:
+        st.session_state[side_key] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
+    
+    # 手動レートが未登録または大幅に現在のレートからズレている(通貨ペア切り替え直後)場合は自動調整
+    if entry_key not in st.session_state or abs(st.session_state[entry_key] - latest_price) / latest_price > 0.2:
+        st.session_state[entry_key] = float(latest_price)
+        
+    if slpips_key not in st.session_state:
+        st.session_state[slpips_key] = float(ai_sl_pips)
 
     st.markdown('<div class="ai-card">', unsafe_allow_html=True)
     st.markdown("#### 🤖 AI提案トレードプラン")
@@ -822,9 +838,9 @@ with tab_single:
     """, unsafe_allow_html=True)
     
     if st.button("🤖 AIの提案値を手動設定に反映"):
-        st.session_state[f"side_{ticker}"] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
-        st.session_state[f"entry_{ticker}"] = float(ai_entry)
-        st.session_state[f"slpips_{ticker}"] = float(ai_sl_pips)
+        st.session_state[side_key] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
+        st.session_state[entry_key] = float(ai_entry)
+        st.session_state[slpips_key] = float(ai_sl_pips)
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -836,8 +852,8 @@ with tab_single:
     sc1, sc2 = st.columns(2)
 
     with sc1:
-        trade_side = st.radio("売買方向", ["BUY (買い)", "SELL (売り)"], key=f"side_{ticker}", horizontal=True)
-        entry_price = st.number_input("エントリー想定レート", key=f"entry_{ticker}", format=price_fmt, step=0.01 if is_jpy else 0.0001)
+        trade_side = st.radio("売買方向", ["BUY (買い)", "SELL (売り)"], key=side_key, horizontal=True)
+        entry_price = st.number_input("エントリー想定レート", key=entry_key, format=price_fmt, step=0.01 if is_jpy else 0.0001)
 
     with sc2:
         sl_mode = st.radio("損切(SL)の決め方", ["ATRベース (推奨)", "固定 pips"], horizontal=True, key=f"slmode_{ticker}")
@@ -846,7 +862,7 @@ with tab_single:
             sl_pips = round((latest_atr / pip_unit) * atr_multiplier, 1)
             st.info(f"現在のATR: {latest_atr/pip_unit:.1f} pips ➔ 損切幅: **{sl_pips} pips**")
         else:
-            sl_pips = st.number_input("損切幅 (pips)", min_value=1.0, step=1.0, key=f"slpips_{ticker}")
+            sl_pips = st.number_input("損切幅 (pips)", min_value=1.0, step=1.0, key=slpips_key)
 
     rr_value = st.slider("リスクリワード比 (RR)", min_value=0.5, max_value=4.0, value=float(st.session_state["rr_ratio"]), step=0.1, key=f"rr_{ticker}")
     tp_pips = round(sl_pips * rr_value, 1)
