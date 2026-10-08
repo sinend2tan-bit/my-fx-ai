@@ -50,11 +50,11 @@ def load_settings():
 def save_settings():
     """現在の Session State を JSON ファイルへ保存"""
     settings = {
-        "account_balance": st.session_state.get("account_balance", 500000),
-        "quantity_wan": st.session_state.get("quantity_wan", 0.10),
-        "auto_refresh": st.session_state.get("auto_refresh", False),
-        "risk_percent": st.session_state.get("risk_percent", 1.0),
-        "rr_ratio": st.session_state.get("rr_ratio", 1.5),
+        "account_balance": float(st.session_state.get("account_balance", 500000)),
+        "quantity_wan": float(st.session_state.get("quantity_wan", 0.10)),
+        "auto_refresh": bool(st.session_state.get("auto_refresh", False)),
+        "risk_percent": float(st.session_state.get("risk_percent", 1.0)),
+        "rr_ratio": float(st.session_state.get("rr_ratio", 1.5)),
         "ranges": st.session_state.get("ranges", {})
     }
     try:
@@ -86,15 +86,15 @@ st.markdown("""
 
 # Session State の初期化
 if "account_balance" not in st.session_state:
-    st.session_state["account_balance"] = saved_config.get("account_balance", 500000)
+    st.session_state["account_balance"] = int(saved_config.get("account_balance", 500000))
 if "quantity_wan" not in st.session_state:
-    st.session_state["quantity_wan"] = saved_config.get("quantity_wan", 0.10)
+    st.session_state["quantity_wan"] = float(saved_config.get("quantity_wan", 0.10))
 if "auto_refresh" not in st.session_state:
-    st.session_state["auto_refresh"] = saved_config.get("auto_refresh", False)
+    st.session_state["auto_refresh"] = bool(saved_config.get("auto_refresh", False))
 if "risk_percent" not in st.session_state:
-    st.session_state["risk_percent"] = saved_config.get("risk_percent", 1.0)
+    st.session_state["risk_percent"] = float(saved_config.get("risk_percent", 1.0))
 if "rr_ratio" not in st.session_state:
-    st.session_state["rr_ratio"] = saved_config.get("rr_ratio", 1.5)
+    st.session_state["rr_ratio"] = float(saved_config.get("rr_ratio", 1.5))
 if "ranges" not in st.session_state:
     st.session_state["ranges"] = saved_config.get("ranges", {})
 
@@ -198,6 +198,8 @@ def fetch_news_and_impact(symbol):
         for item in news_list[:10]:
             if not isinstance(item, dict):
                 continue
+            
+            # データ構造のネスト分岐に安全に対応
             content = item.get("content", {}) if isinstance(item.get("content"), dict) else item
             title = content.get("title") or item.get("title", "No Title")
             
@@ -205,10 +207,13 @@ def fetch_news_and_impact(symbol):
             publisher = provider.get("displayName") or item.get("publisher", "市場ニュース")
 
             click_url = "#"
-            if isinstance(content.get("canonicalUrl"), dict):
-                click_url = content["canonicalUrl"].get("url", "#")
+            canonical = content.get("canonicalUrl")
+            if isinstance(canonical, dict):
+                click_url = canonical.get("url", "#")
+            elif isinstance(canonical, str):
+                click_url = canonical
             elif "link" in item:
-                click_url = item["link"]
+                click_url = str(item["link"])
 
             pub_time = content.get("pubDate") or item.get("providerPublishTime", None)
             if isinstance(pub_time, (int, float)):
@@ -360,7 +365,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan)
         df = pd.concat([df, df_feat], axis=1)
 
-        # 時系列到達順序を考慮したTarget算出
+        # 時系列到達順序を考慮したTarget算出（NumPy高速化）
         tp_t = new_cols["ATR"] * 1.0
         sl_t = new_cols["ATR"] * 0.5
         
@@ -378,6 +383,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             tp_dist = tp_vals[i]
             sl_dist = sl_vals[i]
             
+            if np.isnan(tp_dist) or np.isnan(sl_dist):
+                continue
+
             outcome = 0.0
             for j in range(1, LOOKAHEAD_BARS + 1):
                 idx = i + j
@@ -438,7 +446,8 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(np.unique(y_train)) < 2: 
             return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
 
-        model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42, n_jobs=-1)
+        # n_jobs=1 と指定してクラウド環境でのマルチスレッド競合・動作停止を防止
+        model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42, n_jobs=1)
         model.fit(X_train, y_train)
 
         preds = model.predict(X_test)
@@ -763,7 +772,7 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
-    # 修正点: Y軸スケールは表示範囲のローソク足に最適フィットさせ、チャート潰れを解消
+    # Y軸スケールは表示ローソク足に最適フィット
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
@@ -805,8 +814,8 @@ with tab_single:
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
     pip_val_per_wan = 100.0 if is_jpy else (0.0001 * usd_rate * 10000.0)
 
-    account_bal = st.session_state["account_balance"]
-    risk_pct = st.session_state["risk_percent"]
+    account_bal = float(st.session_state["account_balance"])
+    risk_pct = float(st.session_state["risk_percent"])
     max_risk_yen = account_bal * (risk_pct / 100.0)
 
     ai_is_buy = "BUY" in status
@@ -976,14 +985,16 @@ with tab_news:
 with tab_repeat:
     default_trap_pips = max(15, int(round((atr_4h / pip_unit))))
     
-    # 修正点: リピート注文幅（トラップ幅）の手動調整UIを追加
+    trap_width_key = f"trap_width_{ticker}"
+    if trap_width_key not in st.session_state:
+        st.session_state[trap_width_key] = default_trap_pips
+
     trap_width_pips = st.number_input(
         "注文幅 / 利確幅 (pips)", 
         min_value=5, 
         max_value=500, 
-        value=default_trap_pips, 
+        key=trap_width_key,
         step=5,
-        key=f"trap_width_{ticker}",
         help="松井証券リピート自動売買の1本あたりの注文間隔および利確幅"
     )
 
@@ -991,8 +1002,8 @@ with tab_repeat:
     half_grid_count = max(1, int(np.floor(half_range_pips / trap_width_pips)))
     total_grid_count = half_grid_count * 2
 
-    quantity_wan_val = st.session_state["quantity_wan"]
-    account_balance_val = st.session_state["account_balance"]
+    quantity_wan_val = float(st.session_state["quantity_wan"])
+    account_balance_val = float(st.session_state["account_balance"])
 
     order_units = int(quantity_wan_val * 10000)
     usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
