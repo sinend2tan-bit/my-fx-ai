@@ -401,11 +401,11 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).fillna(0)
         df = pd.concat([df, df_feat], axis=1)
 
-        # Target算出
+        # Target算出 (厳密順序判定)
         tp_t = new_cols["ATR"] * 1.0
         sl_t = new_cols["ATR"] * 0.5
         
-        target_values = np.zeros(len(df))
+        target_values = np.zeros(len(df), dtype=int)
         n = len(df)
         
         c_vals = c.values
@@ -422,7 +422,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             if np.isnan(tp_dist) or np.isnan(sl_dist):
                 continue
 
-            outcome = 0.0
+            outcome = 0
             for j in range(1, LOOKAHEAD_BARS + 1):
                 idx = i + j
                 curr_h = h_vals[idx]
@@ -435,18 +435,18 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 sell_sl_hit = (curr_h - entry_p) >= sl_dist
                 
                 if buy_tp_hit and not buy_sl_hit:
-                    outcome = 1.0
+                    outcome = 1
                     break
                 elif sell_tp_hit and not sell_sl_hit:
-                    outcome = -1.0
+                    outcome = -1
                     break
                 elif buy_sl_hit or sell_sl_hit:
-                    outcome = 0.0
+                    outcome = 0
                     break
             
             target_values[i] = outcome
 
-        target_series = pd.Series(target_values, index=df.index)
+        target_series = pd.Series(target_values, index=df.index, dtype="float64")
         target_series.iloc[-LOOKAHEAD_BARS:] = np.nan
         df["Target"] = target_series
 
@@ -463,7 +463,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
 
     try:
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
-        df_valid = df_current.dropna(subset=["Target"])
+        df_valid = df_current.dropna(subset=["Target"]).copy()
+        df_valid["Target"] = df_valid["Target"].astype(int)
+        
         test_size = 80
         gap = LOOKAHEAD_BARS
         min_required = test_size + gap + 40
@@ -498,10 +500,10 @@ def analyze_signal_with_backtest(df_current, df_htf):
         latest_X = df_current[avail].iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         
-        class_prob_map = {float(cls_val): float(p) for cls_val, p in zip(model.classes_, prob_array)}
-        prob_up = class_prob_map.get(1.0, 0.0)
-        prob_down = class_prob_map.get(-1.0, 0.0)
-        prob_wait = class_prob_map.get(0.0, 0.0)
+        class_prob_map = {int(cls_val): float(p) for cls_val, p in zip(model.classes_, prob_array)}
+        prob_up = class_prob_map.get(1, 0.0)
+        prob_down = class_prob_map.get(-1, 0.0)
+        prob_wait = class_prob_map.get(0, 0.0)
         
         total_p = prob_up + prob_down + prob_wait
         if total_p > 0:
@@ -532,8 +534,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
 
         rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
 
-        # === 修正: シグナル判定ロジック ===
-        # BUY / SELL 判定は WAIT 確率より高く、かつ各条件を満たす場合のみ出力
+        # シグナル判定ロジック
         threshold = 0.38
         if prob_up > prob_wait and prob_up >= threshold and prob_up > prob_down and htf_uptrend and rsi_val < 75.0:
             status = "BUY (買い)"
@@ -697,9 +698,10 @@ current_range = st.session_state["ranges"][ticker]
 key_lower = f"in_lower_{ticker}"
 key_upper = f"in_upper_{ticker}"
 
-if key_lower not in st.session_state:
+# 【重要修正】ranges と Widget キーの即時同期
+if key_lower not in st.session_state or need_reset:
     st.session_state[key_lower] = float(current_range["lower"])
-if key_upper not in st.session_state:
+if key_upper not in st.session_state or need_reset:
     st.session_state[key_upper] = float(current_range["upper"])
 
 # レンジ調整UI
@@ -819,20 +821,20 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
-    # Y軸スケールの安全計算（NaNを排除して最小・最大値を計算）
+    # 【修正】Y軸スケールの最適化（ローソク足とレンジ枠を主体に計算しつぶれ防止）
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
-    all_y_vals = [v for v in [chart_high, chart_low, user_upper, user_lower, sell_stop_loss, buy_stop_loss] if not np.isnan(v)]
-    y_max_bound = max(all_y_vals) if all_y_vals else latest_price * 1.01
-    y_min_bound = min(all_y_vals) if all_y_vals else latest_price * 0.99
+    core_y_vals = [v for v in [chart_high, chart_low, user_upper, user_lower] if not np.isnan(v)]
+    y_max_bound = max(core_y_vals) if core_y_vals else latest_price * 1.01
+    y_min_bound = min(core_y_vals) if core_y_vals else latest_price * 0.99
 
     price_span = y_max_bound - y_min_bound
     if price_span <= 0:
         price_span = y_max_bound * 0.002 if y_max_bound > 0 else 1.0
     
-    y_min_fit = y_min_bound - (price_span * 0.05)
-    y_max_fit = y_max_bound + (price_span * 0.05)
+    y_min_fit = y_min_bound - (price_span * 0.08)
+    y_max_fit = y_max_bound + (price_span * 0.08)
 
     fig.update_layout(
         xaxis_rangeslider_visible=False,
