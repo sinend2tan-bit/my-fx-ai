@@ -157,7 +157,7 @@ DEFAULT_SPREAD_PIPS = {
 
 TIMEFRAMES = {
     "5分足 (スキャル用)": {"period": "7d", "interval": "5m"},
-    "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
+    "15分足 (デイトレエントリー用)": {"period": "30d", "interval": "15m"},
     "1時間足 (デイトレメイン用)": {"period": "60d", "interval": "1h"},
     "4時間足 (中期・リピート用)": {"period": "60d", "interval": "1h"},
 }
@@ -230,7 +230,7 @@ def get_usdjpy_rate():
 # ==========================================
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_news_and_impact(symbol):
-    """Yahoo Financeからニュースを取得し、キーワード解析で為替影響を自動予測（新旧API構造両対応）"""
+    """Yahoo Financeからニュースを取得し、キーワード解析で為替影響を自動予測"""
     try:
         tk = yf.Ticker(symbol)
         news_list = tk.news
@@ -242,7 +242,6 @@ def fetch_news_and_impact(symbol):
             if not isinstance(item, dict):
                 continue
             
-            # yfinanceの新旧API構造に柔軟対応
             content = item.get("content", {}) if isinstance(item.get("content"), dict) else item
             title = content.get("title") or item.get("title", "No Title")
             if not title or title == "No Title":
@@ -251,7 +250,6 @@ def fetch_news_and_impact(symbol):
             provider = content.get("provider", {}) if isinstance(content.get("provider"), dict) else {}
             publisher = provider.get("displayName") or item.get("publisher", "市場ニュース")
 
-            # リンクURLの多重フォールバック取得
             click_url = "#"
             canonical = content.get("canonicalUrl")
             click_through = content.get("clickThroughUrl")
@@ -380,7 +378,11 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["Stoch_K"] = 100 * (c - l14) / ((h14 - l14) + 1e-10)
 
         macd = c.ewm(span=12, adjust=False).mean() - c.ewm(span=26, adjust=False).mean()
-        new_cols["MACD_Hist_Ratio"] = (macd - macd.ewm(span=9, adjust=False).mean()) / (c + 1e-10)
+        macd_signal = macd.ewm(span=9, adjust=False).mean()
+        new_cols["MACD"] = macd
+        new_cols["MACD_Signal"] = macd_signal
+        new_cols["MACD_Hist"] = macd - macd_signal
+        new_cols["MACD_Hist_Ratio"] = new_cols["MACD_Hist"] / (c + 1e-10)
 
         std20 = c.rolling(20, min_periods=1).std().fillna(0)
         new_cols["Upper_Band"] = new_cols["SMA_20"] + (std20 * 2)
@@ -413,7 +415,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).fillna(0)
         df = pd.concat([df, df_feat], axis=1)
 
-        # Target算出 (厳密順序判定)
+        # Target算出
         tp_t = new_cols["ATR"] * 1.0
         sl_t = new_cols["ATR"] * 0.5
         
@@ -445,15 +447,12 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 sell_tp_hit = (entry_p - curr_l) >= tp_dist
                 sell_sl_hit = (curr_h - entry_p) >= sl_dist
                 
-                # 買い優勢
                 if buy_tp_hit and not buy_sl_hit:
                     outcome = 1
                     break
-                # 売り優勢
                 elif sell_tp_hit and not sell_sl_hit:
                     outcome = -1
                     break
-                # 双方損切または不確実
                 elif buy_sl_hit or sell_sl_hit:
                     outcome = 0
                     break
@@ -621,7 +620,7 @@ st.sidebar.number_input(
     step=0.1,
     key="rr_ratio",
     on_change=save_settings,
-    help="損切幅に対して狙う利確幅の比率 (例: 1.5 = 損切10pipsに対し利確15pips)"
+    help="損切幅に対して狙う利確幅の比率"
 )
 
 st.sidebar.markdown("---")
@@ -712,7 +711,6 @@ key_upper = f"in_upper_{ticker}"
 
 current_range = st.session_state["ranges"][ticker]
 
-# ranges と Widget キーの初期同期
 if key_lower not in st.session_state:
     st.session_state[key_lower] = float(current_range["lower"])
 if key_upper not in st.session_state:
@@ -730,7 +728,6 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         save_settings()
 
     def trigger_auto_calc_callback():
-        """コールバック内で直接Widgetのキー値を更新して即時反映させる"""
         st.session_state["ranges"][ticker] = {
             "lower": float(swing_low_4h),
             "upper": float(swing_high_4h)
@@ -762,7 +759,6 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         user_upper += pip_unit * 100.0
     user_half = (user_upper + user_lower) / 2.0
 
-# 運用停止ライン（SL）
 stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
 stop_buffer_val = stop_buffer_pips * pip_unit
 buy_stop_loss = user_lower - stop_buffer_val
@@ -781,22 +777,46 @@ tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
 
 # --- タブ1: メインチャート ---
 with tab_chart:
-    df_chart = safe_to_tokyo_tz(data.tail(120)).ffill()
+    # --- チャート表示制御パネル ---
+    ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(4)
+    with ctrl_col1:
+        bars_count = st.slider("表示本数", min_value=30, max_value=300, value=90, step=10, key="chart_bars_slider")
+    with ctrl_col2:
+        show_bb = st.checkbox("ボリンジャーバンド(±2σ)", value=True, key="show_bb_check")
+    with ctrl_col3:
+        show_repeat_lines = st.checkbox("リピートレンジ表示", value=("4時間足" in tf_label), key="show_repeat_lines_check")
+    with ctrl_col4:
+        sub_indicator = st.selectbox("サブ指標", ["RSI (14)", "MACD", "なし"], index=0, key="sub_indicator_select")
+
+    df_chart = safe_to_tokyo_tz(data.tail(bars_count)).ffill()
     df_chart = df_chart.loc[~df_chart.index.duplicated(keep='last')]
     
-    fmt_str = '%Y-%m-%d %H:%M' if '日足' not in tf_label else '%Y-%m-%d'
+    # 時間足別にX軸フォーマットを最適化
+    if "5分" in tf_label or "15分" in tf_label:
+        fmt_str = '%m/%d %H:%M'
+    elif "1時間" in tf_label or "4時間" in tf_label:
+        fmt_str = '%m/%d %H:%M'
+    else:
+        fmt_str = '%Y/%m/%d'
+
     if isinstance(df_chart.index, pd.DatetimeIndex):
         x_labels = df_chart.index.strftime(fmt_str)
     else:
         x_labels = df_chart.index.astype(str)
 
+    # サブチャート行数設定
+    has_sub = sub_indicator != "なし"
+    row_heights = [0.75, 0.25] if has_sub else [1.0]
+    rows_num = 2 if has_sub else 1
+
     fig = make_subplots(
-        rows=2, cols=1, 
+        rows=rows_num, cols=1, 
         shared_xaxes=True, 
-        row_heights=[0.75, 0.25], 
-        vertical_spacing=0.05
+        row_heights=row_heights, 
+        vertical_spacing=0.06
     )
 
+    # ローソク足
     fig.add_trace(go.Candlestick(
         x=x_labels,
         open=clean_series(df_chart["Open"]),
@@ -808,70 +828,111 @@ with tab_chart:
         name="価格"
     ), row=1, col=1)
 
+    # 移動平均線
     if "SMA_20" in df_chart.columns:
         fig.add_trace(go.Scatter(
             x=x_labels, y=clean_series(df_chart["SMA_20"]),
-            line=dict(color="#f59e0b", width=1.2), name="SMA20"
+            line=dict(color="#f59e0b", width=1.5), name="SMA20"
         ), row=1, col=1)
 
     if "EMA_200" in df_chart.columns:
         fig.add_trace(go.Scatter(
             x=x_labels, y=clean_series(df_chart["EMA_200"]),
-            line=dict(color="#38bdf8", width=1.8), name="EMA200"
+            line=dict(color="#38bdf8", width=2.0), name="EMA200"
         ), row=1, col=1)
 
-    if not np.isnan(user_lower) and not np.isnan(user_upper):
-        fig.add_hrect(
-            y0=user_lower, y1=user_upper, 
-            fillcolor="rgba(56, 189, 248, 0.06)", line_width=0, 
-            row=1, col=1
-        )
-    
-    if not np.isnan(sell_stop_loss):
-        fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#dc2626", annotation_text="売 SL", annotation_position="top right", row=1, col=1)
-    if not np.isnan(user_upper):
-        fig.add_hline(y=user_upper, line_dash="dash", line_color="#f87171", annotation_text="上限", annotation_position="bottom right", row=1, col=1)
-    if not np.isnan(user_half):
-        fig.add_hline(y=user_half, line_dash="dot", line_color="#c084fc", annotation_text="中央", annotation_position="top right", row=1, col=1)
-    if not np.isnan(user_lower):
-        fig.add_hline(y=user_lower, line_dash="dash", line_color="#4ade80", annotation_text="下限", annotation_position="top right", row=1, col=1)
-    if not np.isnan(buy_stop_loss):
-        fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#16a34a", annotation_text="買 SL", annotation_position="bottom right", row=1, col=1)
+    # ボリンジャーバンド
+    if show_bb and "Upper_Band" in df_chart.columns and "Lower_Band" in df_chart.columns:
+        fig.add_trace(go.Scatter(
+            x=x_labels, y=clean_series(df_chart["Upper_Band"]),
+            line=dict(color="rgba(148, 163, 184, 0.4)", width=1, dash="dot"),
+            name="BB +2σ"
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=x_labels, y=clean_series(df_chart["Lower_Band"]),
+            line=dict(color="rgba(148, 163, 184, 0.4)", width=1, dash="dot"),
+            fill='tonexty', fillcolor='rgba(148, 163, 184, 0.05)',
+            name="BB -2σ"
+        ), row=1, col=1)
 
-    if "RSI" in df_chart.columns:
+    # リピートレンジライン（ユーザーがチェックを入れた場合のみ）
+    if show_repeat_lines:
+        if not np.isnan(user_lower) and not np.isnan(user_upper):
+            fig.add_hrect(
+                y0=user_lower, y1=user_upper, 
+                fillcolor="rgba(56, 189, 248, 0.05)", line_width=0, 
+                row=1, col=1
+            )
+        if not np.isnan(sell_stop_loss):
+            fig.add_hline(y=sell_stop_loss, line_dash="dashdot", line_color="#dc2626", annotation_text="売SL", annotation_position="top right", row=1, col=1)
+        if not np.isnan(user_upper):
+            fig.add_hline(y=user_upper, line_dash="dash", line_color="#f87171", annotation_text="上限", annotation_position="bottom right", row=1, col=1)
+        if not np.isnan(user_half):
+            fig.add_hline(y=user_half, line_dash="dot", line_color="#c084fc", annotation_text="中央", annotation_position="top right", row=1, col=1)
+        if not np.isnan(user_lower):
+            fig.add_hline(y=user_lower, line_dash="dash", line_color="#4ade80", annotation_text="下限", annotation_position="top right", row=1, col=1)
+        if not np.isnan(buy_stop_loss):
+            fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#16a34a", annotation_text="買SL", annotation_position="bottom right", row=1, col=1)
+
+    # サブチャート描画
+    if sub_indicator == "RSI (14)" and "RSI" in df_chart.columns:
         fig.add_trace(go.Scatter(
             x=x_labels, y=clean_series(df_chart["RSI"]),
-            line=dict(color="#a855f7", width=1.5), name="RSI"
+            line=dict(color="#a855f7", width=1.8), name="RSI"
         ), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
-        fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="#ef4444", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="#22c55e", row=2, col=1)
+        fig.update_yaxes(range=[0, 100], side="right", row=2, col=1)
 
-    # Y軸スケールの最適化
+    elif sub_indicator == "MACD" and "MACD" in df_chart.columns:
+        fig.add_trace(go.Scatter(
+            x=x_labels, y=clean_series(df_chart["MACD"]),
+            line=dict(color="#38bdf8", width=1.5), name="MACD"
+        ), row=2, col=1)
+        fig.add_trace(go.Scatter(
+            x=x_labels, y=clean_series(df_chart["MACD_Signal"]),
+            line=dict(color="#f59e0b", width=1.5), name="Signal"
+        ), row=2, col=1)
+        hist_colors = ['#22c55e' if v >= 0 else '#ef4444' for v in clean_series(df_chart["MACD_Hist"])]
+        fig.add_trace(go.Bar(
+            x=x_labels, y=clean_series(df_chart["MACD_Hist"]),
+            marker_color=hist_colors, name="Hist"
+        ), row=2, col=1)
+        fig.update_yaxes(side="right", row=2, col=1)
+
+    # 【重要改修】Y軸スケールの完全最適化（ローソク足にフィットさせ、つぶれを防止）
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
-    core_y_vals = [v for v in [chart_high, chart_low, user_upper, user_lower] if not np.isnan(v)]
-    y_max_bound = max(core_y_vals) if core_y_vals else latest_price * 1.01
-    y_min_bound = min(core_y_vals) if core_y_vals else latest_price * 0.99
+    # スケール判定用価格帯（ローソク足＋移動平均線のみ対象とし、離れたリピートレンジ値を除外）
+    valid_y = [chart_high, chart_low]
+    if "SMA_20" in df_chart.columns:
+        valid_y.append(float(clean_series(df_chart["SMA_20"]).dropna().max()))
+        valid_y.append(float(clean_series(df_chart["SMA_20"]).dropna().min()))
 
+    y_max_bound = max(valid_y)
+    y_min_bound = min(valid_y)
     price_span = y_max_bound - y_min_bound
     if price_span <= 0:
-        price_span = y_max_bound * 0.002 if y_max_bound > 0 else 1.0
-    
-    y_min_fit = y_min_bound - (price_span * 0.08)
-    y_max_fit = y_max_bound + (price_span * 0.08)
+        price_span = y_max_bound * 0.002
+
+    # 余白5%を確保してクッキリ表示
+    y_min_fit = y_min_bound - (price_span * 0.05)
+    y_max_fit = y_max_bound + (price_span * 0.05)
 
     fig.update_layout(
         xaxis_rangeslider_visible=False,
-        height=600,
-        margin=dict(l=10, r=80, t=20, b=10),
+        height=580,
+        margin=dict(l=10, r=70, t=25, b=10),
         template="plotly_dark",
         hovermode="x unified",
         showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1)
     )
     
-    fig.update_xaxes(type='category', nticks=12, tickangle=-30, showspikes=True)
+    # カテゴリ軸の目盛り表示数を調整（詰まり防止）
+    nticks_val = min(len(x_labels), 12)
+    fig.update_xaxes(type='category', nticks=nticks_val, tickangle=-25, showspikes=True)
     
     fig.update_yaxes(
         range=[y_min_fit, y_max_fit],
@@ -880,7 +941,6 @@ with tab_chart:
         tickformat=".3f" if is_jpy else ".5f",
         row=1, col=1
     )
-    fig.update_yaxes(range=[0, 100], side="right", row=2, col=1)
 
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
 
@@ -914,7 +974,6 @@ with tab_single:
     ai_sl_price = ai_entry - (ai_sl_pips * pip_unit) if "BUY" in ai_direction else ai_entry + (ai_sl_pips * pip_unit)
     ai_tp_price = ai_entry + (ai_tp_pips * pip_unit) if "BUY" in ai_direction else ai_entry - (ai_tp_pips * pip_unit)
 
-    # スプレッドコストを含む実効計算
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
     ai_rec_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.01
     ai_rec_wan = max(0.01, round(ai_rec_wan, 2))
@@ -922,7 +981,6 @@ with tab_single:
     ai_profit_yen = (ai_tp_pips - spread_pips) * pip_val_per_wan * ai_rec_wan
     ai_loss_yen = (ai_sl_pips + spread_pips) * pip_val_per_wan * ai_rec_wan
     
-    # 必要証拠金計算（レバレッジ25倍）
     req_margin_yen = (ai_entry * (ai_rec_wan * 10000)) / 25.0 if is_jpy else (ai_entry * usd_rate * (ai_rec_wan * 10000)) / 25.0
 
     entry_key = f"entry_{ticker}"
