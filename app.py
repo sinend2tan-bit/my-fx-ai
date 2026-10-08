@@ -353,23 +353,58 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan)
         df = pd.concat([df, df_feat], axis=1)
 
-        f_high = pd.concat([h.shift(-i) for i in range(1, LOOKAHEAD_BARS + 1)], axis=1).max(axis=1) - c
-        f_low = c - pd.concat([l.shift(-i) for i in range(1, LOOKAHEAD_BARS + 1)], axis=1).min(axis=1)
-        tp_t, sl_t = new_cols["ATR"] * 1.0, new_cols["ATR"] * 0.5
+        # ---------------------------------------------------------
+        # 改善点1: 時系列の到達順序（先読みリーク対策）を厳密化したTarget算出
+        # ---------------------------------------------------------
+        tp_t = new_cols["ATR"] * 1.0
+        sl_t = new_cols["ATR"] * 0.5
         
-        cond_buy_only = (f_high >= tp_t) & (f_low < sl_t)
-        cond_sell_only = (f_low >= tp_t) & (f_high < sl_t)
+        target_values = np.zeros(len(df))
+        n = len(df)
         
-        # 改善点: 両方の条件を満たす(乱高下相場)場合は0.0(様子見)にする
-        target_series = pd.Series(np.nan, index=df.index)
-        valid_future = f_high.notna() & f_low.notna()
-        
-        target_series[valid_future] = 0.0
-        target_series[valid_future & cond_buy_only & ~cond_sell_only] = 1.0
-        target_series[valid_future & cond_sell_only & ~cond_buy_only] = -1.0
+        c_vals = c.values
+        h_vals = h.values
+        l_vals = l.values
+        tp_vals = tp_t.values
+        sl_vals = sl_t.values
+
+        for i in range(n - LOOKAHEAD_BARS):
+            entry_p = c_vals[i]
+            tp_dist = tp_vals[i]
+            sl_dist = sl_vals[i]
+            
+            outcome = 0.0
+            for j in range(1, LOOKAHEAD_BARS + 1):
+                idx = i + j
+                curr_h = h_vals[idx]
+                curr_l = l_vals[idx]
+                
+                # 買いトレードの判定（先にTPに届けば1、先にSLに届けば不的中）
+                buy_tp_hit = (curr_h - entry_p) >= tp_dist
+                buy_sl_hit = (entry_p - curr_l) >= sl_dist
+                
+                # 売りトレードの判定（先にTPに届けば-1、先にSLに届けば不的中）
+                sell_tp_hit = (entry_p - curr_l) >= tp_dist
+                sell_sl_hit = (curr_h - entry_p) >= sl_dist
+                
+                if buy_tp_hit and not buy_sl_hit:
+                    outcome = 1.0
+                    break
+                elif sell_tp_hit and not sell_sl_hit:
+                    outcome = -1.0
+                    break
+                elif buy_sl_hit or sell_sl_hit:
+                    outcome = 0.0
+                    break
+            
+            target_values[i] = outcome
+
+        # 末尾 LOOKAHEAD_BARS 足は未来データが不足するため NaN
+        target_series = pd.Series(target_values, index=df.index)
+        target_series.iloc[-LOOKAHEAD_BARS:] = np.nan
         df["Target"] = target_series
-        
-        feat_cols = [c for c in FEATURE_COLUMNS if c in df.columns]
+
+        feat_cols = [col for col in FEATURE_COLUMNS if col in df.columns]
         return df.dropna(subset=feat_cols)
     except Exception: 
         return None
@@ -398,23 +433,29 @@ def analyze_signal_with_backtest(df_current, df_htf):
         X_test = X.iloc[-test_size:]
         y_test = y.iloc[-test_size:]
 
-        # クラス数の検証（少なくとも2つのクラスが必要）
         if len(np.unique(y_train)) < 2: 
             return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, None)
 
         model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42, n_jobs=-1)
         model.fit(X_train, y_train)
 
+        # ---------------------------------------------------------
+        # 改善点2: バックテスト勝率のバイアス補正
+        # ---------------------------------------------------------
         preds = model.predict(X_test)
-        # 改善点: インデックスの整合性を保つため Pandas Series にラップ
         preds_series = pd.Series(preds, index=y_test.index)
-        valid_eval = (preds_series != 0) & (y_test != 0)
-        win_rate = float((preds_series[valid_eval] == y_test[valid_eval]).mean() * 100) if valid_eval.sum() > 0 else 50.0
+        
+        # モデルが売買(1 または -1)を予測した足のうち、Targetと合致したかを評価
+        trade_signals = preds_series != 0
+        if trade_signals.sum() > 0:
+            win_count = (preds_series[trade_signals] == y_test[trade_signals]).sum()
+            win_rate = float((win_count / trade_signals.sum()) * 100)
+        else:
+            win_rate = 50.0
 
         latest_X = df_current[avail].iloc[[-1]].fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         
-        # 安全な確率マッピング（存在しないクラスは0.0で補完）
         class_prob_map = {float(k): v for k, v in zip(model.classes_, prob_array)}
         prob_up = float(class_prob_map.get(1.0, 0.0))
         prob_down = float(class_prob_map.get(-1.0, 0.0))
@@ -442,7 +483,10 @@ def analyze_signal_with_backtest(df_current, df_htf):
         elif "SMA_20" in df_htf.columns and not np.isnan(clean_series(df_htf["SMA_20"]).iloc[-1]):
             htf_uptrend = htf_close > float(clean_series(df_htf["SMA_20"]).iloc[-1])
 
-        threshold = 0.50
+        # ---------------------------------------------------------
+        # 改善点3: 3クラス分類の閾値最適化
+        # ---------------------------------------------------------
+        threshold = 0.38  # 3クラスのため38%以上かつ他方より優勢であれば判定
         if prob_up >= threshold and prob_up > prob_down and htf_uptrend:
             status = "BUY (買い)"
         elif prob_down >= threshold and prob_down > prob_up and not htf_uptrend:
@@ -475,7 +519,7 @@ is_jpy = "JPY" in ticker
 pip_unit = 0.01 if is_jpy else 0.0001
 price_fmt = "%.3f" if is_jpy else "%.5f"
 
-# サイドバー設定 (改善点: on_change で即座に物理ファイルへオートセーブ)
+# サイドバー設定
 st.sidebar.header("⚙️ 資金 & リスク設定")
 st.sidebar.number_input(
     "口座資金 (円)", 
@@ -598,7 +642,6 @@ if need_reset:
 
 current_range = st.session_state["ranges"][ticker]
 
-# 通貨ペア固有のキー名で初期化
 key_lower = f"in_lower_{ticker}"
 key_upper = f"in_upper_{ticker}"
 
@@ -633,6 +676,9 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         on_change=update_range_callback
     )
     
+    # ---------------------------------------------------------
+    # 改善点4: ボタン押下時の即時反映（2回押し問題解消）
+    # ---------------------------------------------------------
     if st.button("✨ 4時間足高値・安値からレンジを自動計算"):
         st.session_state[key_lower] = float(swing_low_4h)
         st.session_state[key_upper] = float(swing_high_4h)
@@ -669,7 +715,7 @@ tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
 # --- タブ1: メインチャート ---
 with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(120)).ffill()
-    fmt_str = '%Y-%m-%d' if '日足' in tf_label else '%m-%d %H:%M'
+    fmt_str = '%Y-%m-%d %H:%M' if '日足' not in tf_label else '%Y-%m-%d'
     x_labels = df_chart.index.strftime(fmt_str)
 
     fig = make_subplots(
@@ -796,7 +842,7 @@ with tab_single:
     ai_profit_yen = ai_tp_pips * pip_val_per_wan * ai_rec_wan
     ai_loss_yen = ai_sl_pips * pip_val_per_wan * ai_rec_wan
 
-    # 改善点: 通貨ペア切替時の手動設定の同期＆安全な初期化
+    # 通貨ペア切替時の手動設定の同期
     entry_key = f"entry_{ticker}"
     side_key = f"side_{ticker}"
     slpips_key = f"slpips_{ticker}"
@@ -804,7 +850,6 @@ with tab_single:
     if side_key not in st.session_state:
         st.session_state[side_key] = "BUY (買い)" if "BUY" in ai_direction else "SELL (売り)"
     
-    # 手動レートが未登録または大幅に現在のレートからズレている(通貨ペア切り替え直後)場合は自動調整
     if entry_key not in st.session_state or abs(st.session_state[entry_key] - latest_price) / latest_price > 0.2:
         st.session_state[entry_key] = float(latest_price)
         
@@ -994,8 +1039,8 @@ with tab_ai:
 
     with pcol2:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
-        st.metric("直近テスト80足の方向勝率", f"{win_rate:.1f}%")
-        st.caption("※ 先読みデータ（Lookahead Leak）を防止するためのGap（ギャップ）を設定した厳格な時系列検証精度です。")
+        st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%")
+        st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
 
     if feature_importances is not None:
         st.markdown("---")
