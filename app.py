@@ -30,12 +30,27 @@ except ImportError:
 # ==========================================
 SETTINGS_FILE = "user_settings.json"
 
+def convert_to_builtin_type(obj):
+    """NumPy型などをPython組み込み型へ変換してJSONシリアライズエラーを防止"""
+    if isinstance(obj, dict):
+        return {k: convert_to_builtin_type(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_builtin_type(i) for i in obj]
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
+
 def load_settings():
     """ローカルのJSONファイルから設定を読み込み"""
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
         except Exception:
             pass
     return {
@@ -58,8 +73,9 @@ def save_settings():
         "ranges": st.session_state.get("ranges", {})
     }
     try:
+        clean_data = convert_to_builtin_type(settings)
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
+            json.dump(clean_data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         st.error(f"設定の保存に失敗しました: {e}")
 
@@ -166,17 +182,30 @@ def safe_to_tokyo_tz(df):
         pass
     return df_out
 
+def flatten_yf_df(df):
+    """yfinanceのレスポンス（MultiIndex対応）を単一層のDataFrameに平坦化"""
+    if df is None or df.empty:
+        return df
+    df_out = df.copy()
+    if isinstance(df_out.columns, pd.MultiIndex):
+        l0 = [str(x).lower() for x in df_out.columns.get_level_values(0)]
+        if any(c in l0 for c in ["close", "open", "high", "low"]):
+            df_out.columns = df_out.columns.get_level_values(0)
+        else:
+            df_out.columns = df_out.columns.get_level_values(1)
+            
+    df_out = df_out.loc[:, ~df_out.columns.duplicated()]
+    df_out.columns = [str(c).capitalize() for c in df_out.columns]
+    return df_out
+
 @st.cache_data(ttl=120, show_spinner=False)
 def get_usdjpy_rate():
     """週末・休日等の取得失敗を防ぐためperiod='5d'で最新レートを取得"""
     try:
         df = yf.download("USDJPY=X", period="5d", progress=False, timeout=10)
-        if df is not None and not df.empty:
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            cols = {str(c).lower(): c for c in df.columns}
-            close_col = cols.get("close", df.columns[0])
-            c = clean_series(df[close_col]).dropna()
+        df = flatten_yf_df(df)
+        if df is not None and not df.empty and "Close" in df.columns:
+            c = clean_series(df["Close"]).dropna()
             val = float(c.iloc[-1]) if len(c) > 0 else 155.0
             if not np.isnan(val) and val > 0:
                 return val
@@ -279,14 +308,9 @@ def fetch_news_and_impact(symbol):
 def load_and_process_data(symbol, period, interval, tf_name=""):
     try:
         df = yf.download(symbol, period=period, interval=interval, progress=False, timeout=10)
+        df = flatten_yf_df(df)
         if df is None or df.empty:
             return None
-            
-        if isinstance(df.columns, pd.MultiIndex): 
-            df.columns = df.columns.get_level_values(0)
-        
-        df = df.loc[:, ~df.columns.duplicated()]
-        df.columns = [str(c).capitalize() for c in df.columns]
 
         required_cols = ["Open", "High", "Low", "Close"]
         if not all(col in df.columns for col in required_cols):
@@ -494,8 +518,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
             elif "SMA_20" in df_htf.columns and not np.isnan(clean_series(df_htf["SMA_20"]).iloc[-1]):
                 htf_uptrend = htf_close > float(clean_series(df_htf["SMA_20"]).iloc[-1])
         else:
-            # df_htfが取れない場合は足単体のEMA200で代替
-            if "EMA_200" in df_current.columns:
+            if "EMA_200" in df_current.columns and not np.isnan(clean_series(df_current["EMA_200"]).iloc[-1]):
                 htf_uptrend = curr_close > float(clean_series(df_current["EMA_200"]).iloc[-1])
 
         # RSI過熱感フィルター
@@ -783,16 +806,20 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
-    # Y軸スケールの安全計算（高値安値が一致した場合のガード追加）
+    # Y軸スケールの安全計算（高値・安値・インジケーター・レンジ線を全て考慮）
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
-    price_span = chart_high - chart_low
+    all_y_vals = [chart_high, chart_low, user_upper, user_lower, sell_stop_loss, buy_stop_loss]
+    y_max_bound = max(all_y_vals)
+    y_min_bound = min(all_y_vals)
+
+    price_span = y_max_bound - y_min_bound
     if price_span <= 0:
-        price_span = chart_high * 0.002 if chart_high > 0 else 1.0
+        price_span = y_max_bound * 0.002 if y_max_bound > 0 else 1.0
     
-    y_min_fit = chart_low - (price_span * 0.1)
-    y_max_fit = chart_high + (price_span * 0.1)
+    y_min_fit = y_min_bound - (price_span * 0.05)
+    y_max_fit = y_max_bound + (price_span * 0.05)
 
     fig.update_layout(
         xaxis_rangeslider_visible=False,
