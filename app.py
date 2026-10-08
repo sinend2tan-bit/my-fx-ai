@@ -157,16 +157,21 @@ DEFAULT_SPREAD_PIPS = {
 TIMEFRAMES = {
     "5分足 (スキャル用)": {"period": "7d", "interval": "5m"},
     "15分足 (デイトレエントリー用)": {"period": "1mo", "interval": "15m"},
-    "1時間足 (デイトレメイン用)": {"period": "6mo", "interval": "1h"},
-    "4時間足 (中期・リピート用)": {"period": "1y", "interval": "1h"},
+    "1時間足 (デイトレメイン用)": {"period": "60d", "interval": "1h"},
+    "4時間足 (中期・リピート用)": {"period": "60d", "interval": "1h"},
 }
 
 LOOKAHEAD_BARS = 5
 
 def clean_series(s):
+    """DataFrameやSeriesから安全に1次元Seriesを取り出す"""
     if isinstance(s, pd.DataFrame):
-        return s.iloc[:, 0].squeeze()
-    return s
+        if s.shape[1] > 0:
+            return s.iloc[:, 0]
+        return pd.Series(dtype=float)
+    elif isinstance(s, pd.Series):
+        return s
+    return pd.Series(s)
 
 def safe_to_tokyo_tz(df):
     """タイムゾーンの有無を判定して安全にAsia/Tokyoに変換"""
@@ -248,7 +253,6 @@ def fetch_news_and_impact(symbol):
             elif "link" in item:
                 click_url = str(item["link"])
 
-            # 相対URLの場合の補正 (https:// 補完)
             if click_url.startswith("/"):
                 click_url = f"https://finance.yahoo.com{click_url}"
 
@@ -494,7 +498,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         latest_X = df_current[avail].iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         
-        # 安全なクラス確率マッピング（モデルに含まれないクラスを0.0として堅牢に処理）
         class_prob_map = {float(cls_val): float(p) for cls_val, p in zip(model.classes_, prob_array)}
         prob_up = class_prob_map.get(1.0, 0.0)
         prob_down = class_prob_map.get(-1.0, 0.0)
@@ -504,7 +507,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if total_p > 0:
             prob_up, prob_down, prob_wait = prob_up / total_p, prob_down / total_p, prob_wait / total_p
 
-        conf = max(prob_up, prob_down) * 100
         prob_dict = {
             "buy": round(prob_up * 100, 1),
             "sell": round(prob_down * 100, 1),
@@ -514,7 +516,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         ja_index = [FEATURE_LABELS_JA.get(col, col) for col in avail]
         importances = pd.Series(model.feature_importances_, index=ja_index).sort_values(ascending=True)
 
-        # 安全な上位足トレンドチェック（df_htfがNoneの場合もガード）
         htf_uptrend = True
         curr_close = float(clean_series(df_current["Close"]).iloc[-1])
         
@@ -529,16 +530,20 @@ def analyze_signal_with_backtest(df_current, df_htf):
             if "EMA_200" in df_current.columns and not np.isnan(clean_series(df_current["EMA_200"]).iloc[-1]):
                 htf_uptrend = curr_close > float(clean_series(df_current["EMA_200"]).iloc[-1])
 
-        # RSI過熱感フィルター
         rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
 
+        # === 修正: シグナル判定ロジック ===
+        # BUY / SELL 判定は WAIT 確率より高く、かつ各条件を満たす場合のみ出力
         threshold = 0.38
-        if prob_up >= threshold and prob_up > prob_down and htf_uptrend and rsi_val < 75.0:
+        if prob_up > prob_wait and prob_up >= threshold and prob_up > prob_down and htf_uptrend and rsi_val < 75.0:
             status = "BUY (買い)"
-        elif prob_down >= threshold and prob_down > prob_up and not htf_uptrend and rsi_val > 25.0:
+            conf = prob_up * 100
+        elif prob_down > prob_wait and prob_down >= threshold and prob_down > prob_up and not htf_uptrend and rsi_val > 25.0:
             status = "SELL (売り)"
+            conf = prob_down * 100
         else:
             status = "WAIT (様子見)"
+            conf = prob_wait * 100
 
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
         m_type = "トレンド相場" if adx_val > 22 else "レンジ相場"
@@ -624,8 +629,8 @@ if st.sidebar.button("🔄 最新データに更新"):
 # データ取得
 with st.spinner("最新相場データ & ニュースを取得中..."):
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
-    data_4h = load_and_process_data(ticker, "1y", "1h", "4時間足 (中期・リピート用)")
-    data_htf = load_and_process_data(ticker, "3y", "1d", "日足")
+    data_4h = load_and_process_data(ticker, "60d", "1h", "4時間足 (中期・リピート用)")
+    data_htf = load_and_process_data(ticker, "2y", "1d", "日足")
     news_items = fetch_news_and_impact(ticker)
 
 if data_4h is None and data is not None:
@@ -814,13 +819,13 @@ with tab_chart:
         fig.add_hline(y=70, line_dash="dot", line_color="#94a3b8", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="#94a3b8", row=2, col=1)
 
-    # Y軸スケールの安全計算（高値・安値・インジケーター・レンジ線を全て考慮）
+    # Y軸スケールの安全計算（NaNを排除して最小・最大値を計算）
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
-    all_y_vals = [chart_high, chart_low, user_upper, user_lower, sell_stop_loss, buy_stop_loss]
-    y_max_bound = max(all_y_vals)
-    y_min_bound = min(all_y_vals)
+    all_y_vals = [v for v in [chart_high, chart_low, user_upper, user_lower, sell_stop_loss, buy_stop_loss] if not np.isnan(v)]
+    y_max_bound = max(all_y_vals) if all_y_vals else latest_price * 1.01
+    y_min_bound = min(all_y_vals) if all_y_vals else latest_price * 0.99
 
     price_span = y_max_bound - y_min_bound
     if price_span <= 0:
@@ -977,7 +982,6 @@ with tab_single:
     sl_price = entry_price - (sl_pips * pip_unit) if is_buy else entry_price + (sl_pips * pip_unit)
     tp_price = entry_price + (tp_pips * pip_unit) if is_buy else entry_price - (tp_pips * pip_unit)
 
-    # 手動算出におけるスプレッド加味
     loss_per_wan = (sl_pips + spread_pips) * pip_val_per_wan
     recommended_wan = (max_risk_yen / loss_per_wan) if loss_per_wan > 0 else 0.01
     recommended_wan = max(0.01, round(recommended_wan, 2))
