@@ -189,16 +189,19 @@ def safe_to_tokyo_tz(df):
     return df_out
 
 def flatten_yf_df(df):
-    """yfinanceのレスポンス（MultiIndex対応）を単一層のDataFrameに平坦化"""
+    """yfinanceのレスポンス（MultiIndex対応）を安全に単一層のDataFrameに平坦化"""
     if df is None or df.empty:
         return df
     df_out = df.copy()
     if isinstance(df_out.columns, pd.MultiIndex):
-        l0 = [str(x).lower() for x in df_out.columns.get_level_values(0)]
-        if any(c in l0 for c in ["close", "open", "high", "low"]):
-            df_out.columns = df_out.columns.get_level_values(0)
-        else:
-            df_out.columns = df_out.columns.get_level_values(1)
+        try:
+            l0 = [str(x).lower() for x in df_out.columns.get_level_values(0)]
+            if any(c in l0 for c in ["close", "open", "high", "low"]):
+                df_out.columns = df_out.columns.get_level_values(0)
+            else:
+                df_out.columns = df_out.columns.get_level_values(1)
+        except Exception:
+            df_out.columns = [str(c[0]) for c in df_out.columns]
             
     df_out = df_out.loc[:, ~df_out.columns.duplicated()]
     df_out.columns = [str(c).capitalize() for c in df_out.columns]
@@ -227,7 +230,7 @@ def get_usdjpy_rate():
 # ==========================================
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_news_and_impact(symbol):
-    """Yahoo Financeからニュースを取得し、キーワード解析で為替影響を自動予測"""
+    """Yahoo Financeからニュースを取得し、キーワード解析で為替影響を自動予測（新旧API構造両対応）"""
     try:
         tk = yf.Ticker(symbol)
         news_list = tk.news
@@ -239,6 +242,7 @@ def fetch_news_and_impact(symbol):
             if not isinstance(item, dict):
                 continue
             
+            # yfinanceの新旧API構造に柔軟対応
             content = item.get("content", {}) if isinstance(item.get("content"), dict) else item
             title = content.get("title") or item.get("title", "No Title")
             if not title or title == "No Title":
@@ -247,10 +251,15 @@ def fetch_news_and_impact(symbol):
             provider = content.get("provider", {}) if isinstance(content.get("provider"), dict) else {}
             publisher = provider.get("displayName") or item.get("publisher", "市場ニュース")
 
+            # リンクURLの多重フォールバック取得
             click_url = "#"
             canonical = content.get("canonicalUrl")
-            if isinstance(canonical, dict):
-                click_url = canonical.get("url", "#")
+            click_through = content.get("clickThroughUrl")
+            
+            if isinstance(canonical, dict) and canonical.get("url"):
+                click_url = canonical.get("url")
+            elif isinstance(click_through, dict) and click_through.get("url"):
+                click_url = click_through.get("url")
             elif isinstance(canonical, str):
                 click_url = canonical
             elif "link" in item:
@@ -549,7 +558,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
             conf = prob_down * 100
         else:
             status = "WAIT (様子見)"
-            conf = prob_wait * 100
+            conf = max(prob_up, prob_down, prob_wait) * 100
 
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
         m_type = "トレンド相場" if adx_val > 22 else "レンジ相場"
@@ -701,18 +710,6 @@ if need_reset:
 key_lower = f"in_lower_{ticker}"
 key_upper = f"in_upper_{ticker}"
 
-# フラグの確認（4時間足自動計算ボタン押下時の安全な値反映）
-auto_calc_flag_key = f"do_auto_calc_{ticker}"
-if st.session_state.get(auto_calc_flag_key, False):
-    st.session_state["ranges"][ticker] = {
-        "lower": float(swing_low_4h),
-        "upper": float(swing_high_4h)
-    }
-    st.session_state[key_lower] = float(swing_low_4h)
-    st.session_state[key_upper] = float(swing_high_4h)
-    st.session_state[auto_calc_flag_key] = False
-    save_settings()
-
 current_range = st.session_state["ranges"][ticker]
 
 # ranges と Widget キーの初期同期
@@ -732,6 +729,16 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         }
         save_settings()
 
+    def trigger_auto_calc_callback():
+        """コールバック内で直接Widgetのキー値を更新して即時反映させる"""
+        st.session_state["ranges"][ticker] = {
+            "lower": float(swing_low_4h),
+            "upper": float(swing_high_4h)
+        }
+        st.session_state[key_lower] = float(swing_low_4h)
+        st.session_state[key_upper] = float(swing_high_4h)
+        save_settings()
+
     in_lower = rc1.number_input(
         "レンジ下限", 
         step=0.1 if is_jpy else 0.001, 
@@ -746,11 +753,8 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         key=key_upper, 
         on_change=update_range_callback
     )
-    
-    def trigger_auto_calc():
-        st.session_state[auto_calc_flag_key] = True
 
-    st.button("✨ 4時間足高値・安値からレンジを自動計算", on_click=trigger_auto_calc)
+    st.button("✨ 4時間足高値・安値からレンジを自動計算", on_click=trigger_auto_calc_callback)
 
     user_lower = min(in_lower, in_upper)
     user_upper = max(in_lower, in_upper)
@@ -1102,78 +1106,4 @@ with tab_repeat:
 
     st.markdown(f"""
     <div class="param-box">
-    <b>【ハーフ＆ハーフ推奨設定値】</b><br>
-    ・<b>買い設定（下半）</b>: レンジ <code>{price_fmt % user_lower}</code> ～ <code>{price_fmt % user_half}</code> | <b>運用停止(SL)</b>: <code>{price_fmt % buy_stop_loss}</code> (-{stop_buffer_pips}pips)<br>
-    ・<b>売り設定（上半）</b>: レンジ <code>{price_fmt % user_half}</code> ～ <code>{price_fmt % user_upper}</code> | <b>運用停止(SL)</b>: <code>{price_fmt % sell_stop_loss}</code> (+{stop_buffer_pips}pips)<br>
-    ・<b>注文幅 / 利確幅</b>: <code>{trap_width_pips} pips</code> | <b>片側注文本数</b>: 約 <code>{half_grid_count} 本</code> (全 {total_grid_count}本)
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.caption("▼ 松井証券の自動売買設定画面へそのままコピー＆ペーストしてご使用ください")
-    st.code(f"""[松井証券リピート注文 設定値]
-通貨ペア: {selected_label}
-注文種別: ハーフ＆ハーフ
-買いレンジ: {price_fmt % user_lower} - {price_fmt % user_half} (SL: {price_fmt % buy_stop_loss})
-売りレンジ: {price_fmt % user_half} - {price_fmt % user_upper} (SL: {price_fmt % sell_stop_loss})
-注文幅 / 利確幅: {trap_width_pips} pips
-1本あたりの数量: {quantity_wan_val:.2f} 万通貨""", language="text")
-
-    st.markdown("##### 🛡️ リスク・資金シミュレーション")
-    rc1, rc2, rc3 = st.columns(3)
-    rc1.metric("想定最大含み損", f"約 {int(max_loss_yen):,} 円")
-    rc2.metric("片側最大 必要証拠金", f"約 {int(total_margin_yen):,} 円")
-    rc3.metric("資金リスク比率", f"{risk_ratio:.1f}%")
-
-    if risk_ratio > 40.0:
-        st.error("🚨 警告: 撤退時の最大損失が口座資金の40%を超えています。数量(万通貨)を減らすか口座資金を増やしてください。")
-    else:
-        st.success("🟢 資金管理チェック: 適切なリスク範囲内です。")
-
-# --- タブ5: AIモデル分析詳細 ---
-with tab_ai:
-    st.markdown("##### 🤖 AI予測モデル（Random Forest）の評価と内訳")
-    
-    pcol1, pcol2 = st.columns(2)
-    with pcol1:
-        st.markdown("**最新バーの分類判定確率**")
-        p_buy = max(0.0, min(1.0, prob_dict['buy'] / 100.0))
-        p_sell = max(0.0, min(1.0, prob_dict['sell'] / 100.0))
-        p_wait = max(0.0, min(1.0, prob_dict['wait'] / 100.0))
-
-        st.write(f"🟢 **BUY (買い)**: {prob_dict['buy']}%")
-        st.progress(p_buy)
-        
-        st.write(f"🔴 **SELL (売り)**: {prob_dict['sell']}%")
-        st.progress(p_sell)
-        
-        st.write(f"⚪ **WAIT (様子見)**: {prob_dict['wait']}%")
-        st.progress(p_wait)
-
-    with pcol2:
-        st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
-        st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%")
-        st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
-
-    if feature_importances is not None and not feature_importances.empty:
-        st.markdown("---")
-        st.markdown("##### 📊 AIの判断根拠（特徴量重要度 TOP 10）")
-        st.caption("AIが『買い・売り・様子見』を判断する際に、どの指標を重視したかを示す貢献度ランキングです。")
-        
-        top10_imp = feature_importances.tail(10)
-        
-        fig_imp = go.Figure(go.Bar(
-            x=top10_imp.values,
-            y=top10_imp.index,
-            orientation='h',
-            marker_color='#38bdf8'
-        ))
-        fig_imp.update_layout(
-            height=340,
-            margin=dict(l=10, r=20, t=10, b=30),
-            template="plotly_dark",
-            xaxis_title="重要度スコア",
-            yaxis=dict(autorange="reversed")
-        )
-        st.plotly_chart(fig_imp, use_container_width=True, config={'displayModeBar': False})
-    else:
-        st.info("💡 現在の特徴量重要度データを生成できませんでした（学習データ件数が不足している可能性があります）。")
+    <b>【ハーフ＆ハーフ推奨設定値】
