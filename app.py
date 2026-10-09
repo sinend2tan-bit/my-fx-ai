@@ -1,3 +1,6 @@
+# ==========================================
+# PART 1: ライブラリのインポート・基本設定・データ生成
+# ==========================================
 import html
 import json
 import os
@@ -162,7 +165,7 @@ TIMEFRAMES = {
     "4時間足 (中期・リピート用)": {"period": "60d", "interval": "1h"},
 }
 
-LOOKAHEAD_BARS = 7
+LOOKAHEAD_BARS = 8
 
 def clean_series(s):
     """DataFrameやSeriesから安全に1次元Seriesを取り出す"""
@@ -414,9 +417,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).fillna(0)
         df = pd.concat([df, df_feat], axis=1)
 
-        # 正解ターゲット判定 (0.7 ATR到達で判定)
-        tp_t = new_cols["ATR"] * 0.7
-        sl_t = new_cols["ATR"] * 0.5
+        # 高勝率化のためのターゲット判定（リスクリワード1.2倍以上の波を検知）
+        tp_t = new_cols["ATR"] * 0.9
+        sl_t = new_cols["ATR"] * 0.6
         
         target_values = np.zeros(len(df), dtype=int)
         n = len(df)
@@ -466,7 +469,9 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df.dropna(subset=feat_cols)
     except Exception: 
         return None
-
+# ==========================================
+# PART 2: AI分析エンジン・UI基本構造・レンジ設定
+# ==========================================
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
     empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
@@ -496,10 +501,11 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(np.unique(y_train)) < 2: 
             return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
 
+        # 過学習を徹底抑制した安定モデル設計
         model = RandomForestClassifier(
-            n_estimators=60, 
-            max_depth=5, 
-            min_samples_leaf=4, 
+            n_estimators=100, 
+            max_depth=4, 
+            min_samples_leaf=10, 
             class_weight="balanced", 
             random_state=42, 
             n_jobs=1
@@ -524,7 +530,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_down = class_prob_map.get(-1, 0.0)
         prob_wait = class_prob_map.get(0, 0.0)
 
-        # テクニカル・モメンタム補正スコアリング
+        # 【最新テクニカル・マルチタイムフレーム評価エンジン】
         curr_close = float(clean_series(df_current["Close"]).iloc[-1])
         sma20 = float(clean_series(df_current["SMA_20"]).iloc[-1]) if "SMA_20" in df_current.columns else curr_close
         ema200 = float(clean_series(df_current["EMA_200"]).iloc[-1]) if "EMA_200" in df_current.columns else curr_close
@@ -532,39 +538,49 @@ def analyze_signal_with_backtest(df_current, df_htf):
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
         macd_hist = float(clean_series(df_current["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in df_current.columns else 0.0
 
-        momentum_buy = 0.0
-        momentum_sell = 0.0
-
-        if curr_close > sma20 and sma20 > ema200:
-            momentum_buy += 0.15
-        elif curr_close < sma20 and sma20 < ema200:
-            momentum_sell += 0.15
-
-        if adx_val > 22.0:
-            if macd_hist > 0:
-                momentum_buy += 0.12
-            elif macd_hist < 0:
-                momentum_sell += 0.12
-
-        htf_uptrend = True
+        # 上位足（日足/4時間足）の環境認識（絶対的なトレンド方向チェック）
+        htf_bullish = True
+        htf_bearish = False
         if df_htf is not None and not df_htf.empty and "Close" in df_htf.columns:
             htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
             if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
-                htf_uptrend = htf_close > float(clean_series(df_htf["EMA_200"]).iloc[-1])
+                htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
+                htf_bullish = htf_close > htf_ema200
+                htf_bearish = htf_close < htf_ema200
 
-        if htf_uptrend:
-            momentum_buy += 0.08
-        else:
-            momentum_sell += 0.08
+        # 根拠の多重度（コンフルエンス）チェック
+        buy_score = prob_up
+        sell_score = prob_down
 
-        score_up = prob_up + momentum_buy
-        score_down = prob_down + momentum_sell
-        score_wait = max(0.01, prob_wait - (momentum_buy + momentum_sell) * 0.5)
+        # 1. 現状足のトレンド整合
+        if curr_close > sma20 and sma20 > ema200:
+            buy_score += 0.20
+        elif curr_close < sma20 and sma20 < ema200:
+            sell_score += 0.20
 
-        total_score = score_up + score_down + score_wait
-        p_up_final = score_up / total_score
-        p_down_final = score_down / total_score
-        p_wait_final = score_wait / total_score
+        # 2. ADX（トレンド強度）による後押し
+        if adx_val > 23.0:
+            if macd_hist > 0:
+                buy_score += 0.15
+            elif macd_hist < 0:
+                sell_score += 0.15
+
+        # 3. 上位足の絶対トレンドフィルター（上位足のトレンドに反するエントリーはペナルティ）
+        if htf_bullish:
+            buy_score += 0.15
+            sell_score -= 0.25  # 下落予測を抑制
+        elif htf_bearish:
+            sell_score += 0.15
+            buy_score -= 0.25   # 上昇予測を抑制
+
+        # スコアの正規化
+        buy_score = max(0.0, buy_score)
+        sell_score = max(0.0, sell_score)
+        total_s = buy_score + sell_score + prob_wait + 1e-10
+
+        p_up_final = buy_score / total_s
+        p_down_final = sell_score / total_s
+        p_wait_final = prob_wait / total_s
 
         prob_dict = {
             "buy": round(p_up_final * 100, 1),
@@ -575,11 +591,13 @@ def analyze_signal_with_backtest(df_current, df_htf):
         ja_index = [FEATURE_LABELS_JA.get(col, col) for col in avail]
         importances = pd.Series(model.feature_importances_, index=ja_index).sort_values(ascending=True)
 
-        threshold = 0.33
-        if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 78.0:
+        # 【高勝率シグナル厳選フィルター】根拠が揃った時のみBUY/SELL、それ以外はWAIT
+        threshold = 0.42  # 確信度閾値を42%以上に厳格化（ダマシ防止）
+        
+        if p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 72.0:
             status = "BUY (買い)"
             conf = p_up_final * 100
-        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 22.0:
+        elif p_down_final > p_up_final and p_down_final >= threshold and htf_bearish and rsi_val > 28.0:
             status = "SELL (売り)"
             conf = p_down_final * 100
         else:
@@ -789,9 +807,8 @@ stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
 stop_buffer_val = stop_buffer_pips * pip_unit
 buy_stop_loss = user_lower - stop_buffer_val
 sell_stop_loss = user_upper + stop_buffer_val
-
 # ==========================================
-# 4. タブ描画
+# PART 3: 各タブ（チャート・単発アシスト・ニュース・リピート・AI詳細）描画
 # ==========================================
 tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
     "📈 メインチャート", 
@@ -1024,9 +1041,9 @@ with tab_single:
     st.markdown("#### 🤖 AI提案トレードプラン")
     
     if "WAIT" in status:
-        st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。** 明確なトレンドが出るまで見送りを推奨しますが、仮にトレードする場合の数値を下部に提示しています。")
+        st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。** 勝率が低い・根拠が不十分な局面のため見送りを推奨します（ダマシ防止）。")
     else:
-        st.success(f"🎯 **AI判定: 【{status}】（確信度: {conf:.1f}% / 勝率目安: {win_rate:.1f}%）**")
+        st.success(f"🎯 **高確信度AIシグナル: 【{status}】（確信度: {conf:.1f}% / 勝率目安: {win_rate:.1f}%）**")
 
     a1, a2, a3, a4, a5 = st.columns(5)
     a1.metric("推奨売買方向", ai_direction)
@@ -1213,11 +1230,11 @@ with tab_repeat:
 
 # --- タブ5: AIモデル分析詳細 ---
 with tab_ai:
-    st.markdown("##### 🤖 AI予測モデル（Random Forest × モメンタム融合）の評価と内訳")
+    st.markdown("##### 🤖 AI予測モデル（MTF多重時間足 × 機械学習）の評価と内訳")
     
     pcol1, pcol2 = st.columns(2)
     with pcol1:
-        st.markdown("**最新バーの分類判定確率（補正後）**")
+        st.markdown("**最新バーの分類判定確率（総合スコア）**")
         p_buy = max(0.0, min(1.0, prob_dict['buy'] / 100.0))
         p_sell = max(0.0, min(1.0, prob_dict['sell'] / 100.0))
         p_wait = max(0.0, min(1.0, prob_dict['wait'] / 100.0))
