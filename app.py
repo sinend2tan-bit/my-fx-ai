@@ -162,7 +162,7 @@ TIMEFRAMES = {
     "4時間足 (中期・リピート用)": {"period": "60d", "interval": "1h"},
 }
 
-LOOKAHEAD_BARS = 5
+LOOKAHEAD_BARS = 7  # トレンド判定の先読み足数を7足へ最適化
 
 def clean_series(s):
     """DataFrameやSeriesから安全に1次元Seriesを取り出す"""
@@ -206,7 +206,6 @@ def flatten_yf_df(df):
     df_out = df_out.loc[:, ~df_out.columns.duplicated()]
     df_out.columns = [str(c).capitalize() for c in df_out.columns]
     
-    # 重複インデックスの除去
     df_out = df_out.loc[~df_out.index.duplicated(keep='last')]
     return df_out
 
@@ -415,8 +414,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).fillna(0)
         df = pd.concat([df, df_feat], axis=1)
 
-        # Target算出
-        tp_t = new_cols["ATR"] * 1.0
+        # 【改修】正解ターゲット判定の感度調整 (0.7 ATR到達で判定)
+        tp_t = new_cols["ATR"] * 0.7
         sl_t = new_cols["ATR"] * 0.5
         
         target_values = np.zeros(len(df), dtype=int)
@@ -497,7 +496,15 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(np.unique(y_train)) < 2: 
             return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
 
-        model = RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=5, random_state=42, n_jobs=1)
+        # 【改修点1】class_weight='balanced' を追加し、過剰なWAIT偏りを防ぐ
+        model = RandomForestClassifier(
+            n_estimators=60, 
+            max_depth=5, 
+            min_samples_leaf=4, 
+            class_weight="balanced", 
+            random_state=42, 
+            n_jobs=1
+        )
         model.fit(X_train, y_train)
 
         preds = model.predict(X_test)
@@ -517,50 +524,76 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_up = class_prob_map.get(1, 0.0)
         prob_down = class_prob_map.get(-1, 0.0)
         prob_wait = class_prob_map.get(0, 0.0)
-        
-        total_p = prob_up + prob_down + prob_wait
-        if total_p > 0:
-            prob_up, prob_down, prob_wait = prob_up / total_p, prob_down / total_p, prob_wait / total_p
+
+        # 【改修点2】テクニカル・モメンタム補正スコアリング (AI × モメンタムのハイブリッド)
+        curr_close = float(clean_series(df_current["Close"]).iloc[-1])
+        sma20 = float(clean_series(df_current["SMA_20"]).iloc[-1]) if "SMA_20" in df_current.columns else curr_close
+        ema200 = float(clean_series(df_current["EMA_200"]).iloc[-1]) if "EMA_200" in df_current.columns else curr_close
+        rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
+        adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
+        macd_hist = float(clean_series(df_current["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in df_current.columns else 0.0
+
+        # モメンタムポイント加算
+        momentum_buy = 0.0
+        momentum_sell = 0.0
+
+        # パーフェクトオーダーまたは明確な価格位置
+        if curr_close > sma20 and sma20 > ema200:
+            momentum_buy += 0.15
+        elif curr_close < sma20 and sma20 < ema200:
+            momentum_sell += 0.15
+
+        # ADXによるトレンド強度の補正
+        if adx_val > 22.0:
+            if macd_hist > 0:
+                momentum_buy += 0.12
+            elif macd_hist < 0:
+                momentum_sell += 0.12
+
+        # 上位足（日足/4時間足）のトレンド補正
+        htf_uptrend = True
+        if df_htf is not None and not df_htf.empty and "Close" in df_htf.columns:
+            htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
+            if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
+                htf_uptrend = htf_close > float(clean_series(df_htf["EMA_200"]).iloc[-1])
+
+        if htf_uptrend:
+            momentum_buy += 0.08
+        else:
+            momentum_sell += 0.08
+
+        # モメンタム加算後の確率再計算
+        score_up = prob_up + momentum_buy
+        score_down = prob_down + momentum_sell
+        score_wait = max(0.01, prob_wait - (momentum_buy + momentum_sell) * 0.5)
+
+        total_score = score_up + score_down + score_wait
+        p_up_final = score_up / total_score
+        p_down_final = score_down / total_score
+        p_wait_final = score_wait / total_score
 
         prob_dict = {
-            "buy": round(prob_up * 100, 1),
-            "sell": round(prob_down * 100, 1),
-            "wait": round(prob_wait * 100, 1)
+            "buy": round(p_up_final * 100, 1),
+            "sell": round(p_down_final * 100, 1),
+            "wait": round(p_wait_final * 100, 1)
         }
 
         ja_index = [FEATURE_LABELS_JA.get(col, col) for col in avail]
         importances = pd.Series(model.feature_importances_, index=ja_index).sort_values(ascending=True)
 
-        htf_uptrend = True
-        curr_close = float(clean_series(df_current["Close"]).iloc[-1])
-        
-        if df_htf is not None and not df_htf.empty and "Close" in df_htf.columns:
-            htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
-            if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
-                htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
-                htf_uptrend = htf_close > htf_ema200
-            elif "SMA_20" in df_htf.columns and not np.isnan(clean_series(df_htf["SMA_20"]).iloc[-1]):
-                htf_uptrend = htf_close > float(clean_series(df_htf["SMA_20"]).iloc[-1])
-        else:
-            if "EMA_200" in df_current.columns and not np.isnan(clean_series(df_current["EMA_200"]).iloc[-1]):
-                htf_uptrend = curr_close > float(clean_series(df_current["EMA_200"]).iloc[-1])
-
-        rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
-
-        # シグナル判定ロジック
-        threshold = 0.38
-        if prob_up > prob_wait and prob_up >= threshold and prob_up > prob_down and htf_uptrend and rsi_val < 75.0:
+        # 【改修点3】シグナル判定の感度調整 (トレンド発生時に素早く BUY/SELL を出す)
+        threshold = 0.33  # 閾値を33%に設定
+        if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 78.0:
             status = "BUY (買い)"
-            conf = prob_up * 100
-        elif prob_down > prob_wait and prob_down >= threshold and prob_down > prob_up and not htf_uptrend and rsi_val > 25.0:
+            conf = p_up_final * 100
+        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 22.0:
             status = "SELL (売り)"
-            conf = prob_down * 100
+            conf = p_down_final * 100
         else:
             status = "WAIT (様子見)"
-            conf = max(prob_up, prob_down, prob_wait) * 100
+            conf = max(p_up_final, p_down_final, p_wait_final) * 100
 
-        adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
-        m_type = "トレンド相場" if adx_val > 22 else "レンジ相場"
+        m_type = "トレンド相場" if adx_val > 22.0 else "レンジ相場"
 
         return status, conf, win_rate, m_type, prob_dict, importances
     except Exception:
@@ -777,7 +810,6 @@ tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
 
 # --- タブ1: メインチャート ---
 with tab_chart:
-    # --- チャート表示制御パネル ---
     ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(4)
     with ctrl_col1:
         bars_count = st.slider("表示本数", min_value=30, max_value=300, value=90, step=10, key="chart_bars_slider")
@@ -791,7 +823,6 @@ with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(bars_count)).ffill()
     df_chart = df_chart.loc[~df_chart.index.duplicated(keep='last')]
     
-    # 時間足別にX軸フォーマットを最適化
     if "5分" in tf_label or "15分" in tf_label:
         fmt_str = '%m/%d %H:%M'
     elif "1時間" in tf_label or "4時間" in tf_label:
@@ -804,7 +835,6 @@ with tab_chart:
     else:
         x_labels = df_chart.index.astype(str)
 
-    # サブチャート行数設定
     has_sub = sub_indicator != "なし"
     row_heights = [0.75, 0.25] if has_sub else [1.0]
     rows_num = 2 if has_sub else 1
@@ -855,7 +885,7 @@ with tab_chart:
             name="BB -2σ"
         ), row=1, col=1)
 
-    # リピートレンジライン（ユーザーがチェックを入れた場合のみ）
+    # リピートレンジライン
     if show_repeat_lines:
         if not np.isnan(user_lower) and not np.isnan(user_upper):
             fig.add_hrect(
@@ -874,7 +904,7 @@ with tab_chart:
         if not np.isnan(buy_stop_loss):
             fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#16a34a", annotation_text="買SL", annotation_position="bottom right", row=1, col=1)
 
-    # サブチャート描画
+    # サブチャート
     if sub_indicator == "RSI (14)" and "RSI" in df_chart.columns:
         fig.add_trace(go.Scatter(
             x=x_labels, y=clean_series(df_chart["RSI"]),
@@ -900,11 +930,10 @@ with tab_chart:
         ), row=2, col=1)
         fig.update_yaxes(side="right", row=2, col=1)
 
-    # 【重要改修】Y軸スケールの完全最適化（ローソク足にフィットさせ、つぶれを防止）
+    # Y軸スケールの最適化
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
-    # スケール判定用価格帯（ローソク足＋移動平均線のみ対象とし、離れたリピートレンジ値を除外）
     valid_y = [chart_high, chart_low]
     if "SMA_20" in df_chart.columns:
         valid_y.append(float(clean_series(df_chart["SMA_20"]).dropna().max()))
@@ -916,7 +945,6 @@ with tab_chart:
     if price_span <= 0:
         price_span = y_max_bound * 0.002
 
-    # 余白5%を確保してクッキリ表示
     y_min_fit = y_min_bound - (price_span * 0.05)
     y_max_fit = y_max_bound + (price_span * 0.05)
 
@@ -930,7 +958,6 @@ with tab_chart:
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1)
     )
     
-    # カテゴリ軸の目盛り表示数を調整（詰まり防止）
     nticks_val = min(len(x_labels), 12)
     fig.update_xaxes(type='category', nticks=nticks_val, tickangle=-25, showspikes=True)
     
@@ -1193,11 +1220,11 @@ with tab_repeat:
 
 # --- タブ5: AIモデル分析詳細 ---
 with tab_ai:
-    st.markdown("##### 🤖 AI予測モデル（Random Forest）の評価と内訳")
+    st.markdown("##### 🤖 AI予測モデル（Random Forest × モメンタム融合）の評価と内訳")
     
     pcol1, pcol2 = st.columns(2)
     with pcol1:
-        st.markdown("**最新バーの分類判定確率**")
+        st.markdown("**最新バーの分類判定確率（補正後）**")
         p_buy = max(0.0, min(1.0, prob_dict['buy'] / 100.0))
         p_sell = max(0.0, min(1.0, prob_dict['sell'] / 100.0))
         p_wait = max(0.0, min(1.0, prob_dict['wait'] / 100.0))
@@ -1213,29 +1240,4 @@ with tab_ai:
 
     with pcol2:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
-        st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%")
-        st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
-
-    if feature_importances is not None and not feature_importances.empty:
-        st.markdown("---")
-        st.markdown("##### 📊 AIの判断根拠（特徴量重要度 TOP 10）")
-        st.caption("AIが『買い・売り・様子見』を判断する際に、どの指標を重視したかを示す貢献度ランキングです。")
-        
-        top10_imp = feature_importances.tail(10)
-        
-        fig_imp = go.Figure(go.Bar(
-            x=top10_imp.values,
-            y=top10_imp.index,
-            orientation='h',
-            marker_color='#38bdf8'
-        ))
-        fig_imp.update_layout(
-            height=340,
-            margin=dict(l=10, r=20, t=10, b=30),
-            template="plotly_dark",
-            xaxis_title="重要度スコア",
-            yaxis=dict(autorange="reversed")
-        )
-        st.plotly_chart(fig_imp, use_container_width=True, config={'displayModeBar': False})
-    else:
-        st.info("💡 現在の特徴量重要度データを生成できませんでした（学習データ件数が不足している可能性があります）。")
+        st.metric("直近テスト80足の実効勝率", f"{win
