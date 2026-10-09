@@ -162,7 +162,7 @@ TIMEFRAMES = {
     "4時間足 (中期・リピート用)": {"period": "60d", "interval": "1h"},
 }
 
-LOOKAHEAD_BARS = 7  # トレンド判定の先読み足数を7足へ最適化
+LOOKAHEAD_BARS = 7
 
 def clean_series(s):
     """DataFrameやSeriesから安全に1次元Seriesを取り出す"""
@@ -414,7 +414,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).fillna(0)
         df = pd.concat([df, df_feat], axis=1)
 
-        # 【改修】正解ターゲット判定の感度調整 (0.7 ATR到達で判定)
+        # 正解ターゲット判定 (0.7 ATR到達で判定)
         tp_t = new_cols["ATR"] * 0.7
         sl_t = new_cols["ATR"] * 0.5
         
@@ -496,7 +496,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(np.unique(y_train)) < 2: 
             return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
 
-        # 【改修点1】class_weight='balanced' を追加し、過剰なWAIT偏りを防ぐ
         model = RandomForestClassifier(
             n_estimators=60, 
             max_depth=5, 
@@ -525,7 +524,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_down = class_prob_map.get(-1, 0.0)
         prob_wait = class_prob_map.get(0, 0.0)
 
-        # 【改修点2】テクニカル・モメンタム補正スコアリング (AI × モメンタムのハイブリッド)
+        # テクニカル・モメンタム補正スコアリング
         curr_close = float(clean_series(df_current["Close"]).iloc[-1])
         sma20 = float(clean_series(df_current["SMA_20"]).iloc[-1]) if "SMA_20" in df_current.columns else curr_close
         ema200 = float(clean_series(df_current["EMA_200"]).iloc[-1]) if "EMA_200" in df_current.columns else curr_close
@@ -533,24 +532,20 @@ def analyze_signal_with_backtest(df_current, df_htf):
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
         macd_hist = float(clean_series(df_current["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in df_current.columns else 0.0
 
-        # モメンタムポイント加算
         momentum_buy = 0.0
         momentum_sell = 0.0
 
-        # パーフェクトオーダーまたは明確な価格位置
         if curr_close > sma20 and sma20 > ema200:
             momentum_buy += 0.15
         elif curr_close < sma20 and sma20 < ema200:
             momentum_sell += 0.15
 
-        # ADXによるトレンド強度の補正
         if adx_val > 22.0:
             if macd_hist > 0:
                 momentum_buy += 0.12
             elif macd_hist < 0:
                 momentum_sell += 0.12
 
-        # 上位足（日足/4時間足）のトレンド補正
         htf_uptrend = True
         if df_htf is not None and not df_htf.empty and "Close" in df_htf.columns:
             htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
@@ -562,7 +557,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         else:
             momentum_sell += 0.08
 
-        # モメンタム加算後の確率再計算
         score_up = prob_up + momentum_buy
         score_down = prob_down + momentum_sell
         score_wait = max(0.01, prob_wait - (momentum_buy + momentum_sell) * 0.5)
@@ -581,8 +575,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         ja_index = [FEATURE_LABELS_JA.get(col, col) for col in avail]
         importances = pd.Series(model.feature_importances_, index=ja_index).sort_values(ascending=True)
 
-        # 【改修点3】シグナル判定の感度調整 (トレンド発生時に素早く BUY/SELL を出す)
-        threshold = 0.33  # 閾値を33%に設定
+        threshold = 0.33
         if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 78.0:
             status = "BUY (買い)"
             conf = p_up_final * 100
@@ -1240,4 +1233,29 @@ with tab_ai:
 
     with pcol2:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
-        st.metric("直近テスト80足の実効勝率", f"{win
+        st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%")
+        st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
+
+    if feature_importances is not None and not feature_importances.empty:
+        st.markdown("---")
+        st.markdown("##### 📊 AIの判断根拠（特徴量重要度 TOP 10）")
+        st.caption("AIが『買い・売り・様子見』を判断する際に、どの指標を重視したかを示す貢献度ランキングです。")
+        
+        top10_imp = feature_importances.tail(10)
+        
+        fig_imp = go.Figure(go.Bar(
+            x=top10_imp.values,
+            y=top10_imp.index,
+            orientation='h',
+            marker_color='#38bdf8'
+        ))
+        fig_imp.update_layout(
+            height=340,
+            margin=dict(l=10, r=20, t=10, b=30),
+            template="plotly_dark",
+            xaxis_title="重要度スコア",
+            yaxis=dict(autorange="reversed")
+        )
+        st.plotly_chart(fig_imp, use_container_width=True, config={'displayModeBar': False})
+    else:
+        st.info("💡 現在の特徴量重要度データを生成できませんでした（学習データ件数が不足している可能性があります）。")
