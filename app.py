@@ -1179,7 +1179,7 @@ with tab_news:
             </div>
             """, unsafe_allow_html=True)
 
-# --- タブ4: 松井証券 リピート設定 & リスク管理（+ 新機能: 簡易月間回転数・利益シミュレーション） ---
+# --- タブ4: 松井証券 リピート設定 & リスク管理 ---
 with tab_repeat:
     default_trap_pips = max(15, int(round((atr_4h / pip_unit))))
     
@@ -1242,7 +1242,6 @@ with tab_repeat:
     else:
         st.success("🟢 資金管理チェック: 適切なリスク範囲内です。")
 
-    # 追加機能: 簡易月間利益シミュレーション
     st.markdown("---")
     st.markdown("##### 📈 簡易月間リターン・回転数シミュレーション（目安）")
     st.caption("現在の相場ボラティリティ（ATR）に基づき、月に何回グリッドが利確（回転）するかを簡易試算します。")
