@@ -1179,7 +1179,7 @@ with tab_news:
             </div>
             """, unsafe_allow_html=True)
 
-# --- タブ4: 松井証券 リピート設定 & リスク管理 ---
+# --- タブ4: 松井証券 リピート設定 & リスク管理（+ 新機能: 簡易月間回転数・利益シミュレーション） ---
 with tab_repeat:
     default_trap_pips = max(15, int(round((atr_4h / pip_unit))))
     
@@ -1241,6 +1241,20 @@ with tab_repeat:
         st.error("🚨 警告: 撤退時の最大損失が口座資金の40%を超えています。数量(万通貨)を減らすか口座資金を増やしてください。")
     else:
         st.success("🟢 資金管理チェック: 適切なリスク範囲内です。")
+
+    # 追加機能: 簡易月間利益シミュレーション
+    st.markdown("---")
+    st.markdown("##### 📈 簡易月間リターン・回転数シミュレーション（目安）")
+    st.caption("現在の相場ボラティリティ（ATR）に基づき、月に何回グリッドが利確（回転）するかを簡易試算します。")
+    
+    estimated_monthly_turns = max(5, int((latest_atr / (trap_width_pips * pip_unit)) * 15))
+    est_monthly_profit = estimated_monthly_turns * (trap_width_pips * pip_value_yen)
+    est_monthly_roi = (est_monthly_profit / account_balance_val) * 100 if account_balance_val > 0 else 0.0
+
+    sc1, sc2, sc3 = st.columns(3)
+    sc1.metric("推定月間利確回数", f"約 {estimated_monthly_turns} 回")
+    sc2.metric("推定月間利益額", f"約 +{int(est_monthly_profit):,} 円")
+    sc3.metric("推定月間利回り (ROI)", f"約 {est_monthly_roi:.1f}% / 月")
 
 # --- タブ5: AIモデル分析詳細 ---
 with tab_ai:
