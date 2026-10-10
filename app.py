@@ -1,11 +1,10 @@
 # ==========================================
-# Pro FX Analyzer & Signal Pro - Fixed v2
-# 修正: 文法エラー解消 / ファイル保存廃止 / 同時ヒットを引分け扱い
+# Pro FX Analyzer & Signal Pro - Fixed v3 Final
+# 修正: SyntaxError解消 / 同時ヒットを引分け扱い / numba削除
 # ==========================================
 import html
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -14,13 +13,7 @@ import yfinance as yf
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 
-st.set_page_config(
-    page_title="Pro FX Analyzer & Signal Pro",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
+st.set_page_config(page_title="Pro FX Analyzer & Signal Pro", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 try:
     from streamlit_autorefresh import st_autorefresh
     HAS_AUTOREFRESH = True
@@ -30,31 +23,20 @@ except ImportError:
 st.markdown("""
 <style>
    .main.block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1280px; }
-    [data-testid="stMetricValue"] { font-size: 1.4rem!important; font-weight: 800!important; }
-   .badge-buy { background-color: #16a34a; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
-   .badge-sell { background-color: #dc2626; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
-   .badge-wait { background-color: #475569; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
-   .alert-box { background: linear-gradient(135deg, rgba(220, 38, 38, 0.2), rgba(245, 158, 11, 0.2)); border-left: 6px solid #f59e0b; padding: 14px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc; }
-   .param-box { background-color: rgba(30, 41, 59, 0.8)!important; border-left: 5px solid #3b82f6; padding: 14px; border-radius: 6px; font-family: monospace; line-height: 1.8; color: #f8fafc!important; }
-   .param-box code { font-size: 0.95rem!important; font-weight: 700!important; color: #38bdf8!important; background-color: rgba(51, 65, 85, 0.9)!important; padding: 2px 6px; border-radius: 4px; }
-   .ai-card { background-color: rgba(15, 23, 42, 0.6); border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-   .news-card { background-color: rgba(30, 41, 59, 0.5); border: 1px solid #475569; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+   .badge-buy { background-color: #16a34a; color: #fff; padding: 6px 14px; border-radius: 6px; font-weight: bold; }
+   .badge-sell { background-color: #dc2626; color: #fff; padding: 6px 14px; border-radius: 6px; font-weight: bold; }
+   .badge-wait { background-color: #475569; color: #fff; padding: 6px 14px; border-radius: 6px; font-weight: bold; }
+   .param-box { background-color: rgba(30,41,59,0.8)!important; border-left: 5px solid #3b82f6; padding: 14px; border-radius: 6px; font-family: monospace; color: #f8fafc!important; }
+   .param-box code { color: #38bdf8!important; background-color: rgba(51,65,85,0.9)!important; padding: 2px 6px; border-radius: 4px; }
+   .news-card { background-color: rgba(30,41,59,0.5); border: 1px solid #475569; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
    .update-time { font-size: 0.85rem; color: #94a3b8; text-align: right; margin-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
-DEFAULTS = {
-    "account_balance": 500000,
-    "quantity_wan": 0.10,
-    "auto_refresh": False,
-    "risk_percent": 1.0,
-    "rr_ratio": 1.5,
-}
+DEFAULTS = {"account_balance": 500000, "quantity_wan": 0.10, "auto_refresh": False, "risk_percent": 1.0, "rr_ratio": 1.5}
 for k, v in DEFAULTS.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-if "ranges" not in st.session_state:
-    st.session_state["ranges"] = {}
+    if k not in st.session_state: st.session_state[k] = v
+if "ranges" not in st.session_state: st.session_state["ranges"] = {}
 
 FEATURE_COLUMNS = ["Return_1","Return_5","Dev_SMA20","Dev_EMA200","Dev_EMA20_200","Vol_Ratio","RSI","RSI_Diff","MACD_Hist_Ratio","BB_PctB","ADX","ATR_Ratio","Upper_Wick_Ratio","Lower_Wick_Ratio","Stoch_K"]
 FEATURE_LABELS_JA = {"Return_1":"直近1足変化率","Return_5":"直近5足変化率","Dev_SMA20":"SMA20乖離率","Dev_EMA200":"EMA200乖離率","Dev_EMA20_200":"EMA20/200乖離率","Vol_Ratio":"ボラティリティ比率","RSI":"RSI(14)","RSI_Diff":"RSI変化幅","MACD_Hist_Ratio":"MACDヒストグラム比","BB_PctB":"ボリンジャー%B","ADX":"ADX(トレンド強度)","ATR_Ratio":"ATR比率","Upper_Wick_Ratio":"上ヒゲ比率","Lower_Wick_Ratio":"下ヒゲ比率","Stoch_K":"ストキャス%K"}
@@ -64,8 +46,7 @@ TIMEFRAMES = {"5分足 (スキャル用)": {"period": "7d", "interval": "5m"},"1
 LOOKAHEAD_BARS = 8
 
 def clean_series(s):
-    if isinstance(s, pd.DataFrame):
-        return s.iloc[:, 0] if s.shape[1] > 0 else pd.Series(dtype=float)
+    if isinstance(s, pd.DataFrame): return s.iloc[:, 0] if s.shape[1] > 0 else pd.Series(dtype=float)
     return s if isinstance(s, pd.Series) else pd.Series(s)
 
 def safe_to_tokyo_tz(df):
@@ -73,11 +54,9 @@ def safe_to_tokyo_tz(df):
     df_out = df.copy()
     try:
         if isinstance(df_out.index, pd.DatetimeIndex):
-            if df_out.index.tz is None:
-                df_out.index = df_out.index.tz_localize("UTC")
+            if df_out.index.tz is None: df_out.index = df_out.index.tz_localize("UTC")
             df_out.index = df_out.index.tz_convert("Asia/Tokyo")
-    except Exception:
-        pass
+    except Exception: pass
     return df_out
 
 def flatten_yf_df(df):
@@ -87,8 +66,7 @@ def flatten_yf_df(df):
         try:
             l0 = [str(x).lower() for x in df_out.columns.get_level_values(0)]
             df_out.columns = df_out.columns.get_level_values(0) if any(c in l0 for c in ["close","open","high","low"]) else df_out.columns.get_level_values(1)
-        except Exception:
-            df_out.columns = [str(c[0]) for c in df_out.columns]
+        except Exception: df_out.columns = [str(c[0]) for c in df_out.columns]
     df_out = df_out.loc[:, ~df_out.columns.duplicated()]
     df_out.columns = [str(c).capitalize() for c in df_out.columns]
     return df_out.loc[~df_out.index.duplicated(keep='last')]
@@ -102,8 +80,7 @@ def get_usdjpy_rate():
             c = clean_series(df["Close"]).dropna()
             val = float(c.iloc[-1]) if len(c) > 0 else 155.0
             if not np.isnan(val) and val > 0: return val
-    except Exception:
-        pass
+    except Exception: pass
     return 155.0
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -129,53 +106,36 @@ def fetch_news_and_impact(symbol):
             pub_time = content.get("pubDate") or item.get("providerPublishTime", None)
             if isinstance(pub_time, (int, float)):
                 dt_str = datetime.fromtimestamp(pub_time, tz=ZoneInfo("Asia/Tokyo")).strftime("%m/%d %H:%M")
-            else:
-                dt_str = "直近"
+            else: dt_str = "直近"
             t_lower = str(title).lower()
             impact, direction, reason = "ℹ️ 普通", "↔️ 中立", "全般的な市況ニュース"
             if any(k in t_lower for k in ["fed","powell","cpi","gdp","pmi","inflation","rate","payroll","jobs","fomc","yield"]):
-                impact = "🔥 高（米金融政策）"
-                direction = "⚡ 急変動警戒"
-                reason = "米指標・FRB発言による変動"
+                impact = "🔥 高（米金融政策）"; direction = "⚡ 急変動警戒"; reason = "米指標・FRB発言による変動"
             elif any(k in t_lower for k in ["boj","ueda","yen","japan"]):
-                impact = "🔥 高（円相場）"
-                direction = "📉📈 円急変動注意"
-                reason = "日銀関連"
+                impact = "🔥 高（円相場）"; direction = "📉📈 円急変動注意"; reason = "日銀関連"
             parsed.append({"title":title,"publisher":publisher,"link":click_url,"time":dt_str,"impact":impact,"direction":direction,"reason":reason})
         return parsed
-    except Exception:
-        return []
+    except Exception: return []
 
 def compute_targets(c_vals, h_vals, l_vals, tp_vals, sl_vals, n, lookahead):
     target = np.zeros(n, dtype=int)
     for i in range(n - lookahead):
-        entry_p = c_vals[i]
-        tp_dist = tp_vals[i]
-        sl_dist = sl_vals[i]
-        if np.isnan(tp_dist) or np.isnan(sl_dist) or tp_dist <= 0 or sl_dist <= 0:
-            continue
+        entry_p = c_vals[i]; tp_dist = tp_vals[i]; sl_dist = sl_vals[i]
+        if np.isnan(tp_dist) or np.isnan(sl_dist) or tp_dist <= 0 or sl_dist <= 0: continue
         outcome = 0
         for j in range(1, lookahead + 1):
             idx = i + j
             if idx >= n: break
-            curr_h = h_vals[idx]
-            curr_l = l_vals[idx]
+            curr_h = h_vals[idx]; curr_l = l_vals[idx]
             buy_tp_hit = (curr_h - entry_p) >= tp_dist
             buy_sl_hit = (entry_p - curr_l) >= sl_dist
             sell_tp_hit = (entry_p - curr_l) >= tp_dist
             sell_sl_hit = (curr_h - entry_p) >= sl_dist
             if (buy_tp_hit and buy_sl_hit) or (sell_tp_hit and sell_sl_hit) or (buy_tp_hit and sell_tp_hit):
-                outcome = 0
-                break
-            if buy_tp_hit and not buy_sl_hit:
-                outcome = 1
-                break
-            if sell_tp_hit and not sell_sl_hit:
-                outcome = -1
-                break
-            if buy_sl_hit or sell_sl_hit:
-                outcome = 0
-                break
+                outcome = 0; break
+            if buy_tp_hit and not buy_sl_hit: outcome = 1; break
+            if sell_tp_hit and not sell_sl_hit: outcome = -1; break
+            if buy_sl_hit or sell_sl_hit: outcome = 0; break
         target[i] = outcome
     return target
 
@@ -189,13 +149,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         if "4時間足" in tf_name and interval == "1h":
             tz_before = df.index.tz
             df = df.resample("4h", closed="left", label="left").agg({"Open":"first","High":"max","Low":"min","Close":"last"}).dropna()
-            if tz_before is not None and df.index.tz is None:
-                df.index = df.index.tz_localize(tz_before)
+            if tz_before is not None and df.index.tz is None: df.index = df.index.tz_localize(tz_before)
         if len(df) < 50: return None
         c = clean_series(df["Close"]); h = clean_series(df["High"]); l = clean_series(df["Low"]); o = clean_series(df["Open"])
-        hl = h - l
-        hc = (h - c.shift(1)).abs()
-        lc = (l - c.shift(1)).abs()
+        hl = h - l; hc = (h - c.shift(1)).abs(); lc = (l - c.shift(1)).abs()
         tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
         new_cols = {}
         new_cols["SMA_20"] = c.rolling(20, min_periods=1).mean()
@@ -256,8 +213,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df["Target"] = target_series
         feat_cols = [col for col in FEATURE_COLUMNS if col in df.columns]
         return df.dropna(subset=feat_cols)
-    except Exception:
-        return None
+    except Exception: return None
 
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
@@ -284,7 +240,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         class_prob_map = {int(cls_val): float(p) for cls_val, p in zip(model.classes_, prob_array)}
         prob_up_raw = class_prob_map.get(1, 0.0); prob_down_raw = class_prob_map.get(-1, 0.0); prob_wait_raw = class_prob_map.get(0, 0.0)
         prob_dict = {"buy": round(prob_up_raw*100,1), "sell": round(prob_down_raw*100,1), "wait": round(prob_wait_raw*100,1)}
-        curr_close = float(clean_series(df_current["Close"]).iloc[-1])
         rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
         htf_bullish, htf_bearish = True, False
@@ -302,16 +257,12 @@ def analyze_signal_with_backtest(df_current, df_htf):
             status, conf = "SELL (売り)", prob_down_raw*100
         else:
             status, conf = "WAIT (様子見)", max(prob_up_raw, prob_down_raw, prob_wait_raw)*100
-        if "BUY" in status and (htf_bearish or rsi_val > 72):
-            status = f"WAIT (上位足逆行/RSI高 {status}見送り)"
-        if "SELL" in status and (htf_bullish or rsi_val < 28):
-            status = f"WAIT (上位足逆行/RSI低 {status}見送り)"
+        if "BUY" in status and (htf_bearish or rsi_val > 72): status = f"WAIT (上位足逆行/RSI高 {status}見送り)"
+        if "SELL" in status and (htf_bullish or rsi_val < 28): status = f"WAIT (上位足逆行/RSI低 {status}見送り)"
         m_type = "トレンド相場" if adx_val > 22.0 else "レンジ相場"
         return status, conf, win_rate, m_type, prob_dict, importances
-    except Exception:
-        return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
+    except Exception: return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
 
-# --- UI本体 ---
 st.title("Pro FX Analyzer & Signal Pro - Fixed")
 col_sel1, col_sel2 = st.columns(2)
 with col_sel1: selected_label = st.selectbox("通貨ペア", list(PAIRS.keys()), key="selected_pair_label")
@@ -330,10 +281,8 @@ st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_val
 st.sidebar.markdown("---")
 if HAS_AUTOREFRESH:
     st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh")
-    if st.session_state["auto_refresh"]:
-        st_autorefresh(interval=60000, key="datarefresh")
-if st.sidebar.button("🔄 最新データに更新"):
-    st.cache_data.clear(); st.rerun()
+    if st.session_state["auto_refresh"]: st_autorefresh(interval=60000, key="datarefresh")
+if st.sidebar.button("🔄 最新データに更新"): st.cache_data.clear(); st.rerun()
 
 with st.spinner("最新相場データ & ニュースを取得中..."):
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
@@ -341,8 +290,7 @@ with st.spinner("最新相場データ & ニュースを取得中..."):
     data_htf = load_and_process_data(ticker, "2y", "1d", "日足")
     news_items = fetch_news_and_impact(ticker)
 if data_4h is None and data is not None: data_4h = data
-if data is None:
-    st.error("データ取得に失敗しました。取引時間外かYahoo Finance遅延です。"); st.stop()
+if data is None: st.error("データ取得に失敗しました。取引時間外かYahoo Finance遅延です。"); st.stop()
 
 now_jst = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S")
 st.markdown(f'<div class="update-time">最終取得: <b>{now_jst} JST</b> | yfinance価格は松井証券価格と乖離する場合があります</div>', unsafe_allow_html=True)
@@ -350,7 +298,6 @@ latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns else (latest_price * 0.005)
 status, conf, win_rate, m_type, prob_dict, feature_importances = analyze_signal_with_backtest(data, data_htf)
 
-# レンジ計算
 key_lower = f"in_lower_{ticker}"; key_upper = f"in_upper_{ticker}"
 if data_4h is not None and not data_4h.empty:
     swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max())
@@ -382,8 +329,7 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
 
 user_lower = min(float(st.session_state[key_lower]), float(st.session_state[key_upper]))
 user_upper = max(float(st.session_state[key_lower]), float(st.session_state[key_upper]))
-if user_lower == user_upper:
-    user_upper += pip_unit * 100.0
+if user_lower == user_upper: user_upper += pip_unit * 100.0
 user_half = (user_upper + user_lower) / 2.0
 stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
 stop_buffer_val = stop_buffer_pips * pip_unit
@@ -401,17 +347,13 @@ st.markdown("---")
 tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs(["📈 メインチャート","⚡ 単発トレード","📰 ニュースAI予測","📋 松井証券 リピート設定","🤖 AI詳細"])
 with tab_chart:
     bars_count = st.slider("表示本数", 30, 300, 90, 10)
-    df_chart = safe_to_tokyo_tz(data.tail(bars_count))
-    df_chart = df_chart.ffill()
-    df_chart = df_chart.loc[~df_chart.index.duplicated(keep='last')]
+    df_chart = safe_to_tokyo_tz(data.tail(bars_count)).ffill().loc[lambda d: ~d.index.duplicated(keep='last')]
     fmt_str = '%m/%d %H:%M' if "分" in tf_label or "時間" in tf_label else '%Y/%m/%d'
     x_labels = df_chart.index.strftime(fmt_str) if isinstance(df_chart.index, pd.DatetimeIndex) else df_chart.index.astype(str)
     fig = make_subplots(rows=1, cols=1)
     fig.add_trace(go.Candlestick(x=x_labels, open=clean_series(df_chart["Open"]), high=clean_series(df_chart["High"]), low=clean_series(df_chart["Low"]), close=clean_series(df_chart["Close"]), increasing_line_color='#22c55e', decreasing_line_color='#ef4444', name="価格"))
-    if "SMA_20" in df_chart.columns:
-        fig.add_trace(go.Scatter(x=x_labels, y=clean_series(df_chart["SMA_20"]), line=dict(color="#f59e0b", width=1.5), name="SMA20"))
-    if "EMA_200" in df_chart.columns:
-        fig.add_trace(go.Scatter(x=x_labels, y=clean_series(df_chart["EMA_200"]), line=dict(color="#38bdf8", width=2.0), name="EMA200"))
+    if "SMA_20" in df_chart.columns: fig.add_trace(go.Scatter(x=x_labels, y=clean_series(df_chart["SMA_20"]), line=dict(color="#f59e0b", width=1.5), name="SMA20"))
+    if "EMA_200" in df_chart.columns: fig.add_trace(go.Scatter(x=x_labels, y=clean_series(df_chart["EMA_200"]), line=dict(color="#38bdf8", width=2.0), name="EMA200"))
     fig.add_hline(y=user_upper, line_dash="dash", line_color="#f87171", annotation_text="上限")
     fig.add_hline(y=user_lower, line_dash="dash", line_color="#4ade80", annotation_text="下限")
     fig.update_layout(xaxis_rangeslider_visible=False, height=500, template="plotly_dark", margin=dict(l=10, r=50, t=20, b=10))
@@ -430,27 +372,14 @@ with tab_single:
     ai_tp_price = latest_price + (ai_tp_pips * pip_unit) if "BUY" in ai_direction else latest_price - (ai_tp_pips * pip_unit)
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
     ai_rec_wan = max(0.01, round((max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.01, 2))
-    st.markdown(f"""
-    <div class="param-box">
-    <b>{status} (確信度 {conf:.1f}% / 勝率 {win_rate:.1f}%)</b><br>
-    方向: <code>{ai_direction}</code> | エントリー: <code>{price_fmt % latest_price}</code><br>
-    SL: <code>{price_fmt % ai_sl_price}</code> (-{ai_sl_pips}pips) | TP: <code>{price_fmt % ai_tp_price}</code> (+{ai_tp_pips}pips)<br>
-    推奨: <code>{ai_rec_wan:.2f}万通貨</code>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="param-box"><b>{status} (確信度 {conf:.1f}% / 勝率 {win_rate:.1f}%)</b><br>方向: <code>{ai_direction}</code> | エントリー: <code>{price_fmt % latest_price}</code><br>SL: <code>{price_fmt % ai_sl_price}</code> (-{ai_sl_pips}pips) | TP: <code>{price_fmt % ai_tp_price}</code> (+{ai_tp_pips}pips)<br>推奨: <code>{ai_rec_wan:.2f}万通貨</code></div>""", unsafe_allow_html=True)
 
 with tab_news:
     st.markdown("##### 📰 ニュース & 影響予測")
     if not news_items: st.info("ニュース取得できませんでした")
     else:
         for news in news_items:
-            st.markdown(f"""
-            <div class="news-card">
-                <b>{html.escape(news['publisher'])} ({html.escape(news['time'])}) - {html.escape(news['impact'])}</b><br>
-                <a href="{html.escape(news['link'])}" target="_blank" style="color:#f8fafc">{html.escape(news['title'])} 🔗</a><br>
-                <span style="color:#facc15">🎯 {html.escape(news['direction'])}</span> - {html.escape(news['reason'])}
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"""<div class="news-card"><b>{html.escape(news['publisher'])} ({html.escape(news['time'])}) - {html.escape(news['impact'])}</b><br><a href="{html.escape(news['link'])}" target="_blank" style="color:#f8fafc">{html.escape(news['title'])} 🔗</a><br><span style="color:#facc15">🎯 {html.escape(news['direction'])}</span> - {html.escape(news['reason'])}</div>""", unsafe_allow_html=True)
 
 with tab_repeat:
     trap_width_pips = st.number_input("注文幅 / 利確幅 (pips)", 5, 500, value=max(15, int(round((atr_4h / pip_unit)))), step=5)
