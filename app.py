@@ -706,7 +706,7 @@ adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.column
 vol_ratio_curr = float(clean_series(data["Vol_Ratio"]).iloc[-1]) if "Vol_Ratio" in data.columns else 0.01
 
 is_volatility_expanding = vol_ratio_curr > (clean_series(data["Vol_Ratio"]).mean() * 1.2)
-is_squeeze = bb_pct < 0.15 or bb_pct > 0.85 # バンド上限・下限付近でのエネルギー蓄積
+is_squeeze = bb_pct < 0.15 or bb_pct > 0.85
 
 vol_alert_msg = None
 if is_volatility_expanding or adx_val_curr > 28.0:
