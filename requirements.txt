@@ -1,1 +1,8 @@
-[STRIPPED 75 bytes]
+streamlit
+yfinance
+pandas
+numpy
+plotly
+scikit-learn
+requests
+streamlit-autorefresh
