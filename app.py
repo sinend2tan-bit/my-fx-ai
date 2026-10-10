@@ -95,6 +95,7 @@ st.markdown("""
     .badge-sell { background-color: #dc2626; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
     .badge-wait { background-color: #475569; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
     
+    .alert-box { background: linear-gradient(135deg, rgba(220, 38, 38, 0.2), rgba(245, 158, 11, 0.2)); border-left: 6px solid #f59e0b; padding: 14px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc; }
     .param-box { background-color: rgba(30, 41, 59, 0.8) !important; border-left: 5px solid #3b82f6; padding: 14px; border-radius: 6px; font-family: monospace; line-height: 1.8; color: #f8fafc !important; }
     .param-box code { font-size: 0.95rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: rgba(51, 65, 85, 0.9) !important; padding: 2px 6px; border-radius: 4px; }
     
@@ -470,7 +471,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
     except Exception: 
         return None
 # ==========================================
-# PART 2: AI分析エンジン・UI基本構造・レンジ設定
+# PART 2: AI分析エンジン・急変動事前予測ロジック・UI基本構造
 # ==========================================
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
@@ -501,7 +502,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(np.unique(y_train)) < 2: 
             return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
 
-        # 過学習を徹底抑制した安定モデル設計
         model = RandomForestClassifier(
             n_estimators=100, 
             max_depth=4, 
@@ -530,7 +530,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_down = class_prob_map.get(-1, 0.0)
         prob_wait = class_prob_map.get(0, 0.0)
 
-        # 【最新テクニカル・マルチタイムフレーム評価エンジン】
         curr_close = float(clean_series(df_current["Close"]).iloc[-1])
         sma20 = float(clean_series(df_current["SMA_20"]).iloc[-1]) if "SMA_20" in df_current.columns else curr_close
         ema200 = float(clean_series(df_current["EMA_200"]).iloc[-1]) if "EMA_200" in df_current.columns else curr_close
@@ -538,7 +537,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
         macd_hist = float(clean_series(df_current["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in df_current.columns else 0.0
 
-        # 上位足（日足/4時間足）の環境認識（絶対的なトレンド方向チェック）
         htf_bullish = True
         htf_bearish = False
         if df_htf is not None and not df_htf.empty and "Close" in df_htf.columns:
@@ -548,32 +546,27 @@ def analyze_signal_with_backtest(df_current, df_htf):
                 htf_bullish = htf_close > htf_ema200
                 htf_bearish = htf_close < htf_ema200
 
-        # 根拠の多重度（コンフルエンス）チェック
         buy_score = prob_up
         sell_score = prob_down
 
-        # 1. 現状足のトレンド整合
         if curr_close > sma20 and sma20 > ema200:
             buy_score += 0.20
         elif curr_close < sma20 and sma20 < ema200:
             sell_score += 0.20
 
-        # 2. ADX（トレンド強度）による後押し
         if adx_val > 23.0:
             if macd_hist > 0:
                 buy_score += 0.15
             elif macd_hist < 0:
                 sell_score += 0.15
 
-        # 3. 上位足の絶対トレンドフィルター（上位足のトレンドに反するエントリーはペナルティ）
         if htf_bullish:
             buy_score += 0.15
-            sell_score -= 0.25  # 下落予測を抑制
+            sell_score -= 0.25
         elif htf_bearish:
             sell_score += 0.15
-            buy_score -= 0.25   # 上昇予測を抑制
+            buy_score -= 0.25
 
-        # スコアの正規化
         buy_score = max(0.0, buy_score)
         sell_score = max(0.0, sell_score)
         total_s = buy_score + sell_score + prob_wait + 1e-10
@@ -591,8 +584,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         ja_index = [FEATURE_LABELS_JA.get(col, col) for col in avail]
         importances = pd.Series(model.feature_importances_, index=ja_index).sort_values(ascending=True)
 
-        # 【高勝率シグナル厳選フィルター】根拠が揃った時のみBUY/SELL、それ以外はWAIT
-        threshold = 0.42  # 確信度閾値を42%以上に厳格化（ダマシ防止）
+        threshold = 0.42
         
         if p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 72.0:
             status = "BUY (買い)"
@@ -705,6 +697,28 @@ latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns else (latest_price * 0.005)
 
 status, conf, win_rate, m_type, prob_dict, feature_importances = analyze_signal_with_backtest(data, data_htf)
+
+# ==========================================
+# 🚨 急変動（ブレイクアウト）事前予測ロジック
+# ==========================================
+bb_pct = float(clean_series(data["BB_PctB"]).iloc[-1]) if "BB_PctB" in data.columns else 0.5
+adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 20.0
+vol_ratio_curr = float(clean_series(data["Vol_Ratio"]).iloc[-1]) if "Vol_Ratio" in data.columns else 0.01
+
+is_volatility_expanding = vol_ratio_curr > (clean_series(data["Vol_Ratio"]).mean() * 1.2)
+is_squeeze = bb_pct < 0.15 or bb_pct > 0.85 # バンド上限・下限付近でのエネルギー蓄積
+
+vol_alert_msg = None
+if is_volatility_expanding or adx_val_curr > 28.0:
+    if prob_dict["buy"] > prob_dict["sell"]:
+        vol_alert_msg = f"⚠️ **【急変動・上方ブレイク警戒】** ボラティリティが拡大傾向にあります。**上方向（買い優勢・確率 {prob_dict['buy']}%）**へ大きく動くエネルギーが高まっています！"
+    else:
+        vol_alert_msg = f"⚠️ **【急変動・下方ブレイク警戒】** ボラティリティが拡大傾向にあります。**下方向（売り優勢・確率 {prob_dict['sell']}%）**へ大きく動くエネルギーが高まっています！"
+elif is_squeeze:
+    vol_alert_msg = f"⚡ **【エネルギー蓄積中（スクイーズ）】** ボリンジャーバンドが収縮しており、まもなくどちらかへ**大きくレートが跳ねる（急変動する）**前兆です。"
+
+if vol_alert_msg:
+    st.markdown(f'<div class="alert-box">{vol_alert_msg}</div>', unsafe_allow_html=True)
 
 # サマリー表示
 m1, m2, m3, m4 = st.columns(4)
