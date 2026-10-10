@@ -235,7 +235,7 @@ def fetch_news_and_impact(symbol):
     """Yahoo Financeからニュースを取得し、キーワード解析で為替影響を自動予測"""
     try:
         tk = yf.Ticker(symbol)
-        news_list = tk.news
+        news_list = getattr(tk, "news", None)
         if not news_list or not isinstance(news_list, list):
             return []
         
