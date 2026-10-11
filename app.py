@@ -458,7 +458,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 buy_tp_hit = (curr_h - entry_p) >= tp_dist
                 buy_sl_hit = (entry_p - curr_l) >= sl_dist
                 sell_tp_hit = (entry_p - curr_l) >= tp_dist
-                sell_sl_hit = (curr_h - entry_p) >= sl_dist
+                sell_sl_hit = (curr_h - entry_p) >= tp_dist
                 
                 if (buy_tp_hit and buy_sl_hit) or (sell_tp_hit and sell_sl_hit) or (buy_tp_hit and sell_tp_hit):
                     outcome = 0
