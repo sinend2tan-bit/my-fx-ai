@@ -40,7 +40,7 @@ DEFAULT_SETTINGS = {
     "auto_refresh": False,
     "risk_percent": 1.0,
     "rr_ratio": 1.5,
-    "trap_width": 20,
+    "trap_width": 30,
     "ranges": {},
     "trade_memo": ""
 }
@@ -106,7 +106,7 @@ if "risk_percent" not in st.session_state:
 if "rr_ratio" not in st.session_state:
     st.session_state["rr_ratio"] = float(saved_config.get("rr_ratio", 1.5))
 if "trap_width" not in st.session_state:
-    st.session_state["trap_width"] = int(saved_config.get("trap_width", 20))
+    st.session_state["trap_width"] = int(saved_config.get("trap_width", 30))
 if "ranges" not in st.session_state:
     st.session_state["ranges"] = saved_config.get("ranges", {})
 if "trade_memo" not in st.session_state:
@@ -430,7 +430,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         df = pd.concat([df, df_feat], axis=1)
 
-        # 高勝率化のためのターゲット判定（リスクリワード1.2倍以上の波を検知）
         tp_t = new_cols["ATR"] * 0.9
         sl_t = new_cols["ATR"] * 0.6
         
@@ -1195,9 +1194,12 @@ with tab_news:
 # --- タブ4: 松井証券 リピート設定 & リスク管理 ---
 with tab_repeat:
     st.markdown("##### 📋 松井証券リピート自動売買（ハーフ＆ハーフ）設定アシスタント")
-    st.caption("AIが現在の相場ボラティリティ（ATR）から最適な注文幅・利幅を自動算出します。ボタン一つでAI推奨値を適用できます。")
+    st.caption("中期的な4時間足のボラティリティ（ATR）を基準に、リピート売買に最適な注文幅・利幅（デフォルト30〜50pips以上）を自動算出します。")
 
-    ai_rec_trap_pips = max(10, int(round((latest_atr / pip_unit) * 0.8)))
+    # 【改善】4時間足のATRをベースに、リピート注文に最適な実用サイズ（最低30pips、または4時間足ATRの1.2倍等）に調整
+    atr_4h_val = float(clean_series(data_4h["ATR"]).iloc[-1]) if data_4h is not None and "ATR" in data_4h.columns else latest_atr
+    calculated_rec_trap = int(round((atr_4h_val / pip_unit) * 0.8))
+    ai_rec_trap_pips = max(30, calculated_rec_trap)  # 最低でも30pipsを下限として実用性を担保
 
     trap_key = f"trap_w_{ticker}"
     if trap_key not in st.session_state:
@@ -1216,7 +1218,7 @@ with tab_repeat:
     with rc_col1:
         trap_width_pips = st.number_input(
             "注文幅 / 利確幅 (pips)", 
-            min_value=5, 
+            min_value=10, 
             max_value=500, 
             step=5,
             key=trap_key,
@@ -1246,7 +1248,7 @@ with tab_repeat:
 
     st.markdown(f"""
     <div class="param-box">
-    <b>【ハーフ＆ハーフ推奨設定値】</b> (AI算出・広めの中期レンジ適用)<br>
+    <b>【ハーフ＆ハーフ推奨設定値】</b> (4時間足ATR基準・リピート最適化)<br>
     ・<b>買い設定（下半）</b>: レンジ <code>{price_fmt % user_lower}</code> ～ <code>{price_fmt % user_half}</code> | <b>運用停止(SL)</b>: <code>{price_fmt % buy_stop_loss}</code> (-{stop_buffer_pips}pips)<br>
     ・<b>売り設定（上半）</b>: レンジ <code>{price_fmt % user_half}</code> ～ <code>{price_fmt % user_upper}</code> | <b>運用停止(SL)</b>: <code>{price_fmt % sell_stop_loss}</code> (+{stop_buffer_pips}pips)<br>
     ・<b>注文幅 / 利確幅</b>: <code>{trap_width_pips} pips</code> (AI推奨: <code>{ai_rec_trap_pips} pips</code>) | <b>片側注文本数</b>: 約 <code>{half_grid_count} 本</code> (全 {total_grid_count}本)
