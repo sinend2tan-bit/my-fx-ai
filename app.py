@@ -1311,14 +1311,14 @@ with tab_ai:
         st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
 
     if feature_importances is not None and not feature_importances.empty:
-        st.markdown("---
+        st.markdown("---")
         col_imp_title, col_imp_btn = st.columns([3, 1])
         with col_imp_title:
             st.markdown("##### 📊 AIの判断根拠（特徴量重要度 TOP 10）")
             st.caption("AIが『買い・売り・様子見』を判断する際に、どの指標を重視したかを示す貢献度ランキングです。")
         
         with col_imp_btn:
-            # 特徴量重要度のCSVエクスポート機能（新機能）
+            # 特徴量重要度のCSVエクスポート機能
             csv_data = feature_importances.reset_index()
             csv_data.columns = ["指標名", "重要度スコア"]
             csv_bytes = csv_data.to_csv(index=False).encode("utf-8-sig")
