@@ -34,6 +34,16 @@ except ImportError:
 # ==========================================
 SETTINGS_FILE = "user_settings.json"
 
+DEFAULT_SETTINGS = {
+    "account_balance": 500000,
+    "quantity_wan": 0.10,
+    "auto_refresh": False,
+    "risk_percent": 1.0,
+    "rr_ratio": 1.5,
+    "trap_width": 20,
+    "ranges": {}
+}
+
 def convert_to_builtin_type(obj):
     """NumPy型などをPython組み込み型へ変換してJSONシリアライズエラーを防止"""
     if isinstance(obj, dict):
@@ -50,34 +60,26 @@ def convert_to_builtin_type(obj):
 
 def load_settings():
     """ローカルのJSONファイルから設定を読み込み"""
-    default_settings = {
-        "account_balance": 500000,
-        "quantity_wan": 0.10,
-        "auto_refresh": False,
-        "risk_percent": 1.0,
-        "rr_ratio": 1.5,
-        "trap_width": 20,
-        "ranges": {}
-    }
+    settings = DEFAULT_SETTINGS.copy()
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    default_settings.update(data)
+                    settings.update(data)
         except Exception:
             pass
-    return default_settings
+    return settings
 
 def save_settings():
     """現在の Session State を JSON ファイルへ保存"""
     settings = {
-        "account_balance": float(st.session_state.get("account_balance", 500000)),
-        "quantity_wan": float(st.session_state.get("quantity_wan", 0.10)),
-        "auto_refresh": bool(st.session_state.get("auto_refresh", False)),
-        "risk_percent": float(st.session_state.get("risk_percent", 1.0)),
-        "rr_ratio": float(st.session_state.get("rr_ratio", 1.5)),
-        "trap_width": int(st.session_state.get("trap_width", 20)),
+        "account_balance": float(st.session_state.get("account_balance", DEFAULT_SETTINGS["account_balance"])),
+        "quantity_wan": float(st.session_state.get("quantity_wan", DEFAULT_SETTINGS["quantity_wan"])),
+        "auto_refresh": bool(st.session_state.get("auto_refresh", DEFAULT_SETTINGS["auto_refresh"])),
+        "risk_percent": float(st.session_state.get("risk_percent", DEFAULT_SETTINGS["risk_percent"])),
+        "rr_ratio": float(st.session_state.get("rr_ratio", DEFAULT_SETTINGS["rr_ratio"])),
+        "trap_width": int(st.session_state.get("trap_width", DEFAULT_SETTINGS["trap_width"])),
         "ranges": st.session_state.get("ranges", {})
     }
     try:
@@ -486,7 +488,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 # ==========================================
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
-    empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
+    empty_res = ("WAIT (データ不足)", 0.0, 0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
     if df_current is None or len(df_current) < 150:
         return empty_res
 
@@ -500,7 +502,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         min_required = test_size + gap + 40
         
         if len(df_valid) < min_required:
-            return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
+            return ("WAIT (学習データ不足)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
 
         X = df_valid[avail].replace([np.inf, -np.inf], np.nan).fillna(0)
         y = df_valid["Target"]
@@ -511,7 +513,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         y_test = y.iloc[-test_size:]
 
         if len(np.unique(y_train)) < 2: 
-            return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
+            return ("WAIT (データ偏り)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
 
         model = RandomForestClassifier(
             n_estimators=100, 
@@ -523,7 +525,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         )
         model.fit(X_train, y_train)
 
-        # 全期間に対する予測シグナル履歴（チャート表示用）を生成
         all_preds = model.predict(X)
         all_preds_series = pd.Series(all_preds, index=X.index)
 
@@ -531,9 +532,10 @@ def analyze_signal_with_backtest(df_current, df_htf):
         preds_series = pd.Series(preds, index=y_test.index)
         
         trade_signals = preds_series != 0
-        if trade_signals.sum() > 0:
+        total_signals_count = int(trade_signals.sum())
+        if total_signals_count > 0:
             win_count = (preds_series[trade_signals] == y_test[trade_signals]).sum()
-            win_rate = float((win_count / trade_signals.sum()) * 100)
+            win_rate = float((win_count / total_signals_count) * 100)
         else:
             win_rate = 50.0
 
@@ -613,9 +615,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
 
         m_type = "トレンド相場" if adx_val > 22.0 else "レンジ相場"
 
-        return status, conf, win_rate, m_type, prob_dict, importances, all_preds_series
+        return status, conf, total_signals_count, win_rate, m_type, prob_dict, importances, all_preds_series
     except Exception:
-        return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
+        return ("WAIT (エラー)", 0.0, 0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
 
 # ==========================================
 # 2. UI構築 & 状態永続化連動
@@ -675,7 +677,7 @@ st.sidebar.number_input(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.header("🔄 更新設定")
+st.sidebar.header("🔄 更新・メンテナンス")
 if HAS_AUTOREFRESH:
     st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh", on_change=save_settings)
     if st.session_state["auto_refresh"]:
@@ -686,6 +688,17 @@ else:
 if st.sidebar.button("💾 設定を即時手動保存"):
     save_settings()
     st.toast("設定を保存しました！", icon="💾")
+
+if st.sidebar.button("🔄 設定を初期値にリセット"):
+    for k, v in DEFAULT_SETTINGS.items():
+        st.session_state[k] = v
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            os.remove(SETTINGS_FILE)
+        except Exception:
+            pass
+    st.toast("設定を初期状態にリセットしました！", icon="🔄")
+    st.rerun()
 
 if st.sidebar.button("🔄 最新データに更新"):
     st.cache_data.clear()
@@ -711,7 +724,7 @@ st.markdown(f'<div class="update-time">最終データ取得日時: <b>{now_jst}
 latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns else (latest_price * 0.005)
 
-status, conf, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(data, data_htf)
+status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(data, data_htf)
 
 # ==========================================
 # 🚨 急変動（ブレイクアウト）事前予測ロジック
@@ -745,7 +758,7 @@ badge_html = f'<div class="badge-buy">{status}</div>' if "BUY" in status else \
 m2.markdown("**AI 推奨アクション**")
 m2.markdown(badge_html, unsafe_allow_html=True)
 
-m3.metric("直近バックテスト勝率", f"{win_rate:.1f}%", f"確信度: {conf:.1f}%")
+m3.metric("直近バックテスト勝率", f"{win_rate:.1f}%", f"検証シグナル数: {total_signals_count}回")
 m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 
 st.markdown("---")
@@ -860,7 +873,6 @@ with tab_chart:
     with ctrl_col4:
         sub_indicator = st.selectbox("サブ指標", ["RSI (14)", "MACD", "なし"], index=0, key="sub_indicator_select")
 
-    # 補助コントロール行（AIシグナルマーカー表示機能を追加）
     opt_col1, opt_col2 = st.columns(2)
     with opt_col1:
         show_repeat_lines = st.checkbox("リピートレンジ表示", value=("4時間足" in tf_label), key="show_repeat_lines_check")
@@ -895,7 +907,7 @@ with tab_chart:
         name="価格"
     ), row=1, col=1)
 
-    # 移動平均線（表示切替連動）
+    # 移動平均線
     if show_ma:
         if "SMA_20" in df_chart.columns:
             fig.add_trace(go.Scatter(
@@ -923,9 +935,8 @@ with tab_chart:
             name="BB -2σ"
         ), row=1, col=1)
 
-    # AIシグナルマーカーの描画（新機能）
+    # AIシグナルマーカーの描画
     if show_ai_markers and ai_signal_history is not None:
-        # df_chartのインデックスに一致するシグナルを取得
         common_idx = df_chart.index.intersection(ai_signal_history.index)
         if len(common_idx) > 0:
             sub_preds = ai_signal_history.loc[common_idx]
@@ -995,7 +1006,6 @@ with tab_chart:
         ), row=2, col=1)
         fig.update_yaxes(side="right", row=2, col=1)
 
-    # Y軸スケールの最適化
     chart_high = float(clean_series(df_chart["High"]).max())
     chart_low = float(clean_series(df_chart["Low"]).min())
     
@@ -1294,7 +1304,7 @@ with tab_ai:
 
     with pcol2:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
-        st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%")
+        st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%", f"検証シグナル数: {total_signals_count}回")
         st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
 
     if feature_importances is not None and not feature_importances.empty:
