@@ -486,7 +486,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
 # ==========================================
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
-    empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
+    empty_res = ("WAIT (データ不足)", 0.0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
     if df_current is None or len(df_current) < 150:
         return empty_res
 
@@ -500,7 +500,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         min_required = test_size + gap + 40
         
         if len(df_valid) < min_required:
-            return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
+            return ("WAIT (学習データ不足)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
 
         X = df_valid[avail].replace([np.inf, -np.inf], np.nan).fillna(0)
         y = df_valid["Target"]
@@ -511,7 +511,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         y_test = y.iloc[-test_size:]
 
         if len(np.unique(y_train)) < 2: 
-            return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
+            return ("WAIT (データ偏り)", 0.0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
 
         model = RandomForestClassifier(
             n_estimators=100, 
@@ -522,6 +522,10 @@ def analyze_signal_with_backtest(df_current, df_htf):
             n_jobs=1
         )
         model.fit(X_train, y_train)
+
+        # 全期間に対する予測シグナル履歴（チャート表示用）を生成
+        all_preds = model.predict(X)
+        all_preds_series = pd.Series(all_preds, index=X.index)
 
         preds = model.predict(X_test)
         preds_series = pd.Series(preds, index=y_test.index)
@@ -609,9 +613,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
 
         m_type = "トレンド相場" if adx_val > 22.0 else "レンジ相場"
 
-        return status, conf, win_rate, m_type, prob_dict, importances
+        return status, conf, win_rate, m_type, prob_dict, importances, all_preds_series
     except Exception:
-        return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float))
+        return ("WAIT (エラー)", 0.0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
 
 # ==========================================
 # 2. UI構築 & 状態永続化連動
@@ -707,7 +711,7 @@ st.markdown(f'<div class="update-time">最終データ取得日時: <b>{now_jst}
 latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns else (latest_price * 0.005)
 
-status, conf, win_rate, m_type, prob_dict, feature_importances = analyze_signal_with_backtest(data, data_htf)
+status, conf, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(data, data_htf)
 
 # ==========================================
 # 🚨 急変動（ブレイクアウト）事前予測ロジック
@@ -856,15 +860,16 @@ with tab_chart:
     with ctrl_col4:
         sub_indicator = st.selectbox("サブ指標", ["RSI (14)", "MACD", "なし"], index=0, key="sub_indicator_select")
 
-    # 補助コントロール行
+    # 補助コントロール行（AIシグナルマーカー表示機能を追加）
     opt_col1, opt_col2 = st.columns(2)
     with opt_col1:
         show_repeat_lines = st.checkbox("リピートレンジ表示", value=("4時間足" in tf_label), key="show_repeat_lines_check")
+    with opt_col2:
+        show_ai_markers = st.checkbox("AIシグナルマーカー（買/売ポイント）を表示", value=True, key="show_ai_markers_check")
 
     df_chart = safe_to_tokyo_tz(data.tail(bars_count)).ffill()
     df_chart = df_chart.loc[~df_chart.index.duplicated(keep='last')]
     
-    # タイムスタンプインデックスをそのまま使用して、スムーズなズーム＆パン操作を実現
     x_index = df_chart.index
 
     has_sub = sub_indicator != "なし"
@@ -917,6 +922,33 @@ with tab_chart:
             fill='tonexty', fillcolor='rgba(148, 163, 184, 0.05)',
             name="BB -2σ"
         ), row=1, col=1)
+
+    # AIシグナルマーカーの描画（新機能）
+    if show_ai_markers and ai_signal_history is not None:
+        # df_chartのインデックスに一致するシグナルを取得
+        common_idx = df_chart.index.intersection(ai_signal_history.index)
+        if len(common_idx) > 0:
+            sub_preds = ai_signal_history.loc[common_idx]
+            buy_points = df_chart.loc[common_idx][sub_preds == 1]
+            sell_points = df_chart.loc[common_idx][sub_preds == -1]
+
+            if not buy_points.empty:
+                fig.add_trace(go.Scatter(
+                    x=buy_points.index,
+                    y=buy_points["Low"] - (latest_atr * 0.3),
+                    mode="markers",
+                    marker=dict(symbol="triangle-up", size=10, color="#22c55e"),
+                    name="AI 買いシグナル"
+                ), row=1, col=1)
+
+            if not sell_points.empty:
+                fig.add_trace(go.Scatter(
+                    x=sell_points.index,
+                    y=sell_points["High"] + (latest_atr * 0.3),
+                    mode="markers",
+                    marker=dict(symbol="triangle-down", size=10, color="#ef4444"),
+                    name="AI 売りシグナル"
+                ), row=1, col=1)
 
     # リピートレンジライン
     if show_repeat_lines:
@@ -991,7 +1023,6 @@ with tab_chart:
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1)
     )
     
-    # 土日などの非取引時間を詰める設定
     fig.update_xaxes(
         type='date',
         rangebreaks=[dict(bounds=["sat", "mon"])] if "5分" in tf_label or "15分" in tf_label or "1時間" in tf_label else [],
