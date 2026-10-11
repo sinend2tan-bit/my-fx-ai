@@ -56,6 +56,7 @@ def load_settings():
         "auto_refresh": False,
         "risk_percent": 1.0,
         "rr_ratio": 1.5,
+        "trap_width": 20,
         "ranges": {}
     }
     if os.path.exists(SETTINGS_FILE):
@@ -76,6 +77,7 @@ def save_settings():
         "auto_refresh": bool(st.session_state.get("auto_refresh", False)),
         "risk_percent": float(st.session_state.get("risk_percent", 1.0)),
         "rr_ratio": float(st.session_state.get("rr_ratio", 1.5)),
+        "trap_width": int(st.session_state.get("trap_width", 20)),
         "ranges": st.session_state.get("ranges", {})
     }
     try:
@@ -99,6 +101,8 @@ if "risk_percent" not in st.session_state:
     st.session_state["risk_percent"] = float(saved_config.get("risk_percent", 1.0))
 if "rr_ratio" not in st.session_state:
     st.session_state["rr_ratio"] = float(saved_config.get("rr_ratio", 1.5))
+if "trap_width" not in st.session_state:
+    st.session_state["trap_width"] = int(saved_config.get("trap_width", 20))
 if "ranges" not in st.session_state:
     st.session_state["ranges"] = saved_config.get("ranges", {})
 
@@ -165,7 +169,7 @@ TIMEFRAMES = {
     "5分足 (スキャル用)": {"period": "7d", "interval": "5m"},
     "15分足 (デイトレエントリー用)": {"period": "30d", "interval": "15m"},
     "1時間足 (デイトレメイン用)": {"period": "60d", "interval": "1h"},
-    "4時間足 (中期・リピート用)": {"period": "60d", "interval": "1h"},
+    "4時間足 (中期・リピート用)": {"period": "90d", "interval": "1h"},
 }
 
 LOOKAHEAD_BARS = 8
@@ -686,7 +690,7 @@ if st.sidebar.button("🔄 最新データに更新"):
 # データ取得
 with st.spinner("最新相場データ & ニュースを取得中..."):
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
-    data_4h = load_and_process_data(ticker, "60d", "1h", "4時間足 (中期・リピート用)")
+    data_4h = load_and_process_data(ticker, "90d", "1h", "4時間足 (中期・リピート用)")
     data_htf = load_and_process_data(ticker, "2y", "1d", "日足")
     news_items = fetch_news_and_impact(ticker)
 
@@ -743,16 +747,17 @@ m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 st.markdown("---")
 
 # ==========================================
-# 3. 通貨ペア毎のレンジ管理 & 安全な自動補正ロジック
+# 3. 通貨ペア毎のレンジ管理 & 広めの自動補正ロジック
 # ==========================================
-swing_high_4h = float(clean_series(data_4h["High"]).iloc[-100:].max()) if data_4h is not None else latest_price * 1.02
-swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-100:].min()) if data_4h is not None else latest_price * 0.98
+# 以前より広めの期間（直近300本＝約2ヶ月強の4時間足）から高値・安値を算出し、レンジが狭くなりすぎるのを防止
+swing_high_4h = float(clean_series(data_4h["High"]).iloc[-300:].max()) if data_4h is not None else latest_price * 1.03
+swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-300:].min()) if data_4h is not None else latest_price * 0.97
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1]) if data_4h is not None and "ATR" in data_4h.columns else (latest_price * 0.005)
 
 def is_valid_range(r_low, r_up, current_p):
     if r_low <= 0 or r_up <= 0 or r_low >= r_up:
         return False
-    if r_low < current_p * 0.5 or r_up > current_p * 1.5:
+    if r_low < current_p * 0.4 or r_up > current_p * 1.6:
         return False
     return True
 
@@ -817,7 +822,7 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
         on_change=update_range_callback
     )
 
-    st.button("✨ 4時間足高値・安値からレンジを自動計算", on_click=trigger_auto_calc_callback)
+    st.button("✨ 4時間足高値・安値（広め）からレンジを自動計算", on_click=trigger_auto_calc_callback)
 
     user_lower = min(in_lower, in_upper)
     user_upper = max(in_lower, in_upper)
@@ -1003,7 +1008,7 @@ with tab_chart:
 
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
 
-# --- タブ2: 単発トレード (AI全自動アシスト) 【見やすい旧シンプル形式に復元】 ---
+# --- タブ2: 単発トレード (AI全自動アシスト) ---
 with tab_single:
     st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）AI発注アシスタント")
     st.caption("AIが現在の相場・ボラティリティ・口座資金を統合解析し、最適シグナルと注文数値をリアルタイムで自動計算します。")
@@ -1047,7 +1052,6 @@ with tab_single:
     else:
         st.success(f"🎯 **高確信度AIシグナル: 【{status}】（確信度: {conf:.1f}% / 勝率目安: {win_rate:.1f}%）**")
 
-    # 見やすいシンプルカード形式
     st.markdown(f"""
     <div class="param-box">
     <b>【AI自動提示 注文コピー用パラメータ】</b> (想定スプレッド: <code>{spread_pips:.1f} pips</code> 含む)<br>
@@ -1142,18 +1146,41 @@ with tab_news:
             </div>
             """, unsafe_allow_html=True)
 
-# --- タブ4: 松井証券 リピート設定 & リスク管理 【見やすい旧形式に復元】 ---
+# --- タブ4: 松井証券 リピート設定 & リスク管理（AI推奨注文幅の自動提示＆ワンタッチ反映） ---
 with tab_repeat:
-    default_trap_pips = max(15, int(round((atr_4h / pip_unit))))
-    
-    trap_width_pips = st.number_input(
-        "注文幅 / 利確幅 (pips)", 
-        min_value=5, 
-        max_value=500, 
-        value=default_trap_pips,
-        step=5,
-        help="松井証券リピート自動売買の1本あたりの注文間隔および利確幅"
-    )
+    st.markdown("##### 📋 松井証券リピート自動売買（ハーフ＆ハーフ）設定アシスタント")
+    st.caption("AIが現在の相場ボラティリティ（ATR）から最適な注文幅・利幅を自動算出します。ボタン一つでAI推奨値を適用できます。")
+
+    # AI推奨の注文幅（ATRベース）を計算
+    ai_rec_trap_pips = max(10, int(round((latest_atr / pip_unit) * 0.8)))
+
+    trap_key = f"trap_w_{ticker}"
+    if trap_key not in st.session_state:
+        st.session_state[trap_key] = int(st.session_state.get("trap_width", ai_rec_trap_pips))
+
+    def apply_ai_trap_callback():
+        st.session_state[trap_key] = int(ai_rec_trap_pips)
+        st.session_state["trap_width"] = int(ai_rec_trap_pips)
+        save_settings()
+
+    def update_trap_callback():
+        st.session_state["trap_width"] = int(st.session_state[trap_key])
+        save_settings()
+
+    rc_col1, rc_col2 = st.columns([2, 1])
+    with rc_col1:
+        trap_width_pips = st.number_input(
+            "注文幅 / 利確幅 (pips)", 
+            min_value=5, 
+            max_value=500, 
+            step=5,
+            key=trap_key,
+            on_change=update_trap_callback,
+            help="松井証券リピート自動売買の1本あたりの注文間隔および利確幅"
+        )
+    with rc_col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.button(f"🤖 AI推奨値 ({ai_rec_trap_pips} pips) を適用", on_click=apply_ai_trap_callback)
 
     half_range_pips = abs(user_upper - user_half) / pip_unit
     half_grid_count = max(1, int(np.floor(half_range_pips / max(1.0, float(trap_width_pips)))))
@@ -1174,10 +1201,10 @@ with tab_repeat:
 
     st.markdown(f"""
     <div class="param-box">
-    <b>【ハーフ＆ハーフ推奨設定値】</b><br>
+    <b>【ハーフ＆ハーフ推奨設定値】</b> (AI算出・広めの中期レンジ適用)<br>
     ・<b>買い設定（下半）</b>: レンジ <code>{price_fmt % user_lower}</code> ～ <code>{price_fmt % user_half}</code> | <b>運用停止(SL)</b>: <code>{price_fmt % buy_stop_loss}</code> (-{stop_buffer_pips}pips)<br>
     ・<b>売り設定（上半）</b>: レンジ <code>{price_fmt % user_half}</code> ～ <code>{price_fmt % user_upper}</code> | <b>運用停止(SL)</b>: <code>{price_fmt % sell_stop_loss}</code> (+{stop_buffer_pips}pips)<br>
-    ・<b>注文幅 / 利確幅</b>: <code>{trap_width_pips} pips</code> | <b>片側注文本数</b>: 約 <code>{half_grid_count} 本</code> (全 {total_grid_count}本)
+    ・<b>注文幅 / 利確幅</b>: <code>{trap_width_pips} pips</code> (AI推奨: <code>{ai_rec_trap_pips} pips</code>) | <b>片側注文本数</b>: 約 <code>{half_grid_count} 本</code> (全 {total_grid_count}本)
     </div>
     """, unsafe_allow_html=True)
     
@@ -1237,7 +1264,7 @@ with tab_ai:
     with pcol2:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
         st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%")
-        st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
+        st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時eller検証精度です。")
 
     if feature_importances is not None and not feature_importances.empty:
         st.markdown("---")
@@ -1262,4 +1289,3 @@ with tab_ai:
         st.plotly_chart(fig_imp, use_container_width=True, config={'displayModeBar': False})
     else:
         st.info("💡 現在の特徴量重要度データを生成できませんでした（学習データ件数が不足している可能性があります）。")
-
