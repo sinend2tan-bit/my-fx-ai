@@ -850,17 +850,21 @@ with tab_chart:
     with ctrl_col1:
         bars_count = st.slider("表示本数", min_value=30, max_value=300, value=120, step=10, key="chart_bars_slider")
     with ctrl_col2:
-        show_bb = st.checkbox("ボリンジャーバンド(±2σ)", value=True, key="show_bb_check")
+        show_ma = st.checkbox("移動平均線(SMA20/EMA200)", value=True, key="show_ma_check")
     with ctrl_col3:
-        show_repeat_lines = st.checkbox("リピートレンジ表示", value=("4時間足" in tf_label), key="show_repeat_lines_check")
+        show_bb = st.checkbox("ボリンジャーバンド(±2σ)", value=True, key="show_bb_check")
     with ctrl_col4:
         sub_indicator = st.selectbox("サブ指標", ["RSI (14)", "MACD", "なし"], index=0, key="sub_indicator_select")
+
+    # 補助コントロール行
+    opt_col1, opt_col2 = st.columns(2)
+    with opt_col1:
+        show_repeat_lines = st.checkbox("リピートレンジ表示", value=("4時間足" in tf_label), key="show_repeat_lines_check")
 
     df_chart = safe_to_tokyo_tz(data.tail(bars_count)).ffill()
     df_chart = df_chart.loc[~df_chart.index.duplicated(keep='last')]
     
-    # 以前の直感的な日付・時刻インデックス（DatetimeIndex）をそのままPlotlyに渡すことで、
-    # スムーズなズームやパン操作が復活します
+    # タイムスタンプインデックスをそのまま使用して、スムーズなズーム＆パン操作を実現
     x_index = df_chart.index
 
     has_sub = sub_indicator != "なし"
@@ -886,18 +890,19 @@ with tab_chart:
         name="価格"
     ), row=1, col=1)
 
-    # 移動平均線
-    if "SMA_20" in df_chart.columns:
-        fig.add_trace(go.Scatter(
-            x=x_index, y=clean_series(df_chart["SMA_20"]),
-            line=dict(color="#f59e0b", width=1.5), name="SMA20"
-        ), row=1, col=1)
+    # 移動平均線（表示切替連動）
+    if show_ma:
+        if "SMA_20" in df_chart.columns:
+            fig.add_trace(go.Scatter(
+                x=x_index, y=clean_series(df_chart["SMA_20"]),
+                line=dict(color="#f59e0b", width=1.5), name="SMA20"
+            ), row=1, col=1)
 
-    if "EMA_200" in df_chart.columns:
-        fig.add_trace(go.Scatter(
-            x=x_index, y=clean_series(df_chart["EMA_200"]),
-            line=dict(color="#38bdf8", width=2.0), name="EMA200"
-        ), row=1, col=1)
+        if "EMA_200" in df_chart.columns:
+            fig.add_trace(go.Scatter(
+                x=x_index, y=clean_series(df_chart["EMA_200"]),
+                line=dict(color="#38bdf8", width=2.0), name="EMA200"
+            ), row=1, col=1)
 
     # ボリンジャーバンド
     if show_bb and "Upper_Band" in df_chart.columns and "Lower_Band" in df_chart.columns:
@@ -986,7 +991,7 @@ with tab_chart:
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1)
     )
     
-    # 休日や非取引時間を詰める設定（レンジ型チャート）
+    # 土日などの非取引時間を詰める設定
     fig.update_xaxes(
         type='date',
         rangebreaks=[dict(bounds=["sat", "mon"])] if "5分" in tf_label or "15分" in tf_label or "1時間" in tf_label else [],
