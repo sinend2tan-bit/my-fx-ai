@@ -749,7 +749,6 @@ st.markdown("---")
 # ==========================================
 # 3. 通貨ペア毎のレンジ管理 & 広めの自動補正ロジック
 # ==========================================
-# 以前より広めの期間（直近300本＝約2ヶ月強の4時間足）から高値・安値を算出し、レンジが狭くなりすぎるのを防止
 swing_high_4h = float(clean_series(data_4h["High"]).iloc[-300:].max()) if data_4h is not None else latest_price * 1.03
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-300:].min()) if data_4h is not None else latest_price * 0.97
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1]) if data_4h is not None and "ATR" in data_4h.columns else (latest_price * 0.005)
@@ -849,7 +848,7 @@ tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
 with tab_chart:
     ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(4)
     with ctrl_col1:
-        bars_count = st.slider("表示本数", min_value=30, max_value=300, value=90, step=10, key="chart_bars_slider")
+        bars_count = st.slider("表示本数", min_value=30, max_value=300, value=120, step=10, key="chart_bars_slider")
     with ctrl_col2:
         show_bb = st.checkbox("ボリンジャーバンド(±2σ)", value=True, key="show_bb_check")
     with ctrl_col3:
@@ -860,17 +859,9 @@ with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(bars_count)).ffill()
     df_chart = df_chart.loc[~df_chart.index.duplicated(keep='last')]
     
-    if "5分" in tf_label or "15分" in tf_label:
-        fmt_str = '%m/%d %H:%M'
-    elif "1時間" in tf_label or "4時間" in tf_label:
-        fmt_str = '%m/%d %H:%M'
-    else:
-        fmt_str = '%Y/%m/%d'
-
-    if isinstance(df_chart.index, pd.DatetimeIndex):
-        x_labels = df_chart.index.strftime(fmt_str)
-    else:
-        x_labels = df_chart.index.astype(str)
+    # 以前の直感的な日付・時刻インデックス（DatetimeIndex）をそのままPlotlyに渡すことで、
+    # スムーズなズームやパン操作が復活します
+    x_index = df_chart.index
 
     has_sub = sub_indicator != "なし"
     row_heights = [0.75, 0.25] if has_sub else [1.0]
@@ -885,7 +876,7 @@ with tab_chart:
 
     # ローソク足
     fig.add_trace(go.Candlestick(
-        x=x_labels,
+        x=x_index,
         open=clean_series(df_chart["Open"]),
         high=clean_series(df_chart["High"]),
         low=clean_series(df_chart["Low"]),
@@ -898,25 +889,25 @@ with tab_chart:
     # 移動平均線
     if "SMA_20" in df_chart.columns:
         fig.add_trace(go.Scatter(
-            x=x_labels, y=clean_series(df_chart["SMA_20"]),
+            x=x_index, y=clean_series(df_chart["SMA_20"]),
             line=dict(color="#f59e0b", width=1.5), name="SMA20"
         ), row=1, col=1)
 
     if "EMA_200" in df_chart.columns:
         fig.add_trace(go.Scatter(
-            x=x_labels, y=clean_series(df_chart["EMA_200"]),
+            x=x_index, y=clean_series(df_chart["EMA_200"]),
             line=dict(color="#38bdf8", width=2.0), name="EMA200"
         ), row=1, col=1)
 
     # ボリンジャーバンド
     if show_bb and "Upper_Band" in df_chart.columns and "Lower_Band" in df_chart.columns:
         fig.add_trace(go.Scatter(
-            x=x_labels, y=clean_series(df_chart["Upper_Band"]),
+            x=x_index, y=clean_series(df_chart["Upper_Band"]),
             line=dict(color="rgba(148, 163, 184, 0.4)", width=1, dash="dot"),
             name="BB +2σ"
         ), row=1, col=1)
         fig.add_trace(go.Scatter(
-            x=x_labels, y=clean_series(df_chart["Lower_Band"]),
+            x=x_index, y=clean_series(df_chart["Lower_Band"]),
             line=dict(color="rgba(148, 163, 184, 0.4)", width=1, dash="dot"),
             fill='tonexty', fillcolor='rgba(148, 163, 184, 0.05)',
             name="BB -2σ"
@@ -944,7 +935,7 @@ with tab_chart:
     # サブチャート
     if sub_indicator == "RSI (14)" and "RSI" in df_chart.columns:
         fig.add_trace(go.Scatter(
-            x=x_labels, y=clean_series(df_chart["RSI"]),
+            x=x_index, y=clean_series(df_chart["RSI"]),
             line=dict(color="#a855f7", width=1.8), name="RSI"
         ), row=2, col=1)
         fig.add_hline(y=70, line_dash="dot", line_color="#ef4444", row=2, col=1)
@@ -953,16 +944,16 @@ with tab_chart:
 
     elif sub_indicator == "MACD" and "MACD" in df_chart.columns:
         fig.add_trace(go.Scatter(
-            x=x_labels, y=clean_series(df_chart["MACD"]),
+            x=x_index, y=clean_series(df_chart["MACD"]),
             line=dict(color="#38bdf8", width=1.5), name="MACD"
         ), row=2, col=1)
         fig.add_trace(go.Scatter(
-            x=x_labels, y=clean_series(df_chart["MACD_Signal"]),
+            x=x_index, y=clean_series(df_chart["MACD_Signal"]),
             line=dict(color="#f59e0b", width=1.5), name="Signal"
         ), row=2, col=1)
         hist_colors = ['#22c55e' if v >= 0 else '#ef4444' for v in clean_series(df_chart["MACD_Hist"])]
         fig.add_trace(go.Bar(
-            x=x_labels, y=clean_series(df_chart["MACD_Hist"]),
+            x=x_index, y=clean_series(df_chart["MACD_Hist"]),
             marker_color=hist_colors, name="Hist"
         ), row=2, col=1)
         fig.update_yaxes(side="right", row=2, col=1)
@@ -995,8 +986,13 @@ with tab_chart:
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1)
     )
     
-    nticks_val = min(len(x_labels), 12)
-    fig.update_xaxes(type='category', nticks=nticks_val, tickangle=-25, showspikes=True)
+    # 休日や非取引時間を詰める設定（レンジ型チャート）
+    fig.update_xaxes(
+        type='date',
+        rangebreaks=[dict(bounds=["sat", "mon"])] if "5分" in tf_label or "15分" in tf_label or "1時間" in tf_label else [],
+        showspikes=True,
+        spikemode="across"
+    )
     
     fig.update_yaxes(
         range=[y_min_fit, y_max_fit],
@@ -1146,12 +1142,11 @@ with tab_news:
             </div>
             """, unsafe_allow_html=True)
 
-# --- タブ4: 松井証券 リピート設定 & リスク管理（AI推奨注文幅の自動提示＆ワンタッチ反映） ---
+# --- タブ4: 松井証券 リピート設定 & リスク管理 ---
 with tab_repeat:
     st.markdown("##### 📋 松井証券リピート自動売買（ハーフ＆ハーフ）設定アシスタント")
     st.caption("AIが現在の相場ボラティリティ（ATR）から最適な注文幅・利幅を自動算出します。ボタン一つでAI推奨値を適用できます。")
 
-    # AI推奨の注文幅（ATRベース）を計算
     ai_rec_trap_pips = max(10, int(round((latest_atr / pip_unit) * 0.8)))
 
     trap_key = f"trap_w_{ticker}"
@@ -1264,7 +1259,7 @@ with tab_ai:
     with pcol2:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
         st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%")
-        st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時eller検証精度です。")
+        st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
 
     if feature_importances is not None and not feature_importances.empty:
         st.markdown("---")
