@@ -41,7 +41,8 @@ DEFAULT_SETTINGS = {
     "risk_percent": 1.0,
     "rr_ratio": 1.5,
     "trap_width": 20,
-    "ranges": {}
+    "ranges": {},
+    "trade_memo": ""
 }
 
 def convert_to_builtin_type(obj):
@@ -80,7 +81,8 @@ def save_settings():
         "risk_percent": float(st.session_state.get("risk_percent", DEFAULT_SETTINGS["risk_percent"])),
         "rr_ratio": float(st.session_state.get("rr_ratio", DEFAULT_SETTINGS["rr_ratio"])),
         "trap_width": int(st.session_state.get("trap_width", DEFAULT_SETTINGS["trap_width"])),
-        "ranges": st.session_state.get("ranges", {})
+        "ranges": st.session_state.get("ranges", {}),
+        "trade_memo": str(st.session_state.get("trade_memo", ""))
     }
     try:
         clean_data = convert_to_builtin_type(settings)
@@ -107,6 +109,8 @@ if "trap_width" not in st.session_state:
     st.session_state["trap_width"] = int(saved_config.get("trap_width", 20))
 if "ranges" not in st.session_state:
     st.session_state["ranges"] = saved_config.get("ranges", {})
+if "trade_memo" not in st.session_state:
+    st.session_state["trade_memo"] = saved_config.get("trade_memo", "")
 
 st.markdown("""
 <style>
@@ -851,14 +855,14 @@ stop_buffer_val = stop_buffer_pips * pip_unit
 buy_stop_loss = user_lower - stop_buffer_val
 sell_stop_loss = user_upper + stop_buffer_val
 # ==========================================
-# PART 3: 各タブ（チャート・単発アシスト・ニュース・リピート・AI詳細）描画
+# PART 3: 各タブ描画処理（チャート・単発アシスト・ニュース・リピート・AI詳細 & ノート）
 # ==========================================
 tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
     "📈 メインチャート", 
     "⚡ 単発トレード (AI全自動アシスト)", 
     "📰 経済指標＆為替ニュースAI予測",
     "📋 松井証券 リピート設定 & リスク管理", 
-    "🤖 AIモデル分析詳細"
+    "🤖 AI分析詳細 & トレードノート"
 ])
 
 # --- タブ1: メインチャート ---
@@ -1285,7 +1289,7 @@ with tab_repeat:
     sc3.metric("推定月間利回り", f"約 {est_monthly_roi:.1f}% / 月")
     sc4.metric("推定年間利回り (年利ROI)", f"約 {est_annual_roi:.1f}% / 年")
 
-# --- タブ5: AIモデル分析詳細 ---
+# --- タブ5: AIモデル分析詳細 & トレードノート ---
 with tab_ai:
     st.markdown("##### 🤖 AI予測モデル（MTF多重時間足 × 機械学習）の評価と内訳")
     
@@ -1310,6 +1314,24 @@ with tab_ai:
         st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%", f"検証シグナル数: {total_signals_count}回")
         st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
 
+    st.markdown("---")
+    st.markdown("##### 📊 テクニカル指標ダッシュボード（現在値サマリー）")
+    
+    curr_rsi = float(clean_series(data["RSI"]).iloc[-1]) if "RSI" in data.columns else 50.0
+    curr_adx = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 25.0
+    curr_bb = float(clean_series(data["BB_PctB"]).iloc[-1]) if "BB_PctB" in data.columns else 0.5
+    curr_macd = float(clean_series(data["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in data.columns else 0.0
+    curr_stoch = float(clean_series(data["Stoch_K"]).iloc[-1]) if "Stoch_K" in data.columns else 50.0
+
+    tech_df = pd.DataFrame([
+        {"指標": "RSI (14)", "現在値": f"{curr_rsi:.1f}", "状態判定": "買われ過ぎ" if curr_rsi > 70 else ("売られ過ぎ" if curr_rsi < 30 else "ニュートラル")},
+        {"指標": "ADX (トレンド強度)", "現在値": f"{curr_adx:.1f}", "状態判定": "強いトレンド" if curr_adx > 25 else "レンジ / 膠着"},
+        {"指標": "ボリンジャーバンド %B", "current": f"{curr_bb:.2f}", "状態判定": "上方バンドタッチ" if curr_bb > 0.85 else ("下方バンドタッチ" if curr_bb < 0.15 else "バンド内推移")},
+        {"指標": "MACD ヒストグラム", "現在値": f"{curr_macd:.5f}", "状態判定": "上昇モメンタム" if curr_macd > 0 else "下落モメンタム"},
+        {"指標": "ストキャスティクス %K", "current": f"{curr_stoch:.1f}", "状態判定": "高値圏" if curr_stoch > 80 else ("安値圏" if curr_stoch < 20 else "中立圏")}
+    ])
+    st.dataframe(tech_df, use_container_width=True, hide_index=True)
+
     if feature_importances is not None and not feature_importances.empty:
         st.markdown("---")
         col_imp_title, col_imp_btn = st.columns([3, 1])
@@ -1318,7 +1340,6 @@ with tab_ai:
             st.caption("AIが『買い・売り・様子見』を判断する際に、どの指標を重視したかを示す貢献度ランキングです。")
         
         with col_imp_btn:
-            # 特徴量重要度のCSVエクスポート機能
             csv_data = feature_importances.reset_index()
             csv_data.columns = ["指標名", "重要度スコア"]
             csv_bytes = csv_data.to_csv(index=False).encode("utf-8-sig")
@@ -1330,7 +1351,7 @@ with tab_ai:
                 key="download_csv_btn"
             )
         
-        top10_imp = feature_importances.tail(10)
+        top10_imp = feature_importances.nlargest(10).sort_values(ascending=True)
         
         fig_imp = go.Figure(go.Bar(
             x=top10_imp.values,
@@ -1346,5 +1367,18 @@ with tab_ai:
             yaxis=dict(autorange="reversed")
         )
         st.plotly_chart(fig_imp, use_container_width=True, config={'displayModeBar': False})
-    else:
-        st.info("💡 現在の特徴量重要度データを生成できませんでした（学習データ件数が不足している可能性があります）。")
+
+    st.markdown("---")
+    st.markdown("##### 📝 簡易トレードノート（考察・反省メモ）")
+    st.caption("本日の相場環境、エントリー根拠、反省点などを自由に書き留めておくことができます（自動保存）。")
+
+    def update_memo_callback():
+        save_settings()
+
+    st.text_area(
+        "トレードノートを入力",
+        key="trade_memo",
+        height=150,
+        on_change=update_memo_callback,
+        placeholder="例: 本日は米雇用統計発表前のためスキャルピング中心。押し目買いを優先する。"
+    )
