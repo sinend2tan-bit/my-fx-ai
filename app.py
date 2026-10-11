@@ -1270,17 +1270,20 @@ with tab_repeat:
         st.success("🟢 資金管理チェック: 適切なリスク範囲内です。")
 
     st.markdown("---")
-    st.markdown("##### 📈 簡易月間リターン・回転数シミュレーション（目安）")
-    st.caption("現在の相場ボラティリティ（ATR）に基づき、月に何回グリッドが利確（回転）するかを簡易試算します。")
+    st.markdown("##### 📈 リターン・回転数シミュレーション（月間・年間）")
+    st.caption("現在の相場ボラティリティ（ATR）に基づき、グリッドの回転数および月間・年間利回り（ROI）を試算します。")
     
     estimated_monthly_turns = max(5, int((latest_atr / (trap_width_pips * pip_unit)) * 15))
     est_monthly_profit = estimated_monthly_turns * (trap_width_pips * pip_value_yen)
+    est_annual_profit = est_monthly_profit * 12
     est_monthly_roi = (est_monthly_profit / account_balance_val) * 100 if account_balance_val > 0 else 0.0
+    est_annual_roi = (est_annual_profit / account_balance_val) * 100 if account_balance_val > 0 else 0.0
 
-    sc1, sc2, sc3 = st.columns(3)
+    sc1, sc2, sc3, sc4 = st.columns(4)
     sc1.metric("推定月間利確回数", f"約 {estimated_monthly_turns} 回")
     sc2.metric("推定月間利益額", f"約 +{int(est_monthly_profit):,} 円")
-    sc3.metric("推定月間利回り (ROI)", f"約 {est_monthly_roi:.1f}% / 月")
+    sc3.metric("推定月間利回り", f"約 {est_monthly_roi:.1f}% / 月")
+    sc4.metric("推定年間利回り (年利ROI)", f"約 {est_annual_roi:.1f}% / 年")
 
 # --- タブ5: AIモデル分析詳細 ---
 with tab_ai:
@@ -1308,9 +1311,24 @@ with tab_ai:
         st.caption("※ 未来データの先読み（Lookahead Leak）を排除し、到達順序を厳密判定した時系列検証精度です。")
 
     if feature_importances is not None and not feature_importances.empty:
-        st.markdown("---")
-        st.markdown("##### 📊 AIの判断根拠（特徴量重要度 TOP 10）")
-        st.caption("AIが『買い・売り・様子見』を判断する際に、どの指標を重視したかを示す貢献度ランキングです。")
+        st.markdown("---
+        col_imp_title, col_imp_btn = st.columns([3, 1])
+        with col_imp_title:
+            st.markdown("##### 📊 AIの判断根拠（特徴量重要度 TOP 10）")
+            st.caption("AIが『買い・売り・様子見』を判断する際に、どの指標を重視したかを示す貢献度ランキングです。")
+        
+        with col_imp_btn:
+            # 特徴量重要度のCSVエクスポート機能（新機能）
+            csv_data = feature_importances.reset_index()
+            csv_data.columns = ["指標名", "重要度スコア"]
+            csv_bytes = csv_data.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                label="📥 重要度CSVダウンロード",
+                data=csv_bytes,
+                file_name=f"ai_feature_importances_{ticker.replace('=X','')}.csv",
+                mime="text/csv",
+                key="download_csv_btn"
+            )
         
         top10_imp = feature_importances.tail(10)
         
