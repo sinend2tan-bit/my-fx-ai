@@ -94,7 +94,7 @@ def save_settings():
 # 初期設定のロード
 saved_config = load_settings()
 
-# Session State の確実な初期化（再起動時にも保持）
+# Session State の確実な初期化
 if "account_balance" not in st.session_state:
     st.session_state["account_balance"] = int(saved_config.get("account_balance", 500000))
 if "quantity_wan" not in st.session_state:
@@ -125,7 +125,6 @@ st.markdown("""
     .param-box { background-color: rgba(30, 41, 59, 0.8) !important; border-left: 5px solid #3b82f6; padding: 14px; border-radius: 6px; font-family: monospace; line-height: 1.8; color: #f8fafc !important; }
     .param-box code { font-size: 0.95rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: rgba(51, 65, 85, 0.9) !important; padding: 2px 6px; border-radius: 4px; }
     
-    .ai-card { background-color: rgba(15, 23, 42, 0.6); border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
     .news-card { background-color: rgba(30, 41, 59, 0.5); border: 1px solid #475569; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
     .update-time { font-size: 0.85rem; color: #94a3b8; text-align: right; margin-bottom: 8px; }
 </style>
@@ -181,7 +180,6 @@ TIMEFRAMES = {
 LOOKAHEAD_BARS = 8
 
 def clean_series(s):
-    """DataFrameやSeriesから安全に1次元Seriesを取り出す"""
     if isinstance(s, pd.DataFrame):
         if s.shape[1] > 0:
             return s.iloc[:, 0]
@@ -191,7 +189,6 @@ def clean_series(s):
     return pd.Series(s)
 
 def safe_to_tokyo_tz(df):
-    """タイムゾーンの有無を判定して安全にAsia/Tokyoに変換"""
     if df is None or df.empty:
         return df
     df_out = df.copy()
@@ -205,7 +202,6 @@ def safe_to_tokyo_tz(df):
     return df_out
 
 def flatten_yf_df(df):
-    """yfinanceのレスポンス（MultiIndex対応）を安全に単一層のDataFrameに平坦化"""
     if df is None or df.empty:
         return df
     df_out = df.copy()
@@ -221,13 +217,11 @@ def flatten_yf_df(df):
             
     df_out = df_out.loc[:, ~df_out.columns.duplicated()]
     df_out.columns = [str(c).capitalize() for c in df_out.columns]
-    
     df_out = df_out.loc[~df_out.index.duplicated(keep='last')]
     return df_out
 
 @st.cache_data(ttl=120, show_spinner=False)
 def get_usdjpy_rate():
-    """週末・休日等の取得失敗を防ぐためperiod='5d'で最新レートを取得"""
     try:
         df = yf.download("USDJPY=X", period="5d", progress=False, timeout=10)
         df = flatten_yf_df(df)
@@ -240,12 +234,8 @@ def get_usdjpy_rate():
         pass
     return 155.0
 
-# ==========================================
-# ニュース＆インパクト解析モジュール
-# ==========================================
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_news_and_impact(symbol):
-    """Yahoo Financeからニュースを取得し、キーワード解析で為替影響を自動予測"""
     try:
         tk = yf.Ticker(symbol)
         news_list = getattr(tk, "news", None)
@@ -337,9 +327,6 @@ def fetch_news_and_impact(symbol):
     except Exception:
         return []
 
-# ==========================================
-# 1. データ処理 & バックテスト付きAIモデル
-# ==========================================
 @st.cache_data(ttl=60, show_spinner=False)
 def load_and_process_data(symbol, period, interval, tf_name=""):
     try:
@@ -641,7 +628,7 @@ pip_unit = 0.01 if is_jpy else 0.0001
 price_fmt = "%.3f" if is_jpy else "%.5f"
 spread_pips = DEFAULT_SPREAD_PIPS.get(ticker, 0.3)
 
-# サイドバー設定（即時保存コールバック連携）
+# サイドバー設定
 st.sidebar.header("⚙️ 資金 & リスク設定")
 st.sidebar.number_input(
     "口座資金 (円)", 
@@ -806,7 +793,6 @@ if key_lower not in st.session_state:
 if key_upper not in st.session_state:
     st.session_state[key_upper] = float(current_range["upper"])
 
-# レンジ調整UI
 with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=False):
     rc1, rc2 = st.columns(2)
     
@@ -898,7 +884,6 @@ with tab_chart:
         vertical_spacing=0.06
     )
 
-    # ローソク足
     fig.add_trace(go.Candlestick(
         x=x_index,
         open=clean_series(df_chart["Open"]),
@@ -910,7 +895,6 @@ with tab_chart:
         name="価格"
     ), row=1, col=1)
 
-    # 移動平均線
     if show_ma:
         if "SMA_20" in df_chart.columns:
             fig.add_trace(go.Scatter(
@@ -924,7 +908,6 @@ with tab_chart:
                 line=dict(color="#38bdf8", width=2.0), name="EMA200"
             ), row=1, col=1)
 
-    # ボリンジャーバンド
     if show_bb and "Upper_Band" in df_chart.columns and "Lower_Band" in df_chart.columns:
         fig.add_trace(go.Scatter(
             x=x_index, y=clean_series(df_chart["Upper_Band"]),
@@ -938,7 +921,6 @@ with tab_chart:
             name="BB -2σ"
         ), row=1, col=1)
 
-    # AIシグナルマーカーの描画
     if show_ai_markers and ai_signal_history is not None:
         common_idx = df_chart.index.intersection(ai_signal_history.index)
         if len(common_idx) > 0:
@@ -964,7 +946,6 @@ with tab_chart:
                     name="AI 売りシグナル"
                 ), row=1, col=1)
 
-    # リピートレンジライン
     if show_repeat_lines:
         if not np.isnan(user_lower) and not np.isnan(user_upper):
             fig.add_hrect(
@@ -983,7 +964,6 @@ with tab_chart:
         if not np.isnan(buy_stop_loss):
             fig.add_hline(y=buy_stop_loss, line_dash="dashdot", line_color="#16a34a", annotation_text="買SL", annotation_position="bottom right", row=1, col=1)
 
-    # サブチャート
     if sub_indicator == "RSI (14)" and "RSI" in df_chart.columns:
         fig.add_trace(go.Scatter(
             x=x_index, y=clean_series(df_chart["RSI"]),
@@ -1194,12 +1174,11 @@ with tab_news:
 # --- タブ4: 松井証券 リピート設定 & リスク管理 ---
 with tab_repeat:
     st.markdown("##### 📋 松井証券リピート自動売買（ハーフ＆ハーフ）設定アシスタント")
-    st.caption("中期的な4時間足のボラティリティ（ATR）を基準に、リピート売買に最適な注文幅・利幅（デフォルト30〜50pips以上）を自動算出します。")
+    st.caption("中期的な4時間足のボラティリティ（ATR）を基準に、リピート売買に最適な注文幅・利幅を自動算出します。")
 
-    # 【改善】4時間足のATRをベースに、リピート注文に最適な実用サイズ（最低30pips、または4時間足ATRの1.2倍等）に調整
     atr_4h_val = float(clean_series(data_4h["ATR"]).iloc[-1]) if data_4h is not None and "ATR" in data_4h.columns else latest_atr
     calculated_rec_trap = int(round((atr_4h_val / pip_unit) * 0.8))
-    ai_rec_trap_pips = max(30, calculated_rec_trap)  # 最低でも30pipsを下限として実用性を担保
+    ai_rec_trap_pips = max(30, calculated_rec_trap)
 
     trap_key = f"trap_w_{ticker}"
     if trap_key not in st.session_state:
@@ -1276,18 +1255,19 @@ with tab_repeat:
         st.success("🟢 資金管理チェック: 適切なリスク範囲内です。")
 
     st.markdown("---")
-    st.markdown("##### 📈 リターン・回転数シミュレーション（月間・年間）")
-    st.caption("現在の相場ボラティリティ（ATR）に基づき、グリッドの回転数および月間・年間利回り（ROI）を試算します。")
+    st.markdown("##### 📈 リターン・回転数シミュレーション（スプレッド考慮・保守的試算）")
+    st.caption("スプレッド往復コストを控除した上で、月間利確回数および年間利回り（ROI）を試算します。")
     
-    estimated_monthly_turns = max(5, int((latest_atr / (trap_width_pips * pip_unit)) * 15))
-    est_monthly_profit = estimated_monthly_turns * (trap_width_pips * pip_value_yen)
+    net_trap_pips = max(1.0, trap_width_pips - spread_pips)
+    estimated_monthly_turns = max(5, int((latest_atr / (trap_width_pips * pip_unit)) * 12))
+    est_monthly_profit = estimated_monthly_turns * (net_trap_pips * pip_value_yen)
     est_annual_profit = est_monthly_profit * 12
     est_monthly_roi = (est_monthly_profit / account_balance_val) * 100 if account_balance_val > 0 else 0.0
     est_annual_roi = (est_annual_profit / account_balance_val) * 100 if account_balance_val > 0 else 0.0
 
     sc1, sc2, sc3, sc4 = st.columns(4)
     sc1.metric("推定月間利確回数", f"約 {estimated_monthly_turns} 回")
-    sc2.metric("推定月間利益額", f"約 +{int(est_monthly_profit):,} 円")
+    sc2.metric("推定月間利益額 (純益)", f"約 +{int(est_monthly_profit):,} 円")
     sc3.metric("推定月間利回り", f"約 {est_monthly_roi:.1f}% / 月")
     sc4.metric("推定年間利回り (年利ROI)", f"約 {est_annual_roi:.1f}% / 年")
 
@@ -1372,7 +1352,7 @@ with tab_ai:
 
     st.markdown("---")
     st.markdown("##### 📝 簡易トレードノート（考察・反省メモ）")
-    st.caption("本日の相場環境、エントリー根拠、反省点などを自由に書き留めておくことができます（自動保存）。")
+    st.caption("本日の相場環境、エントリー根拠、反省点などを自由に書き留めておくことができます（自動保存＆テキストダウンロード対応）。")
 
     def update_memo_callback():
         save_settings()
@@ -1384,3 +1364,14 @@ with tab_ai:
         on_change=update_memo_callback,
         placeholder="例: 本日は米雇用統計発表前のためスキャルピング中心。押し目買いを優先する。"
     )
+
+    # 【追加機能】トレードノートのテキストファイル保存ボタン
+    memo_text = st.session_state.get("trade_memo", "")
+    if memo_text.strip():
+        st.download_button(
+            label="📥 トレードノートをテキスト保存 (.txt)",
+            data=memo_text.encode("utf-8"),
+            file_name=f"trade_memo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            mime="text/plain",
+            key="download_memo_btn"
+        )
