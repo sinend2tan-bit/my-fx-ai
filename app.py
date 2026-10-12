@@ -60,7 +60,6 @@ def convert_to_builtin_type(obj):
     return obj
 
 def load_settings():
-    """ローカルのJSONファイルから設定を読み込み"""
     settings = DEFAULT_SETTINGS.copy()
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -73,7 +72,6 @@ def load_settings():
     return settings
 
 def save_settings():
-    """現在の Session State を JSON ファイルへ保存"""
     settings = {
         "account_balance": float(st.session_state.get("account_balance", DEFAULT_SETTINGS["account_balance"])),
         "quantity_wan": float(st.session_state.get("quantity_wan", DEFAULT_SETTINGS["quantity_wan"])),
@@ -91,10 +89,8 @@ def save_settings():
     except Exception as e:
         st.error(f"設定の保存に失敗しました: {e}")
 
-# 初期設定のロード
 saved_config = load_settings()
 
-# Session State の確実な初期化
 if "account_balance" not in st.session_state:
     st.session_state["account_balance"] = int(saved_config.get("account_balance", 500000))
 if "quantity_wan" not in st.session_state:
@@ -112,21 +108,22 @@ if "ranges" not in st.session_state:
 if "trade_memo" not in st.session_state:
     st.session_state["trade_memo"] = saved_config.get("trade_memo", "")
 
+# 視認性を高めたカスタムCSSスタイル（文字が見やすくなるようにコントラストを調整）
 st.markdown("""
 <style>
     .main .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1280px; }
     [data-testid="stMetricValue"] { font-size: 1.4rem !important; font-weight: 800 !important; }
     
-    .badge-buy { background-color: #16a34a; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
-    .badge-sell { background-color: #dc2626; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
-    .badge-wait { background-color: #475569; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
+    .badge-buy { background-color: #15803d; color: #ffffff !important; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
+    .badge-sell { background-color: #b91c1c; color: #ffffff !important; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
+    .badge-wait { background-color: #334155; color: #ffffff !important; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
     
-    .alert-box { background: linear-gradient(135deg, rgba(220, 38, 38, 0.2), rgba(245, 158, 11, 0.2)); border-left: 6px solid #f59e0b; padding: 14px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc; }
-    .param-box { background-color: rgba(30, 41, 59, 0.8) !important; border-left: 5px solid #3b82f6; padding: 14px; border-radius: 6px; font-family: monospace; line-height: 1.8; color: #f8fafc !important; }
-    .param-box code { font-size: 0.95rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: rgba(51, 65, 85, 0.9) !important; padding: 2px 6px; border-radius: 4px; }
+    .alert-box { background-color: #1e293b; border-left: 6px solid #f59e0b; padding: 14px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.0rem; font-weight: 500; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .param-box { background-color: #1e293b !important; border-left: 5px solid #3b82f6; padding: 16px; border-radius: 6px; font-family: monospace; line-height: 1.8; color: #f8fafc !important; font-size: 0.95rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .param-box code { font-size: 0.95rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: #0f172a !important; padding: 2px 6px; border-radius: 4px; }
     
-    .news-card { background-color: rgba(30, 41, 59, 0.5); border: 1px solid #475569; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
-    .update-time { font-size: 0.85rem; color: #94a3b8; text-align: right; margin-bottom: 8px; }
+    .news-card { background-color: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 14px; margin-bottom: 12px; color: #f8fafc !important; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .update-time { font-size: 0.85rem; color: #cbd5e1; text-align: right; margin-bottom: 8px; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -609,9 +606,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
     except Exception:
         return ("WAIT (エラー)", 0.0, 0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
 
-# ==========================================
-# 2. UI構築 & 状態永続化連動
-# ==========================================
 st.title("Pro FX Analyzer & Signal Pro")
 
 col_sel1, col_sel2 = st.columns(2)
@@ -628,7 +622,6 @@ pip_unit = 0.01 if is_jpy else 0.0001
 price_fmt = "%.3f" if is_jpy else "%.5f"
 spread_pips = DEFAULT_SPREAD_PIPS.get(ticker, 0.3)
 
-# サイドバー設定
 st.sidebar.header("⚙️ 資金 & リスク設定")
 st.sidebar.number_input(
     "口座資金 (円)", 
@@ -694,7 +687,6 @@ if st.sidebar.button("🔄 最新データに更新"):
     st.cache_data.clear()
     st.rerun()
 
-# データ取得
 with st.spinner("最新相場データ & ニュースを取得中..."):
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
     data_4h = load_and_process_data(ticker, "90d", "1h", "4時間足 (中期・リピート用)")
@@ -717,7 +709,7 @@ latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns 
 status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(data, data_htf)
 
 # ==========================================
-# 🚨 急変動（ブレイクアウト）事前予測ロジック
+# 🚨 急変動（ブレイクアウト）事前予測ロジック（HTMLタグで視認性・文字崩れを解消）
 # ==========================================
 bb_pct = float(clean_series(data["BB_PctB"]).iloc[-1]) if "BB_PctB" in data.columns else 0.5
 adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 20.0
@@ -729,16 +721,15 @@ is_squeeze = bb_pct < 0.15 or bb_pct > 0.85
 vol_alert_msg = None
 if is_volatility_expanding or adx_val_curr > 28.0:
     if prob_dict["buy"] > prob_dict["sell"]:
-        vol_alert_msg = f"⚠️ **【急変動・上方ブレイク警戒】** ボラティリティが拡大傾向にあります。**上方向（買い優勢・確率 {prob_dict['buy']}%）**へ大きく動くエネルギーが高まっています！"
+        vol_alert_msg = f"⚠️ <b>【急変動・上方ブレイク警戒】</b> ボラティリティが拡大傾向にあります。<b>上方向（買い優勢・確率 {prob_dict['buy']}%）</b>へ大きく動くエネルギーが高まっています！"
     else:
-        vol_alert_msg = f"⚠️ **【急変動・下方ブレイク警戒】** ボラティリティが拡大傾向にあります。**下方向（売り優勢・確率 {prob_dict['sell']}%）**へ大きく動くエネルギーが高まっています！"
+        vol_alert_msg = f"⚠️ <b>【急変動・下方ブレイク警戒】</b> ボラティリティが拡大傾向にあります。<b>下方向（売り優勢・確率 {prob_dict['sell']}%）</b>へ大きく動くエネルギーが高まっています！"
 elif is_squeeze:
-    vol_alert_msg = f"⚡ **【エネルギー蓄積中（スクイーズ）】** ボリンジャーバンドが収縮しており、まもなくどちらかへ**大きくレートが跳ねる（急変動する）**前兆です。"
+    vol_alert_msg = f"⚡ <b>【エネルギー蓄積中（スクイーズ）】</b> ボリンジャーバンドが収縮しており、まもなくどちらかへ<b>大きくレートが跳ねる（急変動する）</b>前兆です。"
 
 if vol_alert_msg:
     st.markdown(f'<div class="alert-box">{vol_alert_msg}</div>', unsafe_allow_html=True)
 
-# サマリー表示
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("現在レート", price_fmt % latest_price)
 
@@ -753,9 +744,6 @@ m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 
 st.markdown("---")
 
-# ==========================================
-# 3. 通貨ペア毎のレンジ管理 & 広めの自動補正ロジック
-# ==========================================
 swing_high_4h = float(clean_series(data_4h["High"]).iloc[-300:].max()) if data_4h is not None else latest_price * 1.03
 swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-300:].min()) if data_4h is not None else latest_price * 0.97
 atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1]) if data_4h is not None and "ATR" in data_4h.columns else (latest_price * 0.005)
@@ -1164,7 +1152,7 @@ with tab_news:
                 <div style="font-size: 1.05rem; font-weight: 700; margin-bottom: 8px;">
                     <a href="{safe_link}" target="_blank" style="color: #f8fafc; text-decoration: none;">{safe_title} 🔗</a>
                 </div>
-                <div style="background-color: rgba(15, 23, 42, 0.6); padding: 8px 12px; border-radius: 4px; font-size: 0.9rem;">
+                <div style="background-color: #0f172a; padding: 8px 12px; border-radius: 4px; font-size: 0.9rem;">
                     🎯 <b>AI予測影響</b>: <span style="color: #facc15; font-weight: bold;">{safe_direction}</span><br>
                     💡 <b>判定理由</b>: {safe_reason}
                 </div>
@@ -1365,7 +1353,6 @@ with tab_ai:
         placeholder="例: 本日は米雇用統計発表前のためスキャルピング中心。押し目買いを優先する。"
     )
 
-    # 【追加機能】トレードノートのテキストファイル保存ボタン
     memo_text = st.session_state.get("trade_memo", "")
     if memo_text.strip():
         st.download_button(
