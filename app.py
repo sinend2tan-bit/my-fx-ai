@@ -39,7 +39,8 @@ DEFAULT_SETTINGS = {
     "rr_ratio": 1.5,
     "trap_width": 30,
     "ranges": {},
-    "trade_memo": ""
+    "trade_memo": "",
+    "webhook_url": ""
 }
 
 def convert_to_builtin_type(obj):
@@ -77,7 +78,8 @@ def save_settings():
         "rr_ratio": float(st.session_state.get("rr_ratio", DEFAULT_SETTINGS["rr_ratio"])),
         "trap_width": int(st.session_state.get("trap_width", DEFAULT_SETTINGS["trap_width"])),
         "ranges": st.session_state.get("ranges", {}),
-        "trade_memo": str(st.session_state.get("trade_memo", ""))
+        "trade_memo": str(st.session_state.get("trade_memo", "")),
+        "webhook_url": str(st.session_state.get("webhook_url", ""))
     }
     try:
         clean_data = convert_to_builtin_type(settings)
@@ -104,6 +106,8 @@ if "ranges" not in st.session_state:
     st.session_state["ranges"] = saved_config.get("ranges", {})
 if "trade_memo" not in st.session_state:
     st.session_state["trade_memo"] = saved_config.get("trade_memo", "")
+if "webhook_url" not in st.session_state:
+    st.session_state["webhook_url"] = saved_config.get("webhook_url", "")
 
 # 視認性と操作性を高めたカスタムCSS（ボタンの文字潰れ対策＆洗練されたダークUI）
 st.markdown("""
@@ -119,7 +123,6 @@ st.markdown("""
         color: #f8fafc !important;
     }
     
-    /* サイドバーおよびメイン内のボタンの視認性改善（白飛び防止） */
     .stButton button {
         background-color: #334155 !important;
         color: #f8fafc !important;
@@ -514,11 +517,15 @@ if HAS_AUTOREFRESH:
 else:
     st.sidebar.caption("💡 `pip install streamlit-autorefresh` で自動更新有効")
 
+# 【新機能】Webhook通知URL設定
+with st.sidebar.expander("🔔 通知設定 (Webhook)", expanded=False):
+    st.text_input("Webhook URL (Discord等)", key="webhook_url", on_change=save_settings, placeholder="https://discord.com/api/webhooks/...")
+    st.caption("※ シグナル発生時や急変動警戒時の外部通知用URLを設定できます。")
+
 if st.sidebar.button("💾 設定を即時手動保存"):
     save_settings()
     st.toast("設定を保存しました！", icon="💾")
 
-# 【新機能】設定のインポート/エクスポート機能
 with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", expanded=False):
     current_settings_json = json.dumps(load_settings(), ensure_ascii=False, indent=2)
     st.download_button(
@@ -966,6 +973,18 @@ with tab_ai:
         st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
         st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%", f"検証シグナル数: {total_signals_count}回")
         st.caption("※ 未来データの先読みを完全に排除した時系列検証精度です。")
+        
+        # 【新機能】AIシグナル履歴のCSVダウンロード
+        if ai_signal_history is not None and not ai_signal_history.empty:
+            sig_export_df = ai_signal_history.reset_index()
+            sig_export_df.columns = ["日時", "シグナル判定(1:買,-1:売,0:様子見)"]
+            st.download_button(
+                label="📥 AIシグナル履歴CSVダウンロード",
+                data=sig_export_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"ai_signal_history_{ticker.replace('=X','')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
 
     st.markdown("---")
     st.markdown("##### 📊 テクニカル指標ダッシュボード（現在値サマリー）")
