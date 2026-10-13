@@ -1,6 +1,3 @@
-# ==========================================
-# PART 1: ライブラリのインポート・基本設定・データ生成
-# ==========================================
 import html
 import json
 import os
@@ -108,12 +105,15 @@ if "ranges" not in st.session_state:
 if "trade_memo" not in st.session_state:
     st.session_state["trade_memo"] = saved_config.get("trade_memo", "")
 
-# 視認性とコントラストを極限まで高めたカスタムCSS
+# 視認性とコントラストを極限まで高めたカスタムCSS（メトリクスの文字見やすさを大幅改善）
 st.markdown("""
 <style>
     .main .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1280px; }
-    [data-testid="stMetricValue"] { font-size: 1.5rem !important; font-weight: 900 !important; color: #f8fafc !important; }
-    [data-testid="stMetricLabel"] { font-size: 0.95rem !important; font-weight: 700 !important; color: #cbd5e1 !important; }
+    
+    /* メトリクスの視認性を極限まで強化 */
+    [data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 900 !important; color: #ffffff !important; text-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+    [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 800 !important; color: #e2e8f0 !important; }
+    [data-testid="stMetricDelta"] { font-weight: 700 !important; font-size: 0.9rem !important; }
     
     .badge-buy { background-color: #15803d; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
     .badge-sell { background-color: #b91c1c; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
@@ -477,9 +477,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         return df.dropna(subset=feat_cols)
     except Exception: 
         return None
-# ==========================================
-# PART 2: AI分析エンジン・急変動事前予測ロジック・UI基本構造
-# ==========================================
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
     empty_res = ("WAIT (データ不足)", 0.0, 0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
@@ -834,9 +831,6 @@ stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
 stop_buffer_val = stop_buffer_pips * pip_unit
 buy_stop_loss = user_lower - stop_buffer_val
 sell_stop_loss = user_upper + stop_buffer_val
-# ==========================================
-# PART 3: 各タブ描画処理（チャート・単発アシスト・ニュース・リピート・AI詳細 & ノート）
-# ==========================================
 tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
     "📈 メインチャート", 
     "⚡ 単発トレード (AI全自動アシスト)", 
@@ -1300,7 +1294,6 @@ with tab_ai:
     curr_macd = float(clean_series(data["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in data.columns else 0.0
     curr_stoch = float(clean_series(data["Stoch_K"]).iloc[-1]) if "Stoch_K" in data.columns else 50.0
 
-    # 視認性を劇的に高めた高コントラストカスタムHTMLテーブルで描画
     table_html = f"""
     <table class="custom-table">
         <thead>
