@@ -128,6 +128,7 @@ st.markdown("""
     .badge-wait { background-color: #334155; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
     
     .alert-box { background-color: #1e293b; border-left: 6px solid #f59e0b; padding: 16px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.05rem; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+    .warn-box { background-color: #1e293b; border-left: 6px solid #ef4444; padding: 16px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.05rem; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .param-box { background-color: #1e293b !important; border-left: 5px solid #3b82f6; padding: 18px; border-radius: 6px; font-family: monospace; line-height: 1.9; color: #f8fafc !important; font-size: 1.0rem; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .param-box code { font-size: 1.0rem !important; font-weight: 800 !important; color: #38bdf8 !important; background-color: #0f172a !important; padding: 3px 8px; border-radius: 4px; }
     
@@ -428,16 +429,13 @@ def analyze_signal_with_backtest(df_current, df_htf):
                 htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
                 htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
 
-        # 【精度大幅改善】下落トレンド相場への追随性を強化したスコアリング補正
+        # 下落トレンド追随性を最適化したスコアリング補正
         buy_score, sell_score = prob_up, prob_down
-        
-        # 移動平均線の位置関係によるバイアス（下落時は売りを強力に優遇）
         if curr_close > sma20 and sma20 > ema200:
             buy_score += 0.25
         elif curr_close < sma20 and sma20 < ema200:
-            sell_score += 0.35  # 下落トレンド中は売りスコアを大きく加算
+            sell_score += 0.35  # 下落トレンド中は売りスコアを強力に加算
 
-        # モメンタム（直近5足の変化率・MACDヒストグラム）の反映
         if return_5 < 0 and macd_hist < 0:
             sell_score += 0.20
         elif return_5 > 0 and macd_hist > 0:
@@ -447,13 +445,12 @@ def analyze_signal_with_backtest(df_current, df_htf):
             if macd_hist > 0: buy_score += 0.15
             elif macd_hist < 0: sell_score += 0.15
 
-        # 上位足トレンドの反映（逆張り防止フィルター）
         if htf_bullish:
             buy_score += 0.15
             sell_score -= 0.15
         elif htf_bearish:
             sell_score += 0.25
-            buy_score -= 0.30  # 下落上位足のときは買いスコアを厳しくペナルティ
+            buy_score -= 0.30
 
         buy_score, sell_score = max(0.0, buy_score), max(0.0, sell_score)
         total_s = buy_score + sell_score + prob_wait + 1e-10
@@ -461,7 +458,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        threshold = 0.45  # 誤信号を抑制するため判定しきい値を微調整
+        threshold = 0.45
         if p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 72.0:
             status, conf = "BUY (買い)", p_up_final * 100
         elif p_down_final > p_up_final and p_down_final >= threshold and (htf_bearish or curr_close < sma20) and rsi_val > 28.0:
@@ -808,7 +805,7 @@ with tab_news:
         | :--- | :--- | :--- |
         | **FOMC (米連邦公開市場委員会)** | 政策金利発表 & パウエル議長発言 | **利上げ/タカ派** ➔ 📈 ドル高 / **利下げ/ハト派** ➔ 📉 ドル安 |
         | **米雇用統計 (NFP)** | 非農業部門雇用者数 & 平均時給 | **予想を上回る** ➔ 📈 ドル高 / **予想を下回る** ➔ 📉 ドル安 |
-        | **米CPI (消費者物価指数)** | インフレの伸び率 | **インフレ加速** ➔ 📈 ドル高 (利上げ観測) / **鈍化** ➔ 📉 ドル安 |
+        | **米CPI (消費者物価指数)** | インフレの伸び率 | **インフレ加速** ➔ 📈 ドル高 / **鈍化** ➔ 📉 ドル安 |
         | **日銀金融政策決定会合** | 植田総裁会見 & 政策金利 | **利上げ/政策修正** ➔ 📉 急激な円高 / **緩和維持** ➔ 📈 円安 |
         """)
     st.markdown("---")
@@ -836,6 +833,14 @@ with tab_news:
 with tab_repeat:
     st.markdown("##### 📋 松井証券リピート自動売買（ハーフ＆ハーフ）設定アシスタント")
     st.caption("中期的な4時間足のボラティリティ（ATR）を基準に、リピート売買に最適な注文幅・利幅を自動算出します。")
+
+    # 【新機能】現在レートがリピートレンジ外に出ている場合の警告判定
+    if latest_price < user_lower or latest_price > user_upper:
+        st.markdown(f"""
+        <div class="warn-box">
+        🚨 <b>【レンジアウト警告】</b> 現在のレート（<code>{price_fmt % latest_price}</code>）が設定されたリピートレンジ（<code>{price_fmt % user_lower}</code> 〜 <code>{price_fmt % user_upper}</code>）の外側にあります！ハーフ＆ハーフの再設定またはレンジの広域化をご検討ください。
+        </div>
+        """, unsafe_allow_html=True)
 
     atr_4h_val = float(clean_series(data_4h["ATR"]).iloc[-1]) if data_4h is not None and "ATR" in data_4h.columns else latest_atr
     ai_rec_trap_pips = max(30, int(round((atr_4h_val / pip_unit) * 0.8)))
