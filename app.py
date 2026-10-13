@@ -105,7 +105,7 @@ if "ranges" not in st.session_state:
 if "trade_memo" not in st.session_state:
     st.session_state["trade_memo"] = saved_config.get("trade_memo", "")
 
-# 視認性と操作性を高めたカスタムCSS（ボタンの文字色・背景色潰れを修正）
+# 視認性と操作性を高めたカスタムCSS（ボタンの文字潰れ対策＆洗練されたダークUI）
 st.markdown("""
 <style>
     .stApp {
@@ -119,7 +119,7 @@ st.markdown("""
         color: #f8fafc !important;
     }
     
-    /* サイドバーを含めたボタンの文字潰れ・背景白飛び対策 */
+    /* サイドバーおよびメイン内のボタンの視認性改善（白飛び防止） */
     .stButton button {
         background-color: #334155 !important;
         color: #f8fafc !important;
@@ -442,12 +442,12 @@ def analyze_signal_with_backtest(df_current, df_htf):
                 htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
                 htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
 
-        # 下落トレンド追随性を最適化したスコアリング補正
+        # 下落・上昇トレンドの特性に合わせたスコアリングの最適化
         buy_score, sell_score = prob_up, prob_down
         if curr_close > sma20 and sma20 > ema200:
             buy_score += 0.25
         elif curr_close < sma20 and sma20 < ema200:
-            sell_score += 0.35  # 下落トレンド中は売りスコアを強力に加算
+            sell_score += 0.35
 
         if return_5 < 0 and macd_hist < 0:
             sell_score += 0.20
@@ -517,6 +517,30 @@ else:
 if st.sidebar.button("💾 設定を即時手動保存"):
     save_settings()
     st.toast("設定を保存しました！", icon="💾")
+
+# 【新機能】設定のインポート/エクスポート機能
+with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", expanded=False):
+    current_settings_json = json.dumps(load_settings(), ensure_ascii=False, indent=2)
+    st.download_button(
+        label="📥 設定をバックアップ (.json)",
+        data=current_settings_json.encode("utf-8"),
+        file_name="fx_analyzer_settings.json",
+        mime="application/json",
+        use_container_width=True
+    )
+    uploaded_file = st.file_uploader("📤 設定を復元 (アップロード)", type=["json"])
+    if uploaded_file is not None:
+        try:
+            imported_data = json.load(uploaded_file)
+            if isinstance(imported_data, dict):
+                with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(imported_data, f, ensure_ascii=False, indent=2)
+                st.success("設定を復元しました！ページを再読み込みしてください。")
+                if st.button("🔄 今すぐ再読み込み"):
+                    st.cache_data.clear()
+                    st.rerun()
+        except Exception as e:
+            st.error(f"設定の復元に失敗しました: {e}")
 
 if st.sidebar.button("🔄 設定を初期値にリセット"):
     for k, v in DEFAULT_SETTINGS.items(): st.session_state[k] = v
