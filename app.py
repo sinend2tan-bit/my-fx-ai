@@ -105,32 +105,51 @@ if "ranges" not in st.session_state:
 if "trade_memo" not in st.session_state:
     st.session_state["trade_memo"] = saved_config.get("trade_memo", "")
 
-# 視認性とコントラストを極限まで高めたカスタムCSS（メトリクスの文字見やすさを大幅改善）
+# 視認性とコントラストを極限まで高め、ライト/ダーク環境両方で文字が見えなくならないように修正したカスタムCSS
 st.markdown("""
 <style>
+    /* アプリ全体の背景をダーク調に強制固定して視認性を担保 */
+    .stApp {
+        background-color: #0f172a !important;
+        color: #f8fafc !important;
+    }
+    
     .main .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1280px; }
     
-    /* メトリクスの視認性を極限まで強化 */
-    [data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 900 !important; color: #ffffff !important; text-shadow: 0 1px 2px rgba(0,0,0,0.4); }
-    [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 800 !important; color: #e2e8f0 !important; }
+    /* サイドバーの背景と文字色 */
+    [data-testid="stSidebar"] {
+        background-color: #1e293b !important;
+    }
+    [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] span {
+        color: #f8fafc !important;
+    }
+
+    /* メトリクスの視認性を完全強化（文字色を鮮やかな水色・白で明確化） */
+    [data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 900 !important; color: #38bdf8 !important; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+    [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 800 !important; color: #cbd5e1 !important; }
     [data-testid="stMetricDelta"] { font-weight: 700 !important; font-size: 0.9rem !important; }
     
     .badge-buy { background-color: #15803d; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
     .badge-sell { background-color: #b91c1c; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
     .badge-wait { background-color: #334155; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
     
-    .alert-box { background-color: #1e293b; border-left: 6px solid #f59e0b; padding: 16px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.05rem; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
-    .param-box { background-color: #1e293b !important; border-left: 5px solid #3b82f6; padding: 18px; border-radius: 6px; font-family: monospace; line-height: 1.9; color: #f8fafc !important; font-size: 1.0rem; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
+    .alert-box { background-color: #1e293b; border-left: 6px solid #f59e0b; padding: 16px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.05rem; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+    .param-box { background-color: #1e293b !important; border-left: 5px solid #3b82f6; padding: 18px; border-radius: 6px; font-family: monospace; line-height: 1.9; color: #f8fafc !important; font-size: 1.0rem; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .param-box code { font-size: 1.0rem !important; font-weight: 800 !important; color: #38bdf8 !important; background-color: #0f172a !important; padding: 3px 8px; border-radius: 4px; }
     
-    .news-card { background-color: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 16px; margin-bottom: 12px; color: #f8fafc !important; box-shadow: 0 2px 4px rgba(0,0,0,0.15); }
-    .update-time { font-size: 0.9rem; color: #e2e8f0; text-align: right; margin-bottom: 8px; font-weight: 700; }
+    .news-card { background-color: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 16px; margin-bottom: 12px; color: #f8fafc !important; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+    .update-time { font-size: 0.9rem; color: #cbd5e1; text-align: right; margin-bottom: 8px; font-weight: 700; }
 
     /* 高視認性カスタムテーブル用 */
     .custom-table { width: 100%; border-collapse: collapse; background-color: #1e293b; border-radius: 8px; overflow: hidden; font-size: 0.95rem; margin-top: 10px; margin-bottom: 10px; }
     .custom-table th { background-color: #0f172a; color: #38bdf8; padding: 12px 16px; text-align: left; font-weight: 800; border-bottom: 2px solid #334155; }
     .custom-table td { padding: 12px 16px; color: #f8fafc; border-bottom: 1px solid #334155; font-weight: 600; }
     .custom-table tr:hover { background-color: #273548; }
+
+    /* タイトルや見出しの文字色をハッキリ白に */
+    h1, h2, h3, h4, h5, h6, p, span, label {
+        color: #f8fafc !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
