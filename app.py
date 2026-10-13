@@ -108,22 +108,29 @@ if "ranges" not in st.session_state:
 if "trade_memo" not in st.session_state:
     st.session_state["trade_memo"] = saved_config.get("trade_memo", "")
 
-# 視認性を高めたカスタムCSSスタイル（文字が見やすくなるようにコントラストを調整）
+# 視認性とコントラストを極限まで高めたカスタムCSS
 st.markdown("""
 <style>
     .main .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1280px; }
-    [data-testid="stMetricValue"] { font-size: 1.4rem !important; font-weight: 800 !important; }
+    [data-testid="stMetricValue"] { font-size: 1.5rem !important; font-weight: 900 !important; color: #f8fafc !important; }
+    [data-testid="stMetricLabel"] { font-size: 0.95rem !important; font-weight: 700 !important; color: #cbd5e1 !important; }
     
-    .badge-buy { background-color: #15803d; color: #ffffff !important; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
-    .badge-sell { background-color: #b91c1c; color: #ffffff !important; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
-    .badge-wait { background-color: #334155; color: #ffffff !important; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 1.0rem; display: inline-block; }
+    .badge-buy { background-color: #15803d; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
+    .badge-sell { background-color: #b91c1c; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
+    .badge-wait { background-color: #334155; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
     
-    .alert-box { background-color: #1e293b; border-left: 6px solid #f59e0b; padding: 14px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.0rem; font-weight: 500; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-    .param-box { background-color: #1e293b !important; border-left: 5px solid #3b82f6; padding: 16px; border-radius: 6px; font-family: monospace; line-height: 1.8; color: #f8fafc !important; font-size: 0.95rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-    .param-box code { font-size: 0.95rem !important; font-weight: 700 !important; color: #38bdf8 !important; background-color: #0f172a !important; padding: 2px 6px; border-radius: 4px; }
+    .alert-box { background-color: #1e293b; border-left: 6px solid #f59e0b; padding: 16px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.05rem; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
+    .param-box { background-color: #1e293b !important; border-left: 5px solid #3b82f6; padding: 18px; border-radius: 6px; font-family: monospace; line-height: 1.9; color: #f8fafc !important; font-size: 1.0rem; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
+    .param-box code { font-size: 1.0rem !important; font-weight: 800 !important; color: #38bdf8 !important; background-color: #0f172a !important; padding: 3px 8px; border-radius: 4px; }
     
-    .news-card { background-color: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 14px; margin-bottom: 12px; color: #f8fafc !important; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    .update-time { font-size: 0.85rem; color: #cbd5e1; text-align: right; margin-bottom: 8px; font-weight: 600; }
+    .news-card { background-color: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 16px; margin-bottom: 12px; color: #f8fafc !important; box-shadow: 0 2px 4px rgba(0,0,0,0.15); }
+    .update-time { font-size: 0.9rem; color: #e2e8f0; text-align: right; margin-bottom: 8px; font-weight: 700; }
+
+    /* 高視認性カスタムテーブル用 */
+    .custom-table { width: 100%; border-collapse: collapse; background-color: #1e293b; border-radius: 8px; overflow: hidden; font-size: 0.95rem; margin-top: 10px; margin-bottom: 10px; }
+    .custom-table th { background-color: #0f172a; color: #38bdf8; padding: 12px 16px; text-align: left; font-weight: 800; border-bottom: 2px solid #334155; }
+    .custom-table td { padding: 12px 16px; color: #f8fafc; border-bottom: 1px solid #334155; font-weight: 600; }
+    .custom-table tr:hover { background-color: #273548; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -709,7 +716,7 @@ latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns 
 status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(data, data_htf)
 
 # ==========================================
-# 🚨 急変動（ブレイクアウト）事前予測ロジック（HTMLタグで視認性・文字崩れを解消）
+# 🚨 急変動（ブレイクアウト）事前予測ロジック
 # ==========================================
 bb_pct = float(clean_series(data["BB_PctB"]).iloc[-1]) if "BB_PctB" in data.columns else 0.5
 adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 20.0
@@ -1146,13 +1153,13 @@ with tab_news:
             st.markdown(f"""
             <div class="news-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <span style="font-weight: bold; color: #38bdf8; font-size: 0.9rem;">{safe_publisher} ({safe_time})</span>
-                    <span style="font-weight: bold; font-size: 0.85rem;">{safe_impact}</span>
+                    <span style="font-weight: bold; color: #38bdf8; font-size: 0.95rem;">{safe_publisher} ({safe_time})</span>
+                    <span style="font-weight: bold; font-size: 0.9rem;">{safe_impact}</span>
                 </div>
-                <div style="font-size: 1.05rem; font-weight: 700; margin-bottom: 8px;">
+                <div style="font-size: 1.1rem; font-weight: 800; margin-bottom: 8px;">
                     <a href="{safe_link}" target="_blank" style="color: #f8fafc; text-decoration: none;">{safe_title} 🔗</a>
                 </div>
-                <div style="background-color: #0f172a; padding: 8px 12px; border-radius: 4px; font-size: 0.9rem;">
+                <div style="background-color: #0f172a; padding: 10px 14px; border-radius: 4px; font-size: 0.95rem; line-height: 1.6;">
                     🎯 <b>AI予測影響</b>: <span style="color: #facc15; font-weight: bold;">{safe_direction}</span><br>
                     💡 <b>判定理由</b>: {safe_reason}
                 </div>
@@ -1293,14 +1300,46 @@ with tab_ai:
     curr_macd = float(clean_series(data["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in data.columns else 0.0
     curr_stoch = float(clean_series(data["Stoch_K"]).iloc[-1]) if "Stoch_K" in data.columns else 50.0
 
-    tech_df = pd.DataFrame([
-        {"指標": "RSI (14)", "現在値": f"{curr_rsi:.1f}", "状態判定": "買われ過ぎ" if curr_rsi > 70 else ("売られ過ぎ" if curr_rsi < 30 else "ニュートラル")},
-        {"指標": "ADX (トレンド強度)", "現在値": f"{curr_adx:.1f}", "状態判定": "強いトレンド" if curr_adx > 25 else "レンジ / 膠着"},
-        {"指標": "ボリンジャーバンド %B", "current": f"{curr_bb:.2f}", "状態判定": "上方バンドタッチ" if curr_bb > 0.85 else ("下方バンドタッチ" if curr_bb < 0.15 else "バンド内推移")},
-        {"指標": "MACD ヒストグラム", "現在値": f"{curr_macd:.5f}", "状態判定": "上昇モメンタム" if curr_macd > 0 else "下落モメンタム"},
-        {"指標": "ストキャスティクス %K", "current": f"{curr_stoch:.1f}", "状態判定": "高値圏" if curr_stoch > 80 else ("安値圏" if curr_stoch < 20 else "中立圏")}
-    ])
-    st.dataframe(tech_df, use_container_width=True, hide_index=True)
+    # 視認性を劇的に高めた高コントラストカスタムHTMLテーブルで描画
+    table_html = f"""
+    <table class="custom-table">
+        <thead>
+            <tr>
+                <th>指標名</th>
+                <th>現在値</th>
+                <th>状態判定</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><b>RSI (14)</b></td>
+                <td><code>{curr_rsi:.1f}</code></td>
+                <td><span style="color: {'#f87171' if curr_rsi > 70 else ('#4ade80' if curr_rsi < 30 else '#38bdf8')}">{'買われ過ぎ' if curr_rsi > 70 else ('売られ過ぎ' if curr_rsi < 30 else 'ニュートラル')}</span></td>
+            </tr>
+            <tr>
+                <td><b>ADX (トレンド強度)</b></td>
+                <td><code>{curr_adx:.1f}</code></td>
+                <td><span style="color: {'#38bdf8' if curr_adx > 25 else '#94a3b8'}">{'強いトレンド' if curr_adx > 25 else 'レンジ / 膠着'}</span></td>
+            </tr>
+            <tr>
+                <td><b>ボリンジャーバンド %B</b></td>
+                <td><code>{curr_bb:.2f}</code></td>
+                <td><span style="color: {'#f87171' if curr_bb > 0.85 else ('#4ade80' if curr_bb < 0.15 else '#38bdf8')}">{'上方バンドタッチ' if curr_bb > 0.85 else ('下方バンドタッチ' if curr_bb < 0.15 else 'バンド内推移')}</span></td>
+            </tr>
+            <tr>
+                <td><b>MACD ヒストグラム</b></td>
+                <td><code>{curr_macd:.5f}</code></td>
+                <td><span style="color: {'#4ade80' if curr_macd > 0 else '#f87171'}">{'上昇モメンタム' if curr_macd > 0 else '下落モメンタム'}</span></td>
+            </tr>
+            <tr>
+                <td><b>ストキャスティクス %K</b></td>
+                <td><code>{curr_stoch:.1f}</code></td>
+                <td><span style="color: {'#f87171' if curr_stoch > 80 else ('#4ade80' if curr_stoch < 20 else '#38bdf8')}">{'高値圏' if curr_stoch > 80 else ('安値圏' if curr_stoch < 20 else '中立圏')}</span></td>
+            </tr>
+        </tbody>
+    </table>
+    """
+    st.markdown(table_html, unsafe_allow_html=True)
 
     if feature_importances is not None and not feature_importances.empty:
         st.markdown("---")
