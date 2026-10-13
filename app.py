@@ -412,38 +412,63 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_array = model.predict_proba(latest_X)[0]
         class_prob_map = {int(cls_val): float(p) for cls_val, p in zip(model.classes_, prob_array)}
         prob_up, prob_down, prob_wait = class_prob_map.get(1, 0.0), class_prob_map.get(-1, 0.0), class_prob_map.get(0, 0.0)
+        
         curr_close = float(clean_series(df_current["Close"]).iloc[-1])
         sma20 = float(clean_series(df_current["SMA_20"]).iloc[-1]) if "SMA_20" in df_current.columns else curr_close
         ema200 = float(clean_series(df_current["EMA_200"]).iloc[-1]) if "EMA_200" in df_current.columns else curr_close
         rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
         macd_hist = float(clean_series(df_current["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in df_current.columns else 0.0
-        htf_bullish, htf_bearish = True, False
+        return_5 = float(clean_series(df_current["Return_5"]).iloc[-1]) if "Return_5" in df_current.columns else 0.0
+
+        htf_bullish, htf_bearish = False, False
         if df_htf is not None and not df_htf.empty and "Close" in df_htf.columns:
             htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
             if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
                 htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
                 htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
+
+        # 【精度大幅改善】下落トレンド相場への追随性を強化したスコアリング補正
         buy_score, sell_score = prob_up, prob_down
-        if curr_close > sma20 and sma20 > ema200: buy_score += 0.20
-        elif curr_close < sma20 and sma20 < ema200: sell_score += 0.20
+        
+        # 移動平均線の位置関係によるバイアス（下落時は売りを強力に優遇）
+        if curr_close > sma20 and sma20 > ema200:
+            buy_score += 0.25
+        elif curr_close < sma20 and sma20 < ema200:
+            sell_score += 0.35  # 下落トレンド中は売りスコアを大きく加算
+
+        # モメンタム（直近5足の変化率・MACDヒストグラム）の反映
+        if return_5 < 0 and macd_hist < 0:
+            sell_score += 0.20
+        elif return_5 > 0 and macd_hist > 0:
+            buy_score += 0.20
+
         if adx_val > 23.0:
             if macd_hist > 0: buy_score += 0.15
             elif macd_hist < 0: sell_score += 0.15
-        if htf_bullish: buy_score += 0.15; sell_score -= 0.25
-        elif htf_bearish: sell_score += 0.15; buy_score -= 0.25
+
+        # 上位足トレンドの反映（逆張り防止フィルター）
+        if htf_bullish:
+            buy_score += 0.15
+            sell_score -= 0.15
+        elif htf_bearish:
+            sell_score += 0.25
+            buy_score -= 0.30  # 下落上位足のときは買いスコアを厳しくペナルティ
+
         buy_score, sell_score = max(0.0, buy_score), max(0.0, sell_score)
         total_s = buy_score + sell_score + prob_wait + 1e-10
         p_up_final, p_down_final, p_wait_final = buy_score / total_s, sell_score / total_s, prob_wait / total_s
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
-        threshold = 0.42
+        
+        threshold = 0.45  # 誤信号を抑制するため判定しきい値を微調整
         if p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 72.0:
             status, conf = "BUY (買い)", p_up_final * 100
-        elif p_down_final > p_up_final and p_down_final >= threshold and htf_bearish and rsi_val > 28.0:
+        elif p_down_final > p_up_final and p_down_final >= threshold and (htf_bearish or curr_close < sma20) and rsi_val > 28.0:
             status, conf = "SELL (売り)", p_down_final * 100
         else:
             status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
+            
         m_type = "トレンド相場" if adx_val > 22.0 else "レンジ相場"
         return status, conf, total_signals_count, win_rate, m_type, prob_dict, importances, all_preds_series
     except Exception:
@@ -596,23 +621,17 @@ tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
     "🤖 AI分析詳細 & トレードノート"
 ])
 
-# --- タブ1: メインチャート (直感的操作性を大幅改善) ---
+# --- タブ1: メインチャート ---
 with tab_chart:
     st.markdown("##### 📈 インタラクティブ・メインチャート")
     st.caption("ボタンで表示本数を一発切替。十字カーソルとマウスホイールでのズームに対応しています。")
 
-    # 直感的なクイック切替ボタン ＆ 詳細設定をコンパクトに配置
     qc1, qc2, qc3, qc4, qc5 = st.columns([1.2, 1.2, 1.2, 2.0, 2.4])
-    with qc1:
-        btn_50 = st.button("直近 50本", use_container_width=True)
-    with qc2:
-        btn_120 = st.button("標準 120本", use_container_width=True)
-    with qc3:
-        btn_250 = st.button("長期 250本", use_container_width=True)
+    with qc1: btn_50 = st.button("直近 50本", use_container_width=True)
+    with qc2: btn_120 = st.button("標準 120本", use_container_width=True)
+    with qc3: btn_250 = st.button("長期 250本", use_container_width=True)
     
-    # セッションステートで表示本数を保持
-    if "chart_bars" not in st.session_state:
-        st.session_state["chart_bars"] = 120
+    if "chart_bars" not in st.session_state: st.session_state["chart_bars"] = 120
     if btn_50: st.session_state["chart_bars"] = 50
     if btn_120: st.session_state["chart_bars"] = 120
     if btn_250: st.session_state["chart_bars"] = 250
@@ -623,16 +642,11 @@ with tab_chart:
     with qc5:
         sub_indicator = st.selectbox("サブ指標", ["RSI (14)", "MACD", "なし"], index=0, key="sub_indicator_select", label_visibility="collapsed")
 
-    # インジケーター表示のオンオフをスッキリまとめる
     toggle_c1, toggle_c2, toggle_c3, toggle_c4 = st.columns(4)
-    with toggle_c1:
-        show_ma = st.checkbox("移動平均線(SMA/EMA)", value=True, key="show_ma_check")
-    with toggle_c2:
-        show_bb = st.checkbox("ボリンジャーバンド", value=True, key="show_bb_check")
-    with toggle_c3:
-        show_repeat_lines = st.checkbox("リピートレンジ表示", value=("4時間足" in tf_label), key="show_repeat_lines_check")
-    with toggle_c4:
-        show_ai_markers = st.checkbox("AI売買シグナル表示", value=True, key="show_ai_markers_check")
+    with toggle_c1: show_ma = st.checkbox("移動平均線(SMA/EMA)", value=True, key="show_ma_check")
+    with toggle_c2: show_bb = st.checkbox("ボリンジャーバンド", value=True, key="show_bb_check")
+    with toggle_c3: show_repeat_lines = st.checkbox("リピートレンジ表示", value=("4時間足" in tf_label), key="show_repeat_lines_check")
+    with toggle_c4: show_ai_markers = st.checkbox("AI売買シグナル表示", value=True, key="show_ai_markers_check")
 
     df_chart = safe_to_tokyo_tz(data.tail(bars_count)).ffill()
     df_chart = df_chart.loc[~df_chart.index.duplicated(keep='last')]
@@ -645,14 +659,10 @@ with tab_chart:
     fig = make_subplots(rows=rows_num, cols=1, shared_xaxes=True, row_heights=row_heights, vertical_spacing=0.06)
 
     fig.add_trace(go.Candlestick(
-        x=x_index,
-        open=clean_series(df_chart["Open"]),
-        high=clean_series(df_chart["High"]),
-        low=clean_series(df_chart["Low"]),
-        close=clean_series(df_chart["Close"]),
+        x=x_index, open=clean_series(df_chart["Open"]), high=clean_series(df_chart["High"]),
+        low=clean_series(df_chart["Low"]), close=clean_series(df_chart["Close"]),
         increasing_line_color='#22c55e', increasing_fillcolor='#22c55e',
-        decreasing_line_color='#ef4444', decreasing_fillcolor='#ef4444',
-        name="価格"
+        decreasing_line_color='#ef4444', decreasing_fillcolor='#ef4444', name="価格"
     ), row=1, col=1)
 
     if show_ma:
@@ -707,12 +717,9 @@ with tab_chart:
     price_span = max(y_max_bound - y_min_bound, y_max_bound * 0.002)
 
     fig.update_layout(
-        xaxis_rangeslider_visible=False,
-        height=580,
-        margin=dict(l=10, r=70, t=25, b=10),
-        template="plotly_dark",
-        hovermode="x unified",
-        showlegend=True,
+        xaxis_rangeslider_visible=False, height=580,
+        margin=dict(l=10, r=70, t=25, b=10), template="plotly_dark",
+        hovermode="x unified", showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1)
     )
     fig.update_xaxes(type='date', rangebreaks=[dict(bounds=["sat", "mon"])] if "5分" in tf_label or "15分" in tf_label or "1時間" in tf_label else [], showspikes=True, spikemode="across")
@@ -801,7 +808,7 @@ with tab_news:
         | :--- | :--- | :--- |
         | **FOMC (米連邦公開市場委員会)** | 政策金利発表 & パウエル議長発言 | **利上げ/タカ派** ➔ 📈 ドル高 / **利下げ/ハト派** ➔ 📉 ドル安 |
         | **米雇用統計 (NFP)** | 非農業部門雇用者数 & 平均時給 | **予想を上回る** ➔ 📈 ドル高 / **予想を下回る** ➔ 📉 ドル安 |
-        | **米CPI (消費者物価指数)** | インフレの伸び率 | **インフレ加速** ➔ 📈 ドル高 / **鈍化** ➔ 📉 ドル安 |
+        | **米CPI (消費者物価指数)** | インフレの伸び率 | **インフレ加速** ➔ 📈 ドル高 (利上げ観測) / **鈍化** ➔ 📉 ドル安 |
         | **日銀金融政策決定会合** | 植田総裁会見 & 政策金利 | **利上げ/政策修正** ➔ 📉 急激な円高 / **緩和維持** ➔ 📈 円安 |
         """)
     st.markdown("---")
