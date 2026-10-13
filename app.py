@@ -105,7 +105,7 @@ if "ranges" not in st.session_state:
 if "trade_memo" not in st.session_state:
     st.session_state["trade_memo"] = saved_config.get("trade_memo", "")
 
-# 視認性と操作性を高めたカスタムCSS
+# 視認性と操作性を高めたカスタムCSS（ボタンの文字色・背景色潰れを修正）
 st.markdown("""
 <style>
     .stApp {
@@ -117,6 +117,19 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #1e293b !important; }
     [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] span {
         color: #f8fafc !important;
+    }
+    
+    /* サイドバーを含めたボタンの文字潰れ・背景白飛び対策 */
+    .stButton button {
+        background-color: #334155 !important;
+        color: #f8fafc !important;
+        border: 1px solid #475569 !important;
+        font-weight: 700 !important;
+    }
+    .stButton button:hover {
+        background-color: #475569 !important;
+        color: #ffffff !important;
+        border-color: #38bdf8 !important;
     }
 
     [data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 900 !important; color: #38bdf8 !important; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
@@ -805,7 +818,7 @@ with tab_news:
         | :--- | :--- | :--- |
         | **FOMC (米連邦公開市場委員会)** | 政策金利発表 & パウエル議長発言 | **利上げ/タカ派** ➔ 📈 ドル高 / **利下げ/ハト派** ➔ 📉 ドル安 |
         | **米雇用統計 (NFP)** | 非農業部門雇用者数 & 平均時給 | **予想を上回る** ➔ 📈 ドル高 / **予想を下回る** ➔ 📉 ドル安 |
-        | **米CPI (消費者物価指数)** | インフレの伸び率 | **インフレ加速** ➔ 📈 ドル高 / **鈍化** ➔ 📉 ドル安 |
+        | **米CPI (消費者物価指数)** | インフレの伸び率 | **インフレ加速** ➔ 📈 ドル高 (利上げ観測) / **鈍化** ➔ 📉 ドル安 |
         | **日銀金融政策決定会合** | 植田総裁会見 & 政策金利 | **利上げ/政策修正** ➔ 📉 急激な円高 / **緩和維持** ➔ 📈 円安 |
         """)
     st.markdown("---")
@@ -834,7 +847,6 @@ with tab_repeat:
     st.markdown("##### 📋 松井証券リピート自動売買（ハーフ＆ハーフ）設定アシスタント")
     st.caption("中期的な4時間足のボラティリティ（ATR）を基準に、リピート売買に最適な注文幅・利幅を自動算出します。")
 
-    # 【新機能】現在レートがリピートレンジ外に出ている場合の警告判定
     if latest_price < user_lower or latest_price > user_upper:
         st.markdown(f"""
         <div class="warn-box">
