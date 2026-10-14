@@ -322,69 +322,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["RSI"] = 100 - (100 / (1 + rs))
         new_cols["RSI_Diff"] = new_cols["RSI"].diff(1)
         l14 = l.rolling(14, min_periods=1).min()
-        h14 = h.rolling(14, min_periods=1).max()
-        new_cols["Stoch_K"] = 100 * (c - l14) / ((h14 - l14) + 1e-10)
-        macd = c.ewm(span=12, adjust=False).mean() - c.ewm(span=26, adjust=False).mean()
-        macd_signal = macd.ewm(span=9, adjust=False).mean()
-        new_cols["MACD"] = macd
-        new_cols["MACD_Signal"] = macd_signal
-        new_cols["MACD_Hist"] = macd - macd_signal
-        new_cols["MACD_Hist_Ratio"] = new_cols["MACD_Hist"] / (c + 1e-10)
-        std20 = c.rolling(20, min_periods=1).std().fillna(0)
-        new_cols["Upper_Band"] = new_cols["SMA_20"] + (std20 * 2)
-        new_cols["Lower_Band"] = new_cols["SMA_20"] - (std20 * 2)
-        new_cols["BB_PctB"] = (c - new_cols["Lower_Band"]) / ((new_cols["Upper_Band"] - new_cols["Lower_Band"]) + 1e-10)
-        tr = pd.concat([hl, (h - c.shift(1)).abs(), (l - c.shift(1)).abs()], axis=1).max(axis=1)
-        up, down = h - h.shift(1), l.shift(1) - l
-        up_cond = (up > down) & (up > 0)
-        down_cond = (down > up) & (down > 0)
-        plus_di_raw = pd.Series(np.where(up_cond, up, 0.0), index=df.index)
-        minus_di_raw = pd.Series(np.where(down_cond, down, 0.0), index=df.index)
-        tr_smooth = tr.ewm(alpha=1/14, adjust=False).mean() + 1e-10
-        plus_di = 100 * plus_di_raw.ewm(alpha=1/14, adjust=False).mean() / tr_smooth
-        minus_di = 100 * minus_di_raw.ewm(alpha=1/14, adjust=False).mean() / tr_smooth
-        di_sum = (plus_di + minus_di).replace(0, 1e-10)
-        new_cols["ADX"] = (100 * (plus_di - minus_di).abs() / di_sum).ewm(alpha=1/14, adjust=False).mean().fillna(25.0)
-        total_range = hl + 1e-10
-        open_close_max = pd.concat([o, c], axis=1).max(axis=1)
-        open_close_min = pd.concat([o, c], axis=1).min(axis=1)
-        new_cols["Upper_Wick_Ratio"] = (h - open_close_max) / total_range
-        new_cols["Lower_Wick_Ratio"] = (open_close_min - l) / total_range
-        new_cols["ATR_Ratio"] = new_cols["ATR"] / c
-        df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
-        df = pd.concat([df, df_feat], axis=1)
-        
-        tp_t = new_cols["ATR"] * 1.0
-        sl_t = new_cols["ATR"] * 0.7
-        target_values = np.zeros(len(df), dtype=int)
-        n = len(df)
-        c_vals, h_vals, l_vals = c.values, h.values, l.values
-        tp_vals, sl_vals = tp_t.values, sl_t.values
-        for i in range(n - LOOKAHEAD_BARS):
-            entry_p = c_vals[i]
-            tp_dist, sl_dist = tp_vals[i], sl_vals[i]
-            if np.isnan(tp_dist) or np.isnan(sl_dist) or tp_dist <= 0 or sl_dist <= 0: continue
-            outcome = 0
-            for j in range(1, LOOKAHEAD_BARS + 1):
-                idx = i + j
-                if idx >= n: break
-                curr_h, curr_l = h_vals[idx], l_vals[idx]
-                buy_tp_hit = (curr_h - entry_p) >= tp_dist
-                buy_sl_hit = (entry_p - curr_l) >= sl_dist
-                sell_tp_hit = (entry_p - curr_l) >= tp_dist
-                sell_sl_hit = (curr_h - entry_p) >= tp_dist
-                if (buy_tp_hit and buy_sl_hit) or (sell_tp_hit and sell_sl_hit):
-                    outcome = 0; break
-                elif buy_tp_hit and not buy_sl_hit: outcome = 1; break
-                elif sell_tp_hit and not sell_sl_hit: outcome = -1; break
-                elif buy_sl_hit or sell_sl_hit: outcome = 0; break
-            target_values[i] = outcome
-        target_series = pd.Series(target_values, index=df.index, dtype="float64")
-        target_series.iloc[-LOOKAHEAD_BARS:] = np.nan
-        df["Target"] = target_series
-        feat_cols = [col for col in FEATURE_COLUMNS if col in df.columns]
-        return df.dropna(subset=feat_cols)
-    except Exception: return None
+        h14 = h.rolling(14, min
 def send_webhook_alert(webhook_url, message):
     if not webhook_url or not HAS_REQUESTS: return
     try:
@@ -439,27 +377,27 @@ def analyze_signal_with_backtest(df_current, df_htf):
                 htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
                 htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
 
-        # トレンドスコアの強烈な重み付け調整
+        # トレンドスコアの重み付けを下方修正・強化
         buy_score, sell_score = prob_up, prob_down
         if curr_close > sma20 and sma20 > ema200: 
-            buy_score += 0.35
-        elif curr_close < sma20 and (sma20 < ema200 or curr_close < ema200): 
-            sell_score += 0.80  # 下降トレンド時の売りスコアを大幅に増強
+            buy_score += 0.30
+        elif curr_close < sma20 or sma20 < ema200 or curr_close < ema200: 
+            sell_score += 1.20  # 下降トレンド時の売りスコアを圧倒的に増強
 
         if return_5 < 0 and macd_hist < 0: 
-            sell_score += 0.40
+            sell_score += 0.50
         elif return_5 > 0 and macd_hist > 0: 
-            buy_score += 0.30
+            buy_score += 0.20
 
-        if adx_val > 22.0:
-            if macd_hist < 0: sell_score += 0.40  # トレンド中の下落モメンタムを最重視
+        if adx_val > 20.0:
+            if macd_hist < 0: sell_score += 0.50
 
         if htf_bullish:
-            buy_score += 0.20
-            sell_score -= 0.30
+            buy_score += 0.15
+            sell_score -= 0.40
         elif htf_bearish:
-            sell_score += 0.50
-            buy_score -= 0.60
+            sell_score += 0.80
+            buy_score -= 0.80
 
         buy_score, sell_score = max(0.0, buy_score), max(0.0, sell_score)
         total_s = buy_score + sell_score + prob_wait + 1e-10
@@ -467,20 +405,17 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        # 【絶対防御】下降トレンド中は買いシグナルを100%完全にブロックし、売りまたは様子見へ強制誘導
-        is_strong_downtrend = (curr_close < sma20) or (curr_close < ema200) or (macd_hist < 0) or htf_bearish
-        is_strong_uptrend = (curr_close > sma20) and (sma20 > ema200) and (macd_hist > 0) and htf_bullish
+        # 【超保守的防御】下落トレンド中の買いを100%完全ブロック
+        is_strong_downtrend = (curr_close < sma20) or (sma20 < ema200) or (curr_close < ema200) or (macd_hist < 0) or htf_bearish
 
-        threshold = 0.48
         if is_strong_downtrend:
-            # 下降トレンド中の判定：買いは絶対に許可しない
-            if p_down_final >= 0.35 or macd_hist < 0:
-                status, conf = "SELL (売り - 下降トレンド順張り)", max(p_down_final, 0.65) * 100
+            if p_down_final >= 0.30 or macd_hist < 0:
+                status, conf = "SELL (売り - 下降トレンド順張り)", max(p_down_final, 0.70) * 100
             else:
                 status, conf = "WAIT (様子見 - 下降トレンド警戒)", max(p_wait_final, p_down_final) * 100
-        elif p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 70.0 and not is_strong_downtrend:
+        elif p_up_final > p_down_final and p_up_final >= 0.52 and htf_bullish and rsi_val < 68.0 and not is_strong_downtrend:
             status, conf = "BUY (買い)", p_up_final * 100
-        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 25.0:
+        elif p_down_final > p_up_final and p_down_final >= 0.45 and rsi_val > 25.0:
             status, conf = "SELL (売り)", p_down_final * 100
         else:
             status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
@@ -1003,32 +938,4 @@ with tab_ai:
         <tbody>
             <tr><td><b>RSI (14)</b></td><td><code>{curr_rsi:.1f}</code></td><td><span style="color: {'#f87171' if curr_rsi > 70 else ('#4ade80' if curr_rsi < 30 else '#38bdf8')}">{'買われ過ぎ' if curr_rsi > 70 else ('売られ過ぎ' if curr_rsi < 30 else 'ニュートラル')}</span></td></tr>
             <tr><td><b>ADX (トレンド強度)</b></td><td><code>{curr_adx:.1f}</code></td><td><span style="color: {'#38bdf8' if curr_adx > 25 else '#94a3b8'}">{'強いトレンド' if curr_adx > 25 else 'レンジ / 膠着'}</span></td></tr>
-            <tr><td><b>ボリンジャーバンド %B</b></td><td><code>{curr_bb:.2f}</code></td><td><span style="color: {'#f87171' if curr_bb > 0.85 else ('#4ade80' if curr_bb < 0.15 else '#38bdf8')}">{'上方バンドタッチ' if curr_bb > 0.85 else ('下方バンドタッチ' if curr_bb < 0.15 else 'バンド内推移')}</span></td></tr>
-            <tr><td><b>MACD ヒストグラム</b></td><td><code>{curr_macd:.5f}</code></td><td><span style="color: {'#4ade80' if curr_macd > 0 else '#f87171'}">{'上昇モメンタム' if curr_macd > 0 else '下落モメンタム'}</span></td></tr>
-            <tr><td><b>ストキャスティクス %K</b></td><td><code>{curr_stoch:.1f}</code></td><td><span style="color: {'#f87171' if curr_stoch > 80 else ('#4ade80' if curr_stoch < 20 else '#38bdf8')}">{'高値圏' if curr_stoch > 80 else ('安値圏' if curr_stoch < 20 else '中立圏')}</span></td></tr>
-        </tbody>
-    </table>
-    """, unsafe_allow_html=True)
-
-    if feature_importances is not None and not feature_importances.empty:
-        st.markdown("---")
-        col_imp_title, col_imp_btn = st.columns([3, 1])
-        with col_imp_title:
-            st.markdown("##### 📊 AIの判断根拠（特徴量重要度 TOP 10）")
-        with col_imp_btn:
-            csv_data = feature_importances.reset_index()
-            csv_data.columns = ["指標名", "重要度スコア"]
-            st.download_button(label="📥 重要度CSVダウンロード", data=csv_data.to_csv(index=False).encode("utf-8-sig"), file_name=f"ai_feature_importances_{ticker.replace('=X','')}.csv", mime="text/csv", key="download_csv_btn")
-        
-        top10_imp = feature_importances.nlargest(10).sort_values(ascending=True)
-        fig_imp = go.Figure(go.Bar(x=top10_imp.values, y=top10_imp.index, orientation='h', marker_color='#38bdf8'))
-        fig_imp.update_layout(height=340, margin=dict(l=10, r=20, t=10, b=30), template="plotly_dark", xaxis_title="重要度スコア", yaxis=dict(autorange="reversed"))
-        st.plotly_chart(fig_imp, use_container_width=True, config={'displayModeBar': False})
-
-    st.markdown("---")
-    st.markdown("##### 📝 簡易トレードノート（考察・反省メモ）")
-    def update_memo_callback(): save_settings()
-    st.text_area("トレードノートを入力", key="trade_memo", height=150, on_change=update_memo_callback, placeholder="例: 本日は米雇用統計発表前のためスキャルピング中心。")
-    memo_text = st.session_state.get("trade_memo", "")
-    if memo_text.strip():
-        st.download_button(label="📥 トレードノートをテキスト保存 (.txt)", data=memo_text.encode("utf-8"), file_name=f"trade_memo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", mime="text/plain", key="download_memo_btn")
+            <tr><td><b>ボリンジャーバンド %B</b></td><td><code>{curr_bb:.2f}</code></td><td><span style="color: {'#f87171' if curr_bb > 0.85 else ('#4ade80' if curr_bb < 0
