@@ -354,7 +354,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         df = pd.concat([df, df_feat], axis=1)
         
-        # ターゲット（正解ラベル）のラベリング改善（ノイズ排除）
         tp_t = new_cols["ATR"] * 1.0
         sl_t = new_cols["ATR"] * 0.7
         target_values = np.zeros(len(df), dtype=int)
@@ -440,23 +439,27 @@ def analyze_signal_with_backtest(df_current, df_htf):
                 htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
                 htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
 
+        # トレンドスコアの強烈な重み付け調整
         buy_score, sell_score = prob_up, prob_down
-        if curr_close > sma20 and sma20 > ema200: buy_score += 0.35
-        elif curr_close < sma20 and sma20 < ema200: sell_score += 0.45  # 下降トレンド時の売りを強力に加点
+        if curr_close > sma20 and sma20 > ema200: 
+            buy_score += 0.35
+        elif curr_close < sma20 and (sma20 < ema200 or curr_close < ema200): 
+            sell_score += 0.80  # 下降トレンド時の売りスコアを大幅に増強
 
-        if return_5 < 0 and macd_hist < 0: sell_score += 0.30
-        elif return_5 > 0 and macd_hist > 0: buy_score += 0.30
+        if return_5 < 0 and macd_hist < 0: 
+            sell_score += 0.40
+        elif return_5 > 0 and macd_hist > 0: 
+            buy_score += 0.30
 
-        if adx_val > 23.0:
-            if macd_hist > 0: buy_score += 0.15
-            elif macd_hist < 0: sell_score += 0.25
+        if adx_val > 22.0:
+            if macd_hist < 0: sell_score += 0.40  # トレンド中の下落モメンタムを最重視
 
         if htf_bullish:
             buy_score += 0.20
-            sell_score -= 0.25
+            sell_score -= 0.30
         elif htf_bearish:
-            sell_score += 0.35
-            buy_score -= 0.40
+            sell_score += 0.50
+            buy_score -= 0.60
 
         buy_score, sell_score = max(0.0, buy_score), max(0.0, sell_score)
         total_s = buy_score + sell_score + prob_wait + 1e-10
@@ -464,20 +467,23 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        # 厳格なトレンド順張りフィルター（下落時に買いシグナルを出さない絶対防御）
-        is_strong_downtrend = (curr_close < sma20) and (sma20 < ema200) and (macd_hist < 0)
-        is_strong_uptrend = (curr_close > sma20) and (sma20 > ema200) and (macd_hist > 0)
+        # 【絶対防御】下降トレンド中は買いシグナルを100%完全にブロックし、売りまたは様子見へ強制誘導
+        is_strong_downtrend = (curr_close < sma20) or (curr_close < ema200) or (macd_hist < 0) or htf_bearish
+        is_strong_uptrend = (curr_close > sma20) and (sma20 > ema200) and (macd_hist > 0) and htf_bullish
 
-        threshold = 0.50
-        if p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 70.0 and not is_strong_downtrend:
+        threshold = 0.48
+        if is_strong_downtrend:
+            # 下降トレンド中の判定：買いは絶対に許可しない
+            if p_down_final >= 0.35 or macd_hist < 0:
+                status, conf = "SELL (売り - 下降トレンド順張り)", max(p_down_final, 0.65) * 100
+            else:
+                status, conf = "WAIT (様子見 - 下降トレンド警戒)", max(p_wait_final, p_down_final) * 100
+        elif p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 70.0 and not is_strong_downtrend:
             status, conf = "BUY (買い)", p_up_final * 100
-        elif p_down_final > p_up_final and p_down_final >= threshold and (htf_bearish or curr_close < sma20) and rsi_val > 30.0 and not is_strong_uptrend:
+        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 25.0:
             status, conf = "SELL (売り)", p_down_final * 100
         else:
-            if is_strong_downtrend and p_up_final > 0.25:
-                status, conf = "WAIT (様子見 - 下降トレンド継続中)", max(p_wait_final, p_down_final) * 100
-            else:
-                status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
+            status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
             
         m_type = "トレンド相場" if adx_val > 22.0 else "レンジ相場"
         return status, conf, total_signals_count, win_rate, m_type, prob_dict, importances, all_preds_series
