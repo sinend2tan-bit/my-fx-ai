@@ -411,11 +411,11 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(np.unique(y_train)) < 2:
             return ("WAIT (データ偏り)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
         
-        # 予測精度向上のためのハイパーパラメータ最適化（過学習防止と汎用性のバランス強化）
+        # 予測精度を最大化するための機械学習モデル最適化（RandomForest）
         model = RandomForestClassifier(
-            n_estimators=180, 
-            max_depth=6, 
-            min_samples_leaf=5, 
+            n_estimators=200, 
+            max_depth=7, 
+            min_samples_leaf=4, 
             class_weight="balanced", 
             random_state=42, 
             n_jobs=1
@@ -433,12 +433,9 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_up, prob_down, prob_wait = class_prob_map.get(1, 0.0), class_prob_map.get(-1, 0.0), class_prob_map.get(0, 0.0)
         
         curr_close = float(clean_series(df_current["Close"]).iloc[-1])
-        sma20 = float(clean_series(df_current["SMA_20"]).iloc[-1]) if "SMA_20" in df_current.columns else curr_close
-        ema200 = float(clean_series(df_current["EMA_200"]).iloc[-1]) if "EMA_200" in df_current.columns else curr_close
         rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
         macd_hist = float(clean_series(df_current["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in df_current.columns else 0.0
-        return_5 = float(clean_series(df_current["Return_5"]).iloc[-1]) if "Return_5" in df_current.columns else 0.0
 
         htf_bullish, htf_bearish = False, False
         if df_htf is not None and not df_htf.empty and "Close" in df_htf.columns:
@@ -447,16 +444,13 @@ def analyze_signal_with_backtest(df_current, df_htf):
                 htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
                 htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
 
-        # 確率とマルチタイムフレーム・モメンタム指標の統合スコアリングによる高精度化
+        # トレンドの偏りをなくし、モデル確率とテクニカル指標を公正かつ高精度に統合
         buy_score, sell_score = prob_up, prob_down
-        if curr_close > sma20 and sma20 > ema200: buy_score += 0.25
-        elif curr_close < sma20 and sma20 < ema200: sell_score += 0.25
+        if macd_hist > 0: buy_score += 0.10
+        elif macd_hist < 0: sell_score += 0.10
 
-        if return_5 > 0 and macd_hist > 0: buy_score += 0.15
-        elif return_5 < 0 and macd_hist < 0: sell_score += 0.15
-
-        if htf_bullish: buy_score += 0.20
-        elif htf_bearish: sell_score += 0.20
+        if htf_bullish: buy_score += 0.15
+        elif htf_bearish: sell_score += 0.15
 
         buy_score, sell_score = max(0.0, buy_score), max(0.0, sell_score)
         total_s = buy_score + sell_score + prob_wait + 1e-10
@@ -464,11 +458,11 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        # 高精度シグナル判定閾値
-        threshold = 0.45
-        if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 75.0:
+        # 高精度判定閾値（公正な売買シグナル出力）
+        threshold = 0.42
+        if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 78.0:
             status, conf = "BUY (買い)", p_up_final * 100
-        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 25.0:
+        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 22.0:
             status, conf = "SELL (売り)", p_down_final * 100
         else:
             status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
