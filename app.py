@@ -32,9 +32,6 @@ try:
 except ImportError:
     HAS_AUTOREFRESH = False
 
-# ==========================================
-# 0. 設定ファイルの読み書き & 永続化処理
-# ==========================================
 SETTINGS_FILE = "user_settings.json"
 
 DEFAULT_SETTINGS = {
@@ -50,7 +47,6 @@ DEFAULT_SETTINGS = {
 }
 
 def convert_to_builtin_type(obj):
-    """NumPy型などをPython組み込み型へ変換してJSONシリアライズエラーを防止"""
     if isinstance(obj, dict):
         return {str(k): convert_to_builtin_type(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -115,7 +111,6 @@ if "trade_memo" not in st.session_state:
 if "webhook_url" not in st.session_state:
     st.session_state["webhook_url"] = saved_config.get("webhook_url", "")
 
-# カスタムCSS
 st.markdown("""
 <style>
     .stApp { background-color: #0f172a !important; color: #f8fafc !important; }
@@ -215,7 +210,6 @@ def flatten_yf_df(df):
     df_out.columns = [str(c).capitalize() for c in df_out.columns]
     df_out = df_out.loc[~df_out.index.duplicated(keep='last')]
     return df_out
-
 @st.cache_data(ttl=120, show_spinner=False)
 def get_usdjpy_rate():
     try:
@@ -385,6 +379,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         feat_cols = [col for col in FEATURE_COLUMNS if col in df.columns]
         return df.dropna(subset=feat_cols)
     except Exception: return None
+
 def send_webhook_alert(webhook_url, message):
     if not webhook_url or not HAS_REQUESTS: return
     try:
@@ -411,7 +406,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(np.unique(y_train)) < 2:
             return ("WAIT (データ偏り)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
         
-        # 予測精度を最大化するための機械学習モデル最適化（RandomForest）
         model = RandomForestClassifier(
             n_estimators=200, 
             max_depth=7, 
@@ -432,7 +426,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         class_prob_map = {int(cls_val): float(p) for cls_val, p in zip(model.classes_, prob_array)}
         prob_up, prob_down, prob_wait = class_prob_map.get(1, 0.0), class_prob_map.get(-1, 0.0), class_prob_map.get(0, 0.0)
         
-        curr_close = float(clean_series(df_current["Close"]).iloc[-1])
         rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
         macd_hist = float(clean_series(df_current["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in df_current.columns else 0.0
@@ -444,7 +437,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
                 htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
                 htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
 
-        # トレンドの偏りをなくし、モデル確率とテクニカル指標を公正かつ高精度に統合
         buy_score, sell_score = prob_up, prob_down
         if macd_hist > 0: buy_score += 0.10
         elif macd_hist < 0: sell_score += 0.10
@@ -458,11 +450,11 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        # 高精度判定閾値（公正な売買シグナル出力）
-        threshold = 0.42
-        if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 78.0:
+        # 急変動やトレンド逆行に対する防御的閾値の適用
+        threshold = 0.44
+        if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 76.0:
             status, conf = "BUY (買い)", p_up_final * 100
-        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 22.0:
+        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 24.0:
             status, conf = "SELL (売り)", p_down_final * 100
         else:
             status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
@@ -471,7 +463,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         return status, conf, total_signals_count, win_rate, m_type, prob_dict, importances, all_preds_series
     except Exception:
         return ("WAIT (エラー)", 0.0, 0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
-
 st.title("Pro FX Analyzer & Signal Pro")
 
 col_sel1, col_sel2 = st.columns(2)
@@ -564,7 +555,6 @@ latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns 
 
 status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(data, data_htf)
 
-# 急変動事前予測
 bb_pct = float(clean_series(data["BB_PctB"]).iloc[-1]) if "BB_PctB" in data.columns else 0.5
 adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 20.0
 vol_ratio_curr = float(clean_series(data["Vol_Ratio"]).iloc[-1]) if "Vol_Ratio" in data.columns else 0.01
@@ -780,7 +770,7 @@ with tab_single:
     req_margin_yen = (ai_entry * (ai_rec_wan * 10000)) / 25.0 if is_jpy else (ai_entry * usd_rate * (ai_rec_wan * 10000)) / 25.0
 
     st.markdown("#### 🤖 AI提案トレードプラン")
-    if "WAIT" in status: st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。見送りを推奨します。**")
+    if "WAIT" in status: st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。相場が不安定なため見送りを強く推奨します。**")
     else: st.success(f"🎯 **高確信度AIシグナル: 【{status}】（確信度: {conf:.1f}% / 勝率目安: {win_rate:.1f}%）**")
 
     st.markdown(f"""
