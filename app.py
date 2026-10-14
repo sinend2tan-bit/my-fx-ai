@@ -177,7 +177,6 @@ TIMEFRAMES = {
 }
 
 LOOKAHEAD_BARS = 8
-
 def clean_series(s):
     if isinstance(s, pd.DataFrame):
         if s.shape[1] > 0: return s.iloc[:, 0]
@@ -210,6 +209,7 @@ def flatten_yf_df(df):
     df_out.columns = [str(c).capitalize() for c in df_out.columns]
     df_out = df_out.loc[~df_out.index.duplicated(keep='last')]
     return df_out
+
 @st.cache_data(ttl=120, show_spinner=False)
 def get_usdjpy_rate():
     try:
@@ -386,7 +386,6 @@ def send_webhook_alert(webhook_url, message):
         payload = {"content": message}
         requests.post(webhook_url, json=payload, timeout=5)
     except Exception: pass
-
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
     empty_res = ("WAIT (データ不足)", 0.0, 0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
@@ -450,7 +449,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        # 急変動やトレンド逆行に対する防御的閾値の適用
         threshold = 0.44
         if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 76.0:
             status, conf = "BUY (買い)", p_up_final * 100
@@ -463,6 +461,7 @@ def analyze_signal_with_backtest(df_current, df_htf):
         return status, conf, total_signals_count, win_rate, m_type, prob_dict, importances, all_preds_series
     except Exception:
         return ("WAIT (エラー)", 0.0, 0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
+
 st.title("Pro FX Analyzer & Signal Pro")
 
 col_sel1, col_sel2 = st.columns(2)
