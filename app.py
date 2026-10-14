@@ -445,28 +445,28 @@ def analyze_signal_with_backtest(df_current, df_htf):
                 htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
                 htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
 
-        # 下落・上昇トレンドの特性に合わせたスコアリングの最適化
+        # トレンド判定の強化
         buy_score, sell_score = prob_up, prob_down
         if curr_close > sma20 and sma20 > ema200:
-            buy_score += 0.25
+            buy_score += 0.30
         elif curr_close < sma20 and sma20 < ema200:
-            sell_score += 0.35
+            sell_score += 0.40  # 下降トレンド時の売りスコアを強く加点
 
         if return_5 < 0 and macd_hist < 0:
-            sell_score += 0.20
+            sell_score += 0.25
         elif return_5 > 0 and macd_hist > 0:
-            buy_score += 0.20
+            buy_score += 0.25
 
         if adx_val > 23.0:
             if macd_hist > 0: buy_score += 0.15
-            elif macd_hist < 0: sell_score += 0.15
+            elif macd_hist < 0: sell_score += 0.20
 
         if htf_bullish:
             buy_score += 0.15
-            sell_score -= 0.15
+            sell_score -= 0.20
         elif htf_bearish:
-            sell_score += 0.25
-            buy_score -= 0.30
+            sell_score += 0.30
+            buy_score -= 0.35
 
         buy_score, sell_score = max(0.0, buy_score), max(0.0, sell_score)
         total_s = buy_score + sell_score + prob_wait + 1e-10
@@ -474,13 +474,21 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        threshold = 0.45
-        if p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 72.0:
+        # 【重要改善】強力なトレンド順張りフィルター（下がり続けているのに買いが出る現象を完全にブロック）
+        is_strong_downtrend = (curr_close < sma20) and (sma20 < ema200) and (macd_hist < 0)
+        is_strong_uptrend = (curr_close > sma20) and (sma20 > ema200) and (macd_hist > 0)
+
+        threshold = 0.48
+        if p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 72.0 and not is_strong_downtrend:
             status, conf = "BUY (買い)", p_up_final * 100
-        elif p_down_final > p_up_final and p_down_final >= threshold and (htf_bearish or curr_close < sma20) and rsi_val > 28.0:
+        elif p_down_final > p_up_final and p_down_final >= threshold and (htf_bearish or curr_close < sma20) and rsi_val > 28.0 and not is_strong_uptrend:
             status, conf = "SELL (売り)", p_down_final * 100
         else:
-            status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
+            # 下降トレンド中に買い確率が高く出た場合は強制的にWAITまたはSELLに補正
+            if is_strong_downtrend and p_up_final > 0.30:
+                status, conf = "WAIT (様子見 - 下降トレンド継続中)", max(p_wait_final, p_down_final) * 100
+            else:
+                status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
             
         m_type = "トレンド相場" if adx_val > 22.0 else "レンジ相場"
         return status, conf, total_signals_count, win_rate, m_type, prob_dict, importances, all_preds_series
@@ -517,7 +525,6 @@ if HAS_AUTOREFRESH:
 else:
     st.sidebar.caption("💡 `pip install streamlit-autorefresh` で自動更新有効")
 
-# 【新機能】Webhook通知URL設定
 with st.sidebar.expander("🔔 通知設定 (Webhook)", expanded=False):
     st.text_input("Webhook URL (Discord等)", key="webhook_url", on_change=save_settings, placeholder="https://discord.com/api/webhooks/...")
     st.caption("※ シグナル発生時や急変動警戒時の外部通知用URLを設定できます。")
@@ -974,7 +981,6 @@ with tab_ai:
         st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%", f"検証シグナル数: {total_signals_count}回")
         st.caption("※ 未来データの先読みを完全に排除した時系列検証精度です。")
         
-        # 【新機能】AIシグナル履歴のCSVダウンロード
         if ai_signal_history is not None and not ai_signal_history.empty:
             sig_export_df = ai_signal_history.reset_index()
             sig_export_df.columns = ["日時", "シグナル判定(1:買,-1:売,0:様子見)"]
