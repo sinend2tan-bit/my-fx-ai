@@ -12,6 +12,12 @@ import yfinance as yf
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
+
 # Streamlitのページ設定
 st.set_page_config(
     page_title="Pro FX Analyzer & Signal Pro",
@@ -109,53 +115,31 @@ if "trade_memo" not in st.session_state:
 if "webhook_url" not in st.session_state:
     st.session_state["webhook_url"] = saved_config.get("webhook_url", "")
 
-# 視認性と操作性を高めたカスタムCSS（ボタンの文字潰れ対策＆洗練されたダークUI）
+# カスタムCSS
 st.markdown("""
 <style>
-    .stApp {
-        background-color: #0f172a !important;
-        color: #f8fafc !important;
-    }
+    .stApp { background-color: #0f172a !important; color: #f8fafc !important; }
     .main .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1280px; }
-    
     [data-testid="stSidebar"] { background-color: #1e293b !important; }
-    [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] span {
-        color: #f8fafc !important;
-    }
-    
-    .stButton button {
-        background-color: #334155 !important;
-        color: #f8fafc !important;
-        border: 1px solid #475569 !important;
-        font-weight: 700 !important;
-    }
-    .stButton button:hover {
-        background-color: #475569 !important;
-        color: #ffffff !important;
-        border-color: #38bdf8 !important;
-    }
-
+    [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] span { color: #f8fafc !important; }
+    .stButton button { background-color: #334155 !important; color: #f8fafc !important; border: 1px solid #475569 !important; font-weight: 700 !important; }
+    .stButton button:hover { background-color: #475569 !important; color: #ffffff !important; border-color: #38bdf8 !important; }
     [data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 900 !important; color: #38bdf8 !important; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
     [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 800 !important; color: #cbd5e1 !important; }
     [data-testid="stMetricDelta"] { font-weight: 700 !important; font-size: 0.9rem !important; }
-    
     .badge-buy { background-color: #15803d; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
     .badge-sell { background-color: #b91c1c; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
     .badge-wait { background-color: #334155; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
-    
     .alert-box { background-color: #1e293b; border-left: 6px solid #f59e0b; padding: 16px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.05rem; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .warn-box { background-color: #1e293b; border-left: 6px solid #ef4444; padding: 16px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.05rem; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .param-box { background-color: #1e293b !important; border-left: 5px solid #3b82f6; padding: 18px; border-radius: 6px; font-family: monospace; line-height: 1.9; color: #f8fafc !important; font-size: 1.0rem; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .param-box code { font-size: 1.0rem !important; font-weight: 800 !important; color: #38bdf8 !important; background-color: #0f172a !important; padding: 3px 8px; border-radius: 4px; }
-    
     .news-card { background-color: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 16px; margin-bottom: 12px; color: #f8fafc !important; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
     .update-time { font-size: 0.9rem; color: #cbd5e1; text-align: right; margin-bottom: 8px; font-weight: 700; }
-
     .custom-table { width: 100%; border-collapse: collapse; background-color: #1e293b; border-radius: 8px; overflow: hidden; font-size: 0.95rem; margin-top: 10px; margin-bottom: 10px; }
     .custom-table th { background-color: #0f172a; color: #38bdf8; padding: 12px 16px; text-align: left; font-weight: 800; border-bottom: 2px solid #334155; }
     .custom-table td { padding: 12px 16px; color: #f8fafc; border-bottom: 1px solid #334155; font-weight: 600; }
     .custom-table tr:hover { background-color: #273548; }
-
     h1, h2, h3, h4, h5, h6, p, span, label { color: #f8fafc !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -369,8 +353,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["ATR_Ratio"] = new_cols["ATR"] / c
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         df = pd.concat([df, df_feat], axis=1)
-        tp_t = new_cols["ATR"] * 0.9
-        sl_t = new_cols["ATR"] * 0.6
+        
+        # ターゲット（正解ラベル）のラベリング改善（ノイズ排除）
+        tp_t = new_cols["ATR"] * 1.0
+        sl_t = new_cols["ATR"] * 0.7
         target_values = np.zeros(len(df), dtype=int)
         n = len(df)
         c_vals, h_vals, l_vals = c.values, h.values, l.values
@@ -388,7 +374,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 buy_sl_hit = (entry_p - curr_l) >= sl_dist
                 sell_tp_hit = (entry_p - curr_l) >= tp_dist
                 sell_sl_hit = (curr_h - entry_p) >= tp_dist
-                if (buy_tp_hit and buy_sl_hit) or (sell_tp_hit and sell_sl_hit) or (buy_tp_hit and sell_tp_hit):
+                if (buy_tp_hit and buy_sl_hit) or (sell_tp_hit and sell_sl_hit):
                     outcome = 0; break
                 elif buy_tp_hit and not buy_sl_hit: outcome = 1; break
                 elif sell_tp_hit and not sell_sl_hit: outcome = -1; break
@@ -400,6 +386,13 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         feat_cols = [col for col in FEATURE_COLUMNS if col in df.columns]
         return df.dropna(subset=feat_cols)
     except Exception: return None
+def send_webhook_alert(webhook_url, message):
+    if not webhook_url or not HAS_REQUESTS: return
+    try:
+        payload = {"content": message}
+        requests.post(webhook_url, json=payload, timeout=5)
+    except Exception: pass
+
 @st.cache_data(ttl=60, show_spinner=False)
 def analyze_signal_with_backtest(df_current, df_htf):
     empty_res = ("WAIT (データ不足)", 0.0, 0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
@@ -418,13 +411,15 @@ def analyze_signal_with_backtest(df_current, df_htf):
         X_test, y_test = X.iloc[-test_size:], y.iloc[-test_size:]
         if len(np.unique(y_train)) < 2:
             return ("WAIT (データ偏り)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
-        model = RandomForestClassifier(n_estimators=100, max_depth=4, min_samples_leaf=10, class_weight="balanced", random_state=42, n_jobs=1)
+        
+        model = RandomForestClassifier(n_estimators=120, max_depth=5, min_samples_leaf=8, class_weight="balanced", random_state=42, n_jobs=1)
         model.fit(X_train, y_train)
         all_preds_series = pd.Series(model.predict(X), index=X.index)
         preds_series = pd.Series(model.predict(X_test), index=y_test.index)
         trade_signals = preds_series != 0
         total_signals_count = int(trade_signals.sum())
         win_rate = float(((preds_series[trade_signals] == y_test[trade_signals]).sum() / total_signals_count) * 100) if total_signals_count > 0 else 50.0
+        
         latest_X = df_current[avail].iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         class_prob_map = {int(cls_val): float(p) for cls_val, p in zip(model.classes_, prob_array)}
@@ -445,28 +440,23 @@ def analyze_signal_with_backtest(df_current, df_htf):
                 htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
                 htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
 
-        # トレンド判定の強化
         buy_score, sell_score = prob_up, prob_down
-        if curr_close > sma20 and sma20 > ema200:
-            buy_score += 0.30
-        elif curr_close < sma20 and sma20 < ema200:
-            sell_score += 0.40  # 下降トレンド時の売りスコアを強く加点
+        if curr_close > sma20 and sma20 > ema200: buy_score += 0.35
+        elif curr_close < sma20 and sma20 < ema200: sell_score += 0.45  # 下降トレンド時の売りを強力に加点
 
-        if return_5 < 0 and macd_hist < 0:
-            sell_score += 0.25
-        elif return_5 > 0 and macd_hist > 0:
-            buy_score += 0.25
+        if return_5 < 0 and macd_hist < 0: sell_score += 0.30
+        elif return_5 > 0 and macd_hist > 0: buy_score += 0.30
 
         if adx_val > 23.0:
             if macd_hist > 0: buy_score += 0.15
-            elif macd_hist < 0: sell_score += 0.20
+            elif macd_hist < 0: sell_score += 0.25
 
         if htf_bullish:
-            buy_score += 0.15
-            sell_score -= 0.20
+            buy_score += 0.20
+            sell_score -= 0.25
         elif htf_bearish:
-            sell_score += 0.30
-            buy_score -= 0.35
+            sell_score += 0.35
+            buy_score -= 0.40
 
         buy_score, sell_score = max(0.0, buy_score), max(0.0, sell_score)
         total_s = buy_score + sell_score + prob_wait + 1e-10
@@ -474,18 +464,17 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        # 【重要改善】強力なトレンド順張りフィルター（下がり続けているのに買いが出る現象を完全にブロック）
+        # 厳格なトレンド順張りフィルター（下落時に買いシグナルを出さない絶対防御）
         is_strong_downtrend = (curr_close < sma20) and (sma20 < ema200) and (macd_hist < 0)
         is_strong_uptrend = (curr_close > sma20) and (sma20 > ema200) and (macd_hist > 0)
 
-        threshold = 0.48
-        if p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 72.0 and not is_strong_downtrend:
+        threshold = 0.50
+        if p_up_final > p_down_final and p_up_final >= threshold and htf_bullish and rsi_val < 70.0 and not is_strong_downtrend:
             status, conf = "BUY (買い)", p_up_final * 100
-        elif p_down_final > p_up_final and p_down_final >= threshold and (htf_bearish or curr_close < sma20) and rsi_val > 28.0 and not is_strong_uptrend:
+        elif p_down_final > p_up_final and p_down_final >= threshold and (htf_bearish or curr_close < sma20) and rsi_val > 30.0 and not is_strong_uptrend:
             status, conf = "SELL (売り)", p_down_final * 100
         else:
-            # 下降トレンド中に買い確率が高く出た場合は強制的にWAITまたはSELLに補正
-            if is_strong_downtrend and p_up_final > 0.30:
+            if is_strong_downtrend and p_up_final > 0.25:
                 status, conf = "WAIT (様子見 - 下降トレンド継続中)", max(p_wait_final, p_down_final) * 100
             else:
                 status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
@@ -605,6 +594,8 @@ elif is_squeeze:
 
 if vol_alert_msg:
     st.markdown(f'<div class="alert-box">{vol_alert_msg}</div>', unsafe_allow_html=True)
+    if st.session_state.get("webhook_url"):
+        send_webhook_alert(st.session_state["webhook_url"], f"🚨 【FX自動アラート】{selected_label}\n{vol_alert_msg.replace('<b>','').replace('</b>','')}")
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("現在レート", price_fmt % latest_price)
