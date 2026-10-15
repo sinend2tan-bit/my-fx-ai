@@ -177,6 +177,7 @@ TIMEFRAMES = {
 }
 
 LOOKAHEAD_BARS = 8
+
 def clean_series(s):
     if isinstance(s, pd.DataFrame):
         if s.shape[1] > 0: return s.iloc[:, 0]
@@ -450,7 +451,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        # ⚠️ 改善: 閾値を0.48に引き上げ、さらにレンジ相場（ADX < 21）ではシグナルを出しにくくしてダマシを軽減
         threshold = 0.48
         is_trending = adx_val > 21.0
 
@@ -632,6 +632,7 @@ with st.expander("⚙️ リピート自動売買のレンジ調整", expanded=F
 stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
 stop_buffer_val = stop_buffer_pips * pip_unit
 buy_stop_loss, sell_stop_loss = user_lower - stop_buffer_val, user_upper + stop_buffer_val
+
 tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
     "📈 メインチャート", 
     "⚡ 単発トレード (AI全自動アシスト)", 
