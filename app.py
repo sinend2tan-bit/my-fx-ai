@@ -408,8 +408,8 @@ def analyze_signal_with_backtest(df_current, df_htf):
         
         model = RandomForestClassifier(
             n_estimators=200, 
-            max_depth=7, 
-            min_samples_leaf=4, 
+            max_depth=6, 
+            min_samples_leaf=6, 
             class_weight="balanced", 
             random_state=42, 
             n_jobs=1
@@ -438,11 +438,11 @@ def analyze_signal_with_backtest(df_current, df_htf):
                 htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
 
         buy_score, sell_score = prob_up, prob_down
-        if macd_hist > 0: buy_score += 0.10
-        elif macd_hist < 0: sell_score += 0.10
+        if macd_hist > 0: buy_score += 0.08
+        elif macd_hist < 0: sell_score += 0.08
 
-        if htf_bullish: buy_score += 0.15
-        elif htf_bearish: sell_score += 0.15
+        if htf_bullish: buy_score += 0.12
+        elif htf_bearish: sell_score += 0.12
 
         buy_score, sell_score = max(0.0, buy_score), max(0.0, sell_score)
         total_s = buy_score + sell_score + prob_wait + 1e-10
@@ -450,15 +450,18 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        threshold = 0.44
-        if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 76.0:
+        # ⚠️ 改善: 閾値を0.48に引き上げ、さらにレンジ相場（ADX < 21）ではシグナルを出しにくくしてダマシを軽減
+        threshold = 0.48
+        is_trending = adx_val > 21.0
+
+        if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 74.0 and (is_trending or p_up_final > 0.55):
             status, conf = "BUY (買い)", p_up_final * 100
-        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 24.0:
+        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 26.0 and (is_trending or p_down_final > 0.55):
             status, conf = "SELL (売り)", p_down_final * 100
         else:
             status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
             
-        m_type = "トレンド相場" if adx_val > 22.0 else "レンジ相場"
+        m_type = "トレンド相場" if adx_val > 22.0 else "レンジ相場 (様子見推奨)"
         return status, conf, total_signals_count, win_rate, m_type, prob_dict, importances, all_preds_series
     except Exception:
         return ("WAIT (エラー)", 0.0, 0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
