@@ -43,8 +43,7 @@ DEFAULT_SETTINGS = {
     "trap_width": 30,
     "ranges": {},
     "trade_memo": "",
-    "webhook_url": "",
-    "max_daily_loss": 10000  # ⚠️ 追加: 本日の最大許容損失アラート（メンタル・資金防衛用）
+    "webhook_url": ""
 }
 
 def convert_to_builtin_type(obj):
@@ -82,8 +81,7 @@ def save_settings():
         "trap_width": int(st.session_state.get("trap_width", DEFAULT_SETTINGS["trap_width"])),
         "ranges": st.session_state.get("ranges", {}),
         "trade_memo": str(st.session_state.get("trade_memo", "")),
-        "webhook_url": str(st.session_state.get("webhook_url", "")),
-        "max_daily_loss": float(st.session_state.get("max_daily_loss", DEFAULT_SETTINGS["max_daily_loss"]))
+        "webhook_url": str(st.session_state.get("webhook_url", ""))
     }
     try:
         clean_data = convert_to_builtin_type(settings)
@@ -112,8 +110,6 @@ if "trade_memo" not in st.session_state:
     st.session_state["trade_memo"] = saved_config.get("trade_memo", "")
 if "webhook_url" not in st.session_state:
     st.session_state["webhook_url"] = saved_config.get("webhook_url", "")
-if "max_daily_loss" not in st.session_state:
-    st.session_state["max_daily_loss"] = float(saved_config.get("max_daily_loss", 10000))
 
 st.markdown("""
 <style>
@@ -487,7 +483,6 @@ st.sidebar.markdown("---")
 st.sidebar.header("🎯 単発トレード リスク設定")
 st.sidebar.number_input("1取引あたりの許容リスク (%)", min_value=0.1, max_value=10.0, step=0.1, key="risk_percent", on_change=save_settings)
 st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_value=0.5, max_value=5.0, step=0.1, key="rr_ratio", on_change=save_settings)
-st.sidebar.number_input("⚠️ 本日の最大許容損失アラート額 (円)", min_value=1000, step=5000, key="max_daily_loss", on_change=save_settings, help="これを超える損失が出ている場合はアプリ内で警告を表示し、冷静になれるよう促します。")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新・メンテナンス")
@@ -558,14 +553,6 @@ latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns else (latest_price * 0.005)
 
 status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(data, data_htf)
-
-# ⚠️ メンタル＆資金防衛セーフティチェック（最大損失アラート超過時の警告）
-max_daily_loss_limit = float(st.session_state.get("max_daily_loss", 10000))
-st.markdown(f"""
-<div class="warn-box">
-🚨 <b>【資金防衛・メンタル保護ガイド】</b> 本日の設定許容損失（<code>{int(max_daily_loss_limit):,}円</code>）に達している、あるいは相場が不安定な場合は、これ以上の追加トレードを行わず、アプリを閉じて十分に休息を取ることを強く推奨します。
-</div>
-""", unsafe_allow_html=True)
 
 bb_pct = float(clean_series(data["BB_PctB"]).iloc[-1]) if "BB_PctB" in data.columns else 0.5
 adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 20.0
