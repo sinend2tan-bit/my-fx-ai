@@ -451,12 +451,13 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        threshold = 0.48
-        is_trending = adx_val > 21.0
+        # ⚠️ 改善・精度向上: ダマシ防止のための閾値最適化
+        threshold = 0.50
+        is_trending = adx_val > 22.0
 
-        if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 74.0 and (is_trending or p_up_final > 0.55):
+        if p_up_final > p_down_final and p_up_final >= threshold and rsi_val < 72.0 and (is_trending or p_up_final > 0.58):
             status, conf = "BUY (買い)", p_up_final * 100
-        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 26.0 and (is_trending or p_down_final > 0.55):
+        elif p_down_final > p_up_final and p_down_final >= threshold and rsi_val > 28.0 and (is_trending or p_down_final > 0.58):
             status, conf = "SELL (売り)", p_down_final * 100
         else:
             status, conf = "WAIT (様子見)", max(p_up_final, p_down_final, p_wait_final) * 100
@@ -484,7 +485,7 @@ st.sidebar.number_input("1注文の基本数量 (万通貨)", min_value=0.01, st
 
 st.sidebar.markdown("---")
 st.sidebar.header("🎯 単発トレード リスク設定")
-st.sidebar.number_input("1取引あたりの許容リスク (%)", min_value=0.1, max_value=10.0, step=0.1, key="risk_percent", on_change=save_settings)
+st.sidebar.number_input("1取引あたりの許容リスク (%)", min_value=0.1, max_value=5.0, step=0.1, key="risk_percent", on_change=save_settings)
 st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_value=0.5, max_value=5.0, step=0.1, key="rr_ratio", on_change=save_settings)
 
 st.sidebar.markdown("---")
@@ -1006,4 +1007,4 @@ with tab_ai:
     st.text_area("トレードノートを入力", key="trade_memo", height=150, on_change=update_memo_callback, placeholder="例: 本日は米雇用統計発表前のためスキャルピング中心。")
     memo_text = st.session_state.get("trade_memo", "")
     if memo_text.strip():
-        st.download_button(label="📥 トレードノートをテキスト保存 (.txt)", data=memo_text.encode("utf-8"), file_name=f"trade_memo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", mime="text/plain", key="download_memo_btn")
+        st.download_label = st.download_button(label="📥 トレードノートをテキスト保存 (.txt)", data=memo_text.encode("utf-8"), file_name=f"trade_memo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", mime="text/plain", key="download_memo_btn")
