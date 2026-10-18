@@ -351,6 +351,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         df = pd.concat([df, df_feat], axis=1)
         
+        # ⚠️ 【修正①】売り側の損切り誤りおよび同時ヒット判定の厳格化
         tp_t = new_cols["ATR"] * 1.2
         sl_t = new_cols["ATR"] * 0.8
         target_values = np.zeros(len(df), dtype=int)
@@ -369,7 +370,8 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 buy_tp_hit = (curr_h - entry_p) >= tp_dist
                 buy_sl_hit = (entry_p - curr_l) >= sl_dist
                 sell_tp_hit = (entry_p - curr_l) >= tp_dist
-                sell_sl_hit = (curr_h - entry_p) >= tp_dist
+                sell_sl_hit = (curr_h - entry_p) >= sl_dist  # 修正：売り損切りは高値基準
+                
                 if (buy_tp_hit and buy_sl_hit) or (sell_tp_hit and sell_sl_hit):
                     outcome = 0; break
                 elif buy_tp_hit and not buy_sl_hit: outcome = 1; break
@@ -404,6 +406,8 @@ def analyze_signal_with_backtest(df_current, df_htf, force_retrain=False):
             return ("WAIT (学習データ不足)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
         X = df_valid[avail].replace([np.inf, -np.inf], np.nan).fillna(0)
         y = df_valid["Target"]
+        
+        # ⚠️ 【修正②】過去データ全域への過学習予測を防ぎ、テスト期間だけに限定して勝率を算出
         X_train, y_train = X.iloc[: -(test_size + gap)], y.iloc[: -(test_size + gap)]
         X_test, y_test = X.iloc[-test_size:], y.iloc[-test_size:]
         if len(np.unique(y_train)) < 2:
@@ -412,32 +416,27 @@ def analyze_signal_with_backtest(df_current, df_htf, force_retrain=False):
         # ⚠️ 【修正④】学習済みモデルの永続化 (joblibによる保存と読み込み)
         model = None
         if not force_retrain and os.path.exists(MODEL_FILE):
-            try:
-                model = joblib.load(MODEL_FILE)
-            except Exception:
-                model = None
+            try: model = joblib.load(MODEL_FILE)
+            except Exception: model = None
 
         if model is None:
             model = RandomForestClassifier(
-                n_estimators=200, 
-                max_depth=6, 
-                min_samples_leaf=6, 
-                class_weight="balanced", 
-                random_state=42, 
-                n_jobs=1
+                n_estimators=200, max_depth=6, min_samples_leaf=6, 
+                class_weight="balanced", random_state=42, n_jobs=1
             )
             model.fit(X_train, y_train)
-            try:
-                joblib.dump(model, MODEL_FILE)
-            except Exception:
-                pass
+            try: joblib.dump(model, MODEL_FILE)
+            except Exception: pass
 
-        all_preds_series = pd.Series(model.predict(X), index=X.index)
+        # テスト期間に対する厳格なバックテスト結果
         preds_series = pd.Series(model.predict(X_test), index=y_test.index)
         trade_signals = preds_series != 0
         total_signals_count = int(trade_signals.sum())
         win_rate = float(((preds_series[trade_signals] == y_test[trade_signals]).sum() / total_signals_count) * 100) if total_signals_count > 0 else 50.0
         
+        # チャートマーカー用（全期間の予測ではなく、安全な表示用）
+        all_preds_series = pd.Series(model.predict(X), index=X.index)
+
         latest_X = df_current[avail].iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
         class_prob_map = {int(cls_val): float(p) for cls_val, p in zip(model.classes_, prob_array)}
@@ -793,14 +792,27 @@ with tab_single:
     ai_tp_price = ai_entry + (ai_tp_pips * pip_unit) if "BUY" in ai_direction else ai_entry - (ai_tp_pips * pip_unit)
 
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
-    ai_rec_wan = max(0.01, round((max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.01, 2))
+    
+    # ⚠️ 【修正③】リスク許容額を超える場合のガード機能（最小ロット0.01未満なら取引見送り・警告）
+    raw_ai_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.0
+    if raw_ai_wan < 0.01:
+        ai_rec_wan = 0.0
+        is_risk_exceeded = True
+    else:
+        ai_rec_wan = round(raw_ai_wan, 2)
+        is_risk_exceeded = False
+
     ai_profit_yen = (ai_tp_pips - spread_pips) * pip_val_per_wan * ai_rec_wan
     ai_loss_yen = (ai_sl_pips + spread_pips) * pip_val_per_wan * ai_rec_wan
     req_margin_yen = (ai_entry * (ai_rec_wan * 10000)) / 25.0 if is_jpy else (ai_entry * usd_rate * (ai_rec_wan * 10000)) / 25.0
 
     st.markdown("#### 🤖 AI提案トレードプラン")
-    if "WAIT" in status: st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。相場が不安定なため見送りを強く推奨します。**")
-    else: st.success(f"🎯 **高確信度AIシグナル: 【{status}】（確信度: {conf:.1f}% / 勝率目安: {win_rate:.1f}%）**")
+    if is_risk_exceeded:
+        st.error("🚨 **【リスク超過警告】口座資金・許容リスクに対して、安全な最小単位（0.01万通貨）の損失が許容範囲を超えています。取引見送りを強く推奨します。**")
+    elif "WAIT" in status: 
+        st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。相場が不安定なため見送りを強く推奨します。**")
+    else: 
+        st.success(f"🎯 **高確信度AIシグナル: 【{status}】（確信度: {conf:.1f}% / 勝率目安: {win_rate:.1f}%）**")
 
     st.markdown(f"""
     <div class="param-box">
@@ -834,12 +846,13 @@ with tab_single:
     tp_price = entry_price + (tp_pips * pip_unit) if is_buy_manual else entry_price - (tp_pips * pip_unit)
 
     loss_per_wan = (sl_pips + spread_pips) * pip_val_per_wan
-    recommended_wan = max(0.01, round((max_risk_yen / loss_per_wan) if loss_per_wan > 0 else 0.01, 2))
-    expected_profit_yen = (tp_pips - spread_pips) * pip_val_per_wan * recommended_wan
-    actual_loss_yen = (sl_pips + spread_pips) * pip_val_per_wan * recommended_wan
+    raw_manual_wan = (max_risk_yen / loss_per_wan) if loss_per_wan > 0 else 0.01
+    manual_wan = round(raw_manual_wan, 2) if raw_manual_wan >= 0.01 else 0.01
+    expected_profit_yen = (tp_pips - spread_pips) * pip_val_per_wan * manual_wan
+    actual_loss_yen = (sl_pips + spread_pips) * pip_val_per_wan * manual_wan
 
     res_col1, res_col2, res_col3, res_col4 = st.columns(4)
-    res_col1.metric("調整後の手動ロット数", f"{recommended_wan:.2f} 万通貨", f"許容リスク {risk_pct}%")
+    res_col1.metric("調整後の手動ロット数", f"{manual_wan:.2f} 万通貨", f"許容リスク {risk_pct}%")
     res_col2.metric("損切(SL) レート", price_fmt % sl_price, f"-{sl_pips} pips")
     res_col3.metric("利確(TP) レート", price_fmt % tp_price, f"+{tp_pips} pips")
     res_col4.metric("想定純損益", f"+{int(expected_profit_yen):,}円", f"最大損失 -{int(actual_loss_yen):,}円")
