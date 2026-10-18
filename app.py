@@ -82,7 +82,7 @@ DEFAULT_SPREAD_PIPS = {
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 4
 
-# 🎨 iPad・スマホ・PC完全対応：入力値の視認性改善・チャート見切れ防止CSS
+# 🎨 iPad・スマホ・PC完全対応：セレクトボックス背景・文字色・チャート隙間対策CSS
 st.markdown("""
 <style>
 .stApp { background: #0b1220; color: #e5e7eb; }
@@ -124,7 +124,6 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
 /* 🔍 入力フォーム・数値入力欄の文字をはっきりと見やすく改善 */
 [data-testid="stTextInput"] input,
 [data-testid="stNumberInput"] input,
-[data-testid="stSelectbox"] [role="combobox"],
 [data-testid="stTextArea"] textarea {
     font-size: 16px !important;
     min-height: 44px;
@@ -132,6 +131,24 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
     -webkit-text-fill-color: #ffffff !important;
     font-weight: 600 !important;
 }
+
+/* 🎯 通貨ペア・時間足などのセレクトボックスが白抜けして消えないよう背景・文字色を完全統一 */
+[data-testid="stSelectbox"] [data-baseweb="select"] {
+    background-color: #1f2937 !important;
+    border-color: #334155 !important;
+}
+[data-testid="stSelectbox"] [role="combobox"] {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-weight: 600 !important;
+    font-size: 16px !important;
+}
+[data-testid="stSelectbox"] div[data-baseweb="popover"],
+[data-testid="stSelectbox"] div[data-baseweb="menu"] {
+    background-color: #1f2937 !important;
+    color: #ffffff !important;
+}
+
 [data-testid="stNumberInput"] button {
     color: #ffffff !important;
 }
@@ -801,51 +818,56 @@ with tab_chart:
     with toggle_c4: show_ai_markers = st.checkbox("AI売買シグナル表示", value=True, key="show_ai_markers_check")
     df_chart = safe_to_tokyo_tz(data.tail(bars_count)).copy()
     df_chart = df_chart.loc[~df_chart.index.duplicated(keep="last")]
-    x_index = df_chart.index
+    
+    # 🎯 週末・非取引時間の空白（歯抜け）を完全に無くすため、日付文字列のカテゴリカル軸を作成
+    x_labels = df_chart.index.strftime('%m/%d %H:%M').tolist()
+    
     has_sub = sub_indicator != "なし"
     fig = make_subplots(rows=2 if has_sub else 1, cols=1, shared_xaxes=True,
                         row_heights=[0.75, 0.25] if has_sub else [1.0], vertical_spacing=0.06)
-    fig.add_trace(go.Candlestick(x=x_index, open=clean_series(df_chart["Open"]), high=clean_series(df_chart["High"]),
+    fig.add_trace(go.Candlestick(x=x_labels, open=clean_series(df_chart["Open"]), high=clean_series(df_chart["High"]),
         low=clean_series(df_chart["Low"]), close=clean_series(df_chart["Close"]),
         increasing_line_color="#22c55e", increasing_fillcolor="#22c55e",
         decreasing_line_color="#ef4444", decreasing_fillcolor="#ef4444", name="価格"), row=1, col=1)
     if show_ma:
         for col, color, name, width in [("SMA_20","#f59e0b","SMA20",1.5),("EMA_200","#38bdf8","EMA200",2.0)]:
             if col in df_chart:
-                fig.add_trace(go.Scatter(x=x_index,y=clean_series(df_chart[col]),line=dict(color=color,width=width),name=name),row=1,col=1)
+                fig.add_trace(go.Scatter(x=x_labels,y=clean_series(df_chart[col]),line=dict(color=color,width=width),name=name),row=1,col=1)
     if show_bb and "Upper_Band" in df_chart and "Lower_Band" in df_chart:
-        fig.add_trace(go.Scatter(x=x_index,y=clean_series(df_chart["Upper_Band"]),line=dict(color="rgba(148,163,184,0.4)",width=1,dash="dot"),name="BB +2σ"),row=1,col=1)
-        fig.add_trace(go.Scatter(x=x_index,y=clean_series(df_chart["Lower_Band"]),line=dict(color="rgba(148,163,184,0.4)",width=1,dash="dot"),fill="tonexty",fillcolor="rgba(148,163,184,0.05)",name="BB -2σ"),row=1,col=1)
+        fig.add_trace(go.Scatter(x=x_labels,y=clean_series(df_chart["Upper_Band"]),line=dict(color="rgba(148,163,184,0.4)",width=1,dash="dot"),name="BB +2σ"),row=1,col=1)
+        fig.add_trace(go.Scatter(x=x_labels,y=clean_series(df_chart["Lower_Band"]),line=dict(color="rgba(148,163,184,0.4)",width=1,dash="dot"),fill="tonexty",fillcolor="rgba(148,163,184,0.05)",name="BB -2σ"),row=1,col=1)
     if show_ai_markers and ai_signal_history is not None and not ai_signal_history.empty:
         common_idx = df_chart.index.intersection(ai_signal_history.dropna().index)
         if len(common_idx):
             preds = ai_signal_history.loc[common_idx]
-            buy_idx = preds.index[preds == 1]
-            sell_idx = preds.index[preds == -1]
-            if len(buy_idx):
-                fig.add_trace(go.Scatter(x=buy_idx,y=df_chart.loc[buy_idx,"Low"]-latest_atr*.3,mode="markers",marker=dict(symbol="triangle-up",size=11,color="#22c55e"),name="検証区間AI買い"),row=1,col=1)
-            if len(sell_idx):
-                fig.add_trace(go.Scatter(x=sell_idx,y=df_chart.loc[sell_idx,"High"]+latest_atr*.3,mode="markers",marker=dict(symbol="triangle-down",size=11,color="#ef4444"),name="検証区間AI売り"),row=1,col=1)
+            buy_mask = preds == 1
+            sell_mask = preds == -1
+            if buy_mask.any():
+                buy_x = common_idx[buy_mask].strftime('%m/%d %H:%M').tolist()
+                fig.add_trace(go.Scatter(x=buy_x,y=df_chart.loc[common_idx[buy_mask],"Low"]-latest_atr*.3,mode="markers",marker=dict(symbol="triangle-up",size=11,color="#22c55e"),name="検証区間AI買い"),row=1,col=1)
+            if sell_mask.any():
+                sell_x = common_idx[sell_mask].strftime('%m/%d %H:%M').tolist()
+                fig.add_trace(go.Scatter(x=sell_x,y=df_chart.loc[common_idx[sell_mask],"High"]+latest_atr*.3,mode="markers",marker=dict(symbol="triangle-down",size=11,color="#ef4444"),name="検証区間AI売り"),row=1,col=1)
     if show_repeat_lines:
         fig.add_hrect(y0=user_lower,y1=user_upper,fillcolor="rgba(56,189,248,0.06)",line_width=0,row=1,col=1)
         for y, color, dash, label in [(sell_stop_loss,"#dc2626","dashdot","売SL"),(user_upper,"#f87171","dash","上限"),(user_half,"#c084fc","dot","中央"),(user_lower,"#4ade80","dash","下限"),(buy_stop_loss,"#16a34a","dashdot","買SL")]:
             if np.isfinite(y): fig.add_hline(y=y,line_dash=dash,line_color=color,annotation_text=label,row=1,col=1)
     if has_sub and sub_indicator == "RSI (14)" and "RSI" in df_chart:
-        fig.add_trace(go.Scatter(x=x_index,y=clean_series(df_chart["RSI"]),line=dict(color="#a855f7",width=1.8),name="RSI"),row=2,col=1)
+        fig.add_trace(go.Scatter(x=x_labels,y=clean_series(df_chart["RSI"]),line=dict(color="#a855f7",width=1.8),name="RSI"),row=2,col=1)
         fig.add_hline(y=70,line_dash="dot",line_color="#ef4444",row=2,col=1)
         fig.add_hline(y=30,line_dash="dot",line_color="#22c55e",row=2,col=1)
         fig.update_yaxes(range=[0,100],side="right",row=2,col=1)
     elif has_sub and sub_indicator == "MACD" and "MACD" in df_chart:
-        fig.add_trace(go.Scatter(x=x_index,y=clean_series(df_chart["MACD"]),line=dict(color="#38bdf8"),name="MACD"),row=2,col=1)
-        fig.add_trace(go.Scatter(x=x_index,y=clean_series(df_chart["MACD_Signal"]),line=dict(color="#f59e0b"),name="Signal"),row=2,col=1)
-        fig.add_trace(go.Bar(x=x_index,y=clean_series(df_chart["MACD_Hist"]),name="Hist"),row=2,col=1)
+        fig.add_trace(go.Scatter(x=x_labels,y=clean_series(df_chart["MACD"]),line=dict(color="#38bdf8"),name="MACD"),row=2,col=1)
+        fig.add_trace(go.Scatter(x=x_labels,y=clean_series(df_chart["MACD_Signal"]),line=dict(color="#f59e0b"),name="Signal"),row=2,col=1)
+        fig.add_trace(go.Bar(x=x_labels,y=clean_series(df_chart["MACD_Hist"]),name="Hist"),row=2,col=1)
         fig.update_yaxes(side="right",row=2,col=1)
     chart_high, chart_low = float(df_chart["High"].max()), float(df_chart["Low"].min())
     span = max(chart_high-chart_low, chart_high*.002)
-    # 🎯 チャートが途中で切れないよう上下のマージン範囲を広めに確保 (0.05 -> 0.1)
     fig.update_layout(xaxis_rangeslider_visible=False,height=480,margin=dict(l=10,r=70,t=25,b=10),template="plotly_dark",
                       hovermode="x unified",showlegend=True,legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="right",x=1))
-    fig.update_xaxes(type="date",rangebreaks=[dict(bounds=["sat","mon"])] if tf_config["interval"] in ("5m","15m","1h") else [],showspikes=True,spikemode="across")
+    # 🎯 カテゴリカル軸にして空白（歯抜け）を完全に排除
+    fig.update_xaxes(type="category", showspikes=True, spikemode="across")
     fig.update_yaxes(range=[chart_low-span*0.1,chart_high+span*0.1],side="right",tickformat=".3f" if is_jpy else ".5f",row=1,col=1)
     st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displayModeBar":True,"displaylogo":False})
 
