@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import joblib
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -33,6 +34,7 @@ except ImportError:
     HAS_AUTOREFRESH = False
 
 SETTINGS_FILE = "user_settings.json"
+MODEL_FILE = "fx_rf_model.joblib"
 
 DEFAULT_SETTINGS = {
     "account_balance": 500000,
@@ -389,7 +391,7 @@ def send_webhook_alert(webhook_url, message):
     except Exception: pass
 
 @st.cache_data(ttl=60, show_spinner=False)
-def analyze_signal_with_backtest(df_current, df_htf):
+def analyze_signal_with_backtest(df_current, df_htf, force_retrain=False):
     empty_res = ("WAIT (データ不足)", 0.0, 0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
     if df_current is None or len(df_current) < 150: return empty_res
     try:
@@ -407,15 +409,29 @@ def analyze_signal_with_backtest(df_current, df_htf):
         if len(np.unique(y_train)) < 2:
             return ("WAIT (データ偏り)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
         
-        model = RandomForestClassifier(
-            n_estimators=200, 
-            max_depth=6, 
-            min_samples_leaf=6, 
-            class_weight="balanced", 
-            random_state=42, 
-            n_jobs=1
-        )
-        model.fit(X_train, y_train)
+        # ⚠️ 【修正④】学習済みモデルの永続化 (joblibによる保存と読み込み)
+        model = None
+        if not force_retrain and os.path.exists(MODEL_FILE):
+            try:
+                model = joblib.load(MODEL_FILE)
+            except Exception:
+                model = None
+
+        if model is None:
+            model = RandomForestClassifier(
+                n_estimators=200, 
+                max_depth=6, 
+                min_samples_leaf=6, 
+                class_weight="balanced", 
+                random_state=42, 
+                n_jobs=1
+            )
+            model.fit(X_train, y_train)
+            try:
+                joblib.dump(model, MODEL_FILE)
+            except Exception:
+                pass
+
         all_preds_series = pd.Series(model.predict(X), index=X.index)
         preds_series = pd.Series(model.predict(X_test), index=y_test.index)
         trade_signals = preds_series != 0
@@ -451,7 +467,6 @@ def analyze_signal_with_backtest(df_current, df_htf):
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
-        # ⚠️ 改善・精度向上: ダマシ防止のための閾値最適化
         threshold = 0.50
         is_trending = adx_val > 22.0
 
@@ -487,6 +502,16 @@ st.sidebar.markdown("---")
 st.sidebar.header("🎯 単発トレード リスク設定")
 st.sidebar.number_input("1取引あたりの許容リスク (%)", min_value=0.1, max_value=5.0, step=0.1, key="risk_percent", on_change=save_settings)
 st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_value=0.5, max_value=5.0, step=0.1, key="rr_ratio", on_change=save_settings)
+
+st.sidebar.markdown("---")
+st.sidebar.header("🔄 AIモデル管理")
+if st.sidebar.button("🧠 AIモデルを再学習・更新"):
+    if os.path.exists(MODEL_FILE):
+        try: os.remove(MODEL_FILE)
+        except Exception: pass
+    st.cache_data.clear()
+    st.toast("AIモデルを再学習しました！", icon="🧠")
+    st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新・メンテナンス")
