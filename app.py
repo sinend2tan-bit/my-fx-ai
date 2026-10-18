@@ -18,7 +18,8 @@ import streamlit as st
 import yfinance as yf
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score
+from sklearn.dummy import DummyClassifier
 from sklearn.utils.class_weight import compute_sample_weight
 
 try:
@@ -516,6 +517,7 @@ def _normalise_timestamp(value):
 
 def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
     """Returns the same tuple shape expected by the UI."""
+    st.session_state.pop("model_eval_metrics", None)
     fallback = ("WAIT (様子見)", 0.0, 0, 0.0, "データ不足",
                 {"buy": 0, "sell": 0, "wait": 100}, pd.Series(dtype=float), pd.Series(dtype=int))
     if df_current is None or len(df_current) < 180:
@@ -548,6 +550,24 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         eval_model.fit(X_train, y_train, sample_weight=weights)
         pred_test = eval_model.predict(X_test)
         accuracy = float(accuracy_score(y_test, pred_test) * 100)
+        balanced_accuracy = float(balanced_accuracy_score(y_test, pred_test) * 100)
+        # A simple majority-class baseline helps detect a model that looks accurate
+        # only because one label dominates the test set.
+        baseline_model = DummyClassifier(strategy="most_frequent")
+        baseline_model.fit(X_train, y_train)
+        baseline_pred = baseline_model.predict(X_test)
+        baseline_accuracy = float(accuracy_score(y_test, baseline_pred) * 100)
+        baseline_balanced_accuracy = float(balanced_accuracy_score(y_test, baseline_pred) * 100)
+        model_quality_ok = bool(
+            balanced_accuracy >= max(38.0, baseline_balanced_accuracy + 3.0)
+        )
+        st.session_state["model_eval_metrics"] = {
+            "balanced_accuracy": balanced_accuracy,
+            "baseline_accuracy": baseline_accuracy,
+            "baseline_balanced_accuracy": baseline_balanced_accuracy,
+            "quality_ok": model_quality_ok,
+            "test_count": int(len(y_test)),
+        }
         test_count = int(len(y_test))
 
         # History contains only truly out-of-sample test predictions; prior bars are NaN.
@@ -570,21 +590,29 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
 
         # Retrain with all eligible labelled rows. Feedback reweights only matching training rows.
         if model is None or force_retrain:
-            model = RandomForestClassifier(
+            candidate_model = RandomForestClassifier(
                 n_estimators=260, max_depth=7, min_samples_leaf=8,
                 class_weight="balanced_subsample", random_state=43, n_jobs=-1
             )
-            # Trade outcome buttons do not contain enough information to alter a market label
-            # safely (trade side, entry/exit, and timing may differ from the current bar).
-            # Keep them as a review log; train only on reproducible first-touch market labels.
+            # Trade outcome buttons are review logs, not reliable market labels.
+            # Do not promote a new model when out-of-sample balanced accuracy fails
+            # to clear a simple baseline by a small margin.
             sw = compute_sample_weight(class_weight="balanced", y=y)
-            model.fit(X, y, sample_weight=sw)
-            try:
-                joblib.dump({"version": MODEL_VERSION, "features": FEATURE_COLUMNS,
-                             "model": model, "trained_at": datetime.now(JST).isoformat(),
-                             "feedback_applied": 0}, model_path)
-            except Exception:
-                pass
+            candidate_model.fit(X, y, sample_weight=sw)
+            if model_quality_ok:
+                model = candidate_model
+                try:
+                    joblib.dump({"version": MODEL_VERSION, "features": FEATURE_COLUMNS,
+                                 "model": model, "trained_at": datetime.now(JST).isoformat(),
+                                 "validation_balanced_accuracy": balanced_accuracy,
+                                 "baseline_balanced_accuracy": baseline_balanced_accuracy,
+                                 "feedback_applied": 0}, model_path)
+                except Exception:
+                    pass
+            else:
+                # Use the validation-only model for this run; do not save/promote
+                # the full-data candidate when its holdout result is weak.
+                model = eval_model
 
         current_features = X_all.dropna()
         if current_features.empty:
@@ -597,7 +625,9 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         close = float(data["Close"].iloc[-1])
         rsi = float(data["RSI"].iloc[-1]) if "RSI" in data else 50.0
         adx = float(data["ADX"].iloc[-1]) if "ADX" in data else 20.0
-        if buy_p >= 0.53 and buy_p > sell_p and rsi < 78:
+        if not model_quality_ok:
+            status = "WAIT (様子見)"
+        elif buy_p >= 0.53 and buy_p > sell_p and rsi < 78:
             status = "BUY (買い)"
         elif sell_p >= 0.53 and sell_p > buy_p and rsi > 22:
             status = "SELL (売り)"
@@ -908,7 +938,9 @@ with tab_single:
     # Final guard against rounding / malformed values exceeding the configured risk budget.
     if ai_rec_wan > 0 and ai_loss_per_wan * ai_rec_wan > max_risk_yen + 1e-6:
         ai_rec_wan = max(0.0, np.floor((max_risk_yen / ai_loss_per_wan) * 100) / 100 - 0.01)
-    is_risk_exceeded = ai_rec_wan <= 0 or pip_val_per_wan <= 0
+    # Refuse a recommendation if the take-profit distance does not exceed
+    # the estimated spread; a positive-looking gross target may be uneconomic.
+    is_risk_exceeded = ai_rec_wan <= 0 or pip_val_per_wan <= 0 or ai_tp_pips <= spread_pips
     ai_profit_yen = (ai_tp_pips-spread_pips)*pip_val_per_wan*ai_rec_wan
     ai_loss_yen = (ai_sl_pips+spread_pips)*pip_val_per_wan*ai_rec_wan
     if ai_rec_wan > 0 and is_jpy:
@@ -920,6 +952,12 @@ with tab_single:
     else:
         req_margin_yen = 0.0
     st.markdown("#### 🤖 AI提案トレードプラン")
+    quality_metrics = st.session_state.get("model_eval_metrics", {})
+    if quality_metrics and not quality_metrics.get("quality_ok", True):
+        st.warning(
+            "今回の時系列検証ではAIモデルが基準モデルを十分に上回りませんでした。"
+            "安全側に倒し、売買方向・推奨数量は見送り扱いにしています。"
+        )
     if ai_direction.startswith("WAIT"):
         st.warning("現在はAI判定がWAIT（様子見）です。推奨方向・注文数量を提示しません。")
     elif is_risk_exceeded:
@@ -936,6 +974,16 @@ with tab_single:
         ・新規価格目安: <code>{price_fmt % ai_entry}</code><br>・利確(TP): <code>{price_fmt % ai_tp_price}</code> (+{ai_tp_pips:.1f} pips / 純益概算 +{int(ai_profit_yen):,}円)<br>
         ・損切(SL): <code>{price_fmt % ai_sl_price}</code> (-{ai_sl_pips:.1f} pips / 損失概算 -{int(ai_loss_yen):,}円)<br>
         ・数量: <code>{ai_rec_wan:.2f} 万通貨</code> ({int(ai_rec_wan*10000):,}通貨) | 必要証拠金概算: <code>{int(req_margin_yen):,}円</code></div>""",unsafe_allow_html=True)
+        copy_text = (
+            f"通貨ペア: {selected_label}\n方向: {'買い' if ai_is_buy else '売り'}\n"
+            f"新規価格目安: {price_fmt % ai_entry}\n利確(TP): {price_fmt % ai_tp_price} ({ai_tp_pips:.1f} pips)\n"
+            f"損切(SL): {price_fmt % ai_sl_price} ({ai_sl_pips:.1f} pips)\n"
+            f"数量: {ai_rec_wan:.2f} 万通貨\n必要証拠金概算: {int(req_margin_yen):,}円\n"
+            f"想定損失: {int(ai_loss_yen):,}円\n想定スプレッド: {spread_pips:.1f} pips\n"
+            "※参考値です。発注前に現在レート・スプレッド・証拠金を確認してください。"
+        )
+        st.markdown("**コピー用テキスト**（コード枠のコピー機能を使用できます）")
+        st.code(copy_text, language="text")
 
     st.markdown("##### 📝 トレード結果フィードバック")
     st.caption("結果の記録用です。現在の足と実際の取引条件が一致するとは限らないため、この記録をそのままAIの教師ラベルには使いません。")
@@ -1131,6 +1179,17 @@ with tab_ai:
         st.markdown("**時系列アウト・オブ・サンプル検証**")
         st.metric("テスト区間の分類一致率",f"{win_rate:.1f}%",f"検証数: {total_signals_count}本")
         st.caption("分類一致率は売買損益の勝率ではありません。")
+        eval_info = st.session_state.get("model_eval_metrics", {})
+        if eval_info:
+            st.metric("クラス偏り補正の一致率", f"{eval_info.get('balanced_accuracy', 0):.1f}%")
+            st.caption(
+                f"単純基準モデルの補正一致率: {eval_info.get('baseline_balanced_accuracy', 0):.1f}%。"
+                "AIが基準を十分に上回らない場合は売買を見送り、弱い候補モデルを保存しません。"
+            )
+            if eval_info.get("quality_ok"):
+                st.success("今回の検証では、AIモデルが基準モデルを設定した幅だけ上回りました。ただし利益を保証しません。")
+            else:
+                st.warning("今回の検証ではAIモデルの優位性を確認できませんでした。見送り判定を優先します。")
         current_fb=load_feedback_data()
         st.info(f"蓄積された取引結果フィードバック記録: **{len(current_fb)} 件**（市場ラベルとは分離して保存）")
         if st.button("🗑️ 自己学習フィードバック履歴をリセット"):
