@@ -96,15 +96,42 @@ for k, v in DEFAULT_SETTINGS.items():
     if k not in st.session_state:
         st.session_state[k] = saved_config.get(k, v)
 
-# 視認性・文字見切れを改善したCSSデザイン
+# 視認性・文字見切れ・ボタン/タブの視認性を改善したCSSデザイン
 st.markdown("""
 <style>
     .stApp { background-color: #0f172a !important; color: #f8fafc !important; }
     .main .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1280px; }
     [data-testid="stSidebar"] { background-color: #1e293b !important; }
     [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] span { color: #f8fafc !important; }
-    .stButton button { background-color: #334155 !important; color: #f8fafc !important; border: 1px solid #475569 !important; font-weight: 700 !important; }
-    .stButton button:hover { background-color: #475569 !important; color: #ffffff !important; border-color: #38bdf8 !important; }
+    
+    /* 通常ボタン & ダウンロードボタンの視認性改善 */
+    .stButton button, [data-testid="stDownloadButton"] button { 
+        background-color: #334155 !important; 
+        color: #f8fafc !important; 
+        border: 1px solid #475569 !important; 
+        font-weight: 700 !important; 
+    }
+    .stButton button:hover, [data-testid="stDownloadButton"] button:hover { 
+        background-color: #475569 !important; 
+        color: #ffffff !important; 
+        border-color: #38bdf8 !important; 
+    }
+
+    /* タブの文字色・視認性改善 */
+    [data-baseweb="tab"] {
+        color: #94a3b8 !important;
+        font-weight: 700 !important;
+    }
+    [data-baseweb="tab"] p {
+        color: #94a3b8 !important;
+    }
+    [data-baseweb="tab"][aria-selected="true"] {
+        color: #38bdf8 !important;
+    }
+    [data-baseweb="tab"][aria-selected="true"] p {
+        color: #38bdf8 !important;
+    }
+
     [data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 900 !important; color: #38bdf8 !important; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
     [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 800 !important; color: #cbd5e1 !important; }
     [data-testid="stMetricDelta"] { font-weight: 700 !important; font-size: 0.9rem !important; }
