@@ -1,6 +1,7 @@
 # app.py
 # Pro FX Analyzer & Signal Pro
 # 価格分析・注文補助専用です。証券口座接続・自動発注は行いません。
+# 予測確率・バックテスト結果は将来の利益や実際の勝率を保証しません。
 
 import html
 import json
@@ -80,96 +81,19 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 3
+MODEL_VERSION = 4
 
-# 🎨 タブ見切れ解消・文字色・コントラストを極限まで高めたカスタムCSS
 st.markdown("""
 <style>
-    /* 全体背景と文字色 */
-    .stApp { background-color: #0b132b !important; color: #f8fafc !important; }
-    
-    /* サイドバーの視認性向上 */
-    [data-testid="stSidebar"] { background-color: #172554 !important; }
-    [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] span, [data-testid="stSidebar"] p { 
-        color: #f8fafc !important; 
-        font-weight: 600 !important; 
-    }
-    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 { 
-        color: #38bdf8 !important; 
-        font-weight: 800 !important; 
-    }
-
-    /* タブの折り返し対応（見切れ防止）とデザイン強化 */
-    [data-baseweb="tab-list"] {
-        display: flex !important;
-        flex-wrap: wrap !important;
-        gap: 6px !important;
-        background-color: #1e293b !important;
-        padding: 8px !important;
-        border-radius: 10px !important;
-    }
-    [data-baseweb="tab"] { 
-        background-color: #0f172a !important;
-        border-radius: 6px !important;
-        padding: 8px 14px !important;
-        height: auto !important;
-    }
-    [data-baseweb="tab"] p { 
-        color: #cbd5e1 !important; 
-        font-size: 0.95rem !important; 
-        font-weight: 700 !important; 
-    }
-    [data-baseweb="tab"][aria-selected="true"] { 
-        background-color: #0284c7 !important; 
-        border-bottom-color: transparent !important; 
-    }
-    [data-baseweb="tab"][aria-selected="true"] p { 
-        color: #ffffff !important; 
-        font-weight: 900 !important; 
-    }
-
-    /* ボタン & ダウンロードボタンの背景・文字色補正 */
-    .stButton button, [data-testid="stDownloadButton"] button { 
-        background-color: #1e293b !important; 
-        color: #ffffff !important; 
-        border: 1px solid #475569 !important; 
-        font-weight: 700 !important; 
-        border-radius: 6px !important;
-        padding: 6px 12px !important;
-    }
-    .stButton button:hover, [data-testid="stDownloadButton"] button:hover { 
-        background-color: #334155 !important; 
-        color: #38bdf8 !important; 
-        border-color: #38bdf8 !important; 
-    }
-
-    /* メトリクス（数値表示）のサイズ・文字切れ防止 */
-    [data-testid="stMetricValue"] { 
-        font-size: 1.35rem !important; 
-        font-weight: 900 !important; 
-        color: #38bdf8 !important; 
-        white-space: nowrap !important;
-        overflow: visible !important;
-    }
-    [data-testid="stMetricLabel"] { font-size: 0.95rem !important; font-weight: 800 !important; color: #e2e8f0 !important; }
-    [data-testid="stMetricDelta"] { font-weight: 700 !important; font-size: 0.85rem !important; }
-
-    /* バッジ・カード表示 */
-    .badge-buy { background:#14532d; color:#86efac !important; padding:6px 14px; border-radius:6px; font-weight:900; display:inline-block; }
-    .badge-sell { background:#7f1d1d; color:#fecaca !important; padding:6px 14px; border-radius:6px; font-weight:900; display:inline-block; }
-    .badge-wait { background:#334155; color:#f8fafc !important; padding:6px 14px; border-radius:6px; font-weight:900; display:inline-block; }
-    
-    .update-time { padding: 10px 14px; background:#1e293b; border: 1px solid #334155; border-radius:8px; margin:8px 0 14px; color:#e2e8f0; font-weight:600; text-align:right; }
-    .param-box, .news-card { padding:14px; border:1px solid #334155; border-radius:8px; background:#1e293b; margin:8px 0; color:#f8fafc; }
-    .param-box code { background-color: #0f172a !important; color: #38bdf8 !important; font-weight: bold; padding: 2px 6px; border-radius: 4px; }
-    
-    /* 警告・注意ボックスの文字色・背景を鮮明に改善 */
-    .alert-box { padding:14px; border-radius:8px; background:#78350f; border:1px solid #f59e0b; color:#fef3c7; font-weight:700; margin:10px 0; }
-    .warn-box { padding:14px; border-radius:8px; background:#7f1d1d; border:1px solid #ef4444; color:#fee2e2; font-weight:700; margin:10px 0; }
-    
-    .custom-table { width:100%; border-collapse:collapse; background:#1e293b; border-radius:8px; overflow:hidden; } 
-    .custom-table th { background:#0f172a; color:#38bdf8; padding:10px; text-align:left; font-weight:800; border-bottom:2px solid #334155; }
-    .custom-table td { padding:10px; border-bottom:1px solid #334155; text-align:left; color:#f8fafc; font-weight:600; }
+.stApp { background: #0b1220; color: #e5e7eb; }
+[data-testid="stSidebar"] { background: #111827; }
+.update-time { padding: 8px 12px; background:#172033; border-radius:8px; margin:8px 0 14px; }
+.param-box,.news-card { padding:14px; border:1px solid #334155; border-radius:10px; background:#111827; margin:8px 0; }
+.alert-box,.warn-box { padding:12px; border-radius:8px; background:#422006; border:1px solid #f59e0b; margin:10px 0; }
+.badge-buy,.badge-sell,.badge-wait { padding:8px 12px; border-radius:8px; font-weight:800; display:inline-block; }
+.badge-buy { background:#14532d; color:#86efac; } .badge-sell { background:#7f1d1d; color:#fecaca; }
+.badge-wait { background:#374151; color:#e5e7eb; }
+.custom-table { width:100%; border-collapse:collapse; } .custom-table th,.custom-table td { padding:8px; border-bottom:1px solid #334155; text-align:left; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -205,6 +129,18 @@ def save_settings():
             json.dump(payload, f, ensure_ascii=False, indent=2, default=_json_default)
     except OSError as exc:
         st.warning(f"設定を保存できませんでした: {exc}")
+
+
+def reset_settings_callback():
+    """Reset persisted settings before widgets are instantiated on the next run."""
+    for key, value in DEFAULT_SETTINGS.items():
+        st.session_state[key] = value.copy() if isinstance(value, (dict, list)) else value
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            os.remove(SETTINGS_FILE)
+    except OSError:
+        pass
+    st.session_state["settings_loaded"] = True
 
 
 def load_feedback_data():
@@ -244,9 +180,14 @@ def flatten_yf_df(df):
         return pd.DataFrame()
     out = df.copy()
     if isinstance(out.columns, pd.MultiIndex):
+        # yfinance has changed the order of MultiIndex levels across versions.
         out.columns = [str(c[0] if str(c[0]).lower() in {"open","high","low","close","adj close","volume"} else c[-1]) for c in out.columns]
     out.columns = [str(c).replace(" ", "_").title() for c in out.columns]
     return out
+
+
+def _safe_div(a, b):
+    return a / b.replace(0, np.nan)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -322,6 +263,7 @@ def load_and_process_data(ticker, period, interval, label=""):
             agg = {"Open":"first","High":"max","Low":"min","Close":"last"}
             if "Volume" in df: agg["Volume"] = "sum"
             df = df.resample("4h").agg(agg).dropna(subset=required)
+        # Discard the newest bar because it may still be forming.
         if len(df) > 2:
             df = df.iloc[:-1]
         if len(df) < 80:
@@ -373,17 +315,36 @@ def load_and_process_data(ticker, period, interval, label=""):
         df["CCI"] = (tp-tp_sma)/(0.015*mad.replace(0, np.nan))
         df["ROC"] = close.pct_change(10)*100
 
+        # First-touch labels: determine which barrier is touched first in the next N bars.
+        # If both barriers are touched within the same OHLC bar, intrabar order is unknowable,
+        # so that sample is labeled WAIT (0) rather than guessing.
         pip_unit = 0.01 if "JPY" in ticker else 0.0001
         spread = DEFAULT_SPREAD_PIPS.get(ticker, 0.5) * pip_unit
-        future_up = pd.concat([close.shift(-i) for i in range(1, LOOKAHEAD_BARS+1)], axis=1).max(axis=1) - close
-        future_down = close - pd.concat([close.shift(-i) for i in range(1, LOOKAHEAD_BARS+1)], axis=1).min(axis=1)
-        barrier = (df["ATR"] * 1.0).clip(lower=spread*2)
-        df["Target"] = np.select(
-            [(future_up > barrier + spread) & (future_up > future_down*0.8),
-             (future_down > barrier + spread) & (future_down > future_up*0.8)],
-            [1, -1], default=0
-        ).astype(float)
-        df.iloc[-LOOKAHEAD_BARS:, df.columns.get_loc("Target")] = np.nan
+        barrier = (df["ATR"] * 1.0).clip(lower=spread * 2).to_numpy(dtype=float)
+        close_values = close.to_numpy(dtype=float)
+        high_values = high.to_numpy(dtype=float)
+        low_values = low.to_numpy(dtype=float)
+        target = np.full(len(df), np.nan, dtype=float)
+        usable = max(0, len(df) - LOOKAHEAD_BARS)
+        for i in range(usable):
+            distance = barrier[i] + spread
+            upper_barrier = close_values[i] + distance
+            lower_barrier = close_values[i] - distance
+            label = 0
+            for j in range(i + 1, min(i + LOOKAHEAD_BARS + 1, len(df))):
+                hit_up = high_values[j] >= upper_barrier
+                hit_down = low_values[j] <= lower_barrier
+                if hit_up and hit_down:
+                    label = 0  # same-bar order cannot be inferred from OHLC data
+                    break
+                if hit_up:
+                    label = 1
+                    break
+                if hit_down:
+                    label = -1
+                    break
+            target[i] = label
+        df["Target"] = target
         df = df.replace([np.inf, -np.inf], np.nan)
         return df.dropna(subset=FEATURE_COLUMNS + ["Close", "ATR"])
     except Exception:
@@ -393,6 +354,7 @@ def load_and_process_data(ticker, period, interval, label=""):
 def send_webhook_alert(url, message):
     if not url or requests is None:
         return False
+    # Only permit HTTPS endpoints; never include secrets or account information in the message.
     if not str(url).lower().startswith("https://"):
         return False
     try:
@@ -419,17 +381,8 @@ def _normalise_timestamp(value):
         return str(value)
 
 
-def _load_feedback_for(ticker, interval):
-    result = {}
-    for item in load_feedback_data():
-        if item.get("ticker") != ticker or item.get("interval") != interval:
-            continue
-        ts = _normalise_timestamp(item.get("timestamp"))
-        result[ts] = bool(item.get("is_win"))
-    return result
-
-
 def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
+    """Returns the same tuple shape expected by the UI."""
     fallback = ("WAIT (様子見)", 0.0, 0, 0.0, "データ不足",
                 {"buy": 0, "sell": 0, "wait": 100}, pd.Series(dtype=float), pd.Series(dtype=int))
     if df_current is None or len(df_current) < 180:
@@ -445,6 +398,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         if len(X) < 160 or y.nunique() < 2:
             return fallback
 
+        # Chronological holdout with an embargo at least as long as the label horizon.
         test_n = min(120, max(40, int(len(X) * 0.20)))
         split = len(X) - test_n
         train_end = max(1, split - LOOKAHEAD_BARS)
@@ -463,6 +417,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         accuracy = float(accuracy_score(y_test, pred_test) * 100)
         test_count = int(len(y_test))
 
+        # History contains only truly out-of-sample test predictions; prior bars are NaN.
         history = pd.Series(np.nan, index=data.index, dtype=float)
         history.loc[X_test.index] = pred_test.astype(float)
 
@@ -480,25 +435,21 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             except Exception:
                 model = None
 
+        # Retrain with all eligible labelled rows. Feedback reweights only matching training rows.
         if model is None or force_retrain:
             model = RandomForestClassifier(
                 n_estimators=260, max_depth=7, min_samples_leaf=8,
                 class_weight="balanced_subsample", random_state=43, n_jobs=-1
             )
+            # Trade outcome buttons do not contain enough information to alter a market label
+            # safely (trade side, entry/exit, and timing may differ from the current bar).
+            # Keep them as a review log; train only on reproducible first-touch market labels.
             sw = compute_sample_weight(class_weight="balanced", y=y)
-            fb = _load_feedback_for(ticker, interval)
-            ts_map = {_normalise_timestamp(ts): i for i, ts in enumerate(X.index)}
-            applied = 0
-            for ts, is_win in fb.items():
-                idx = ts_map.get(ts)
-                if idx is not None:
-                    sw[idx] *= 1.15 if is_win else 1.25
-                    applied += 1
             model.fit(X, y, sample_weight=sw)
             try:
                 joblib.dump({"version": MODEL_VERSION, "features": FEATURE_COLUMNS,
                              "model": model, "trained_at": datetime.now(JST).isoformat(),
-                             "feedback_applied": applied}, model_path)
+                             "feedback_applied": 0}, model_path)
             except Exception:
                 pass
 
@@ -528,6 +479,9 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
     except Exception as exc:
         st.warning(f"AI分析で問題が発生したため、様子見にしています（{type(exc).__name__}）。")
         return fallback
+
+
+# Load persisted settings once into Streamlit state.
 if "settings_loaded" not in st.session_state:
     _settings = load_settings()
     for _k, _v in _settings.items():
@@ -559,7 +513,7 @@ st.sidebar.number_input("1取引あたりの許容リスク (%)", min_value=0.1,
 st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_value=0.5, max_value=5.0, step=0.1, key="rr_ratio", on_change=save_settings)
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 AIモデル管理（自己学習つき）")
-if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)", use_container_width=True):
+if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)"):
     model_file = _model_filename(ticker, tf_config["interval"])
     try:
         if os.path.exists(model_file):
@@ -584,21 +538,12 @@ if HAS_AUTOREFRESH:
         st_autorefresh(interval=60000, key="datarefresh")
 else:
     st.sidebar.caption("💡 `pip install streamlit-autorefresh` で自動更新有効")
-
 with st.sidebar.expander("🔔 通知設定 (Webhook)", expanded=False):
     st.text_input("Webhook URL (Discord等)", key="webhook_url", on_change=save_settings, placeholder="https://discord.com/api/webhooks/...")
     st.caption("URLはローカル設定ファイルに保存されます。共有環境では入力しないでください。")
-    if st.button("🚀 Webhookテスト送信", use_container_width=True):
-        url_val = st.session_state.get("webhook_url", "")
-        if send_webhook_alert(url_val, "【Pro FX Analyzer】テスト通知です。接続が正常に確認できました！"):
-            st.success("テスト通知の送信に成功しました！")
-        else:
-            st.error("送信に失敗しました。URLが正しいか確認してください。")
-
-if st.sidebar.button("💾 設定を即時手動保存", use_container_width=True):
+if st.sidebar.button("💾 設定を即時手動保存"):
     save_settings()
     st.toast("設定を保存しました！", icon="💾")
-
 with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", expanded=False):
     safe_backup_settings = load_settings().copy()
     safe_backup_settings["webhook_url"] = ""
@@ -610,25 +555,14 @@ with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", e
             imported_data = json.load(uploaded_file)
             if isinstance(imported_data, dict):
                 safe_data = {k: imported_data[k] for k in DEFAULT_SETTINGS if k in imported_data}
-                safe_data["webhook_url"] = ""
+                safe_data["webhook_url"] = ""  # Never import a webhook URL from an untrusted backup.
                 with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                     json.dump(safe_data, f, ensure_ascii=False, indent=2)
                 st.success("設定を復元しました。再読み込みしてください。")
         except Exception as exc:
             st.error(f"設定の復元に失敗しました: {exc}")
-
-if st.sidebar.button("🔄 設定を初期値にリセット", use_container_width=True):
-    for k, v in DEFAULT_SETTINGS.items():
-        st.session_state[k] = v
-    try:
-        if os.path.exists(SETTINGS_FILE):
-            os.remove(SETTINGS_FILE)
-    except OSError:
-        pass
-    st.session_state["settings_loaded"] = True
-    st.rerun()
-
-if st.sidebar.button("🔄 最新データに更新", use_container_width=True):
+st.sidebar.button("🔄 設定を初期値にリセット", on_click=reset_settings_callback)
+if st.sidebar.button("🔄 最新データに更新"):
     st.cache_data.clear()
     st.rerun()
 
@@ -643,8 +577,8 @@ if data is None or data.empty:
     st.error("データの取得に失敗したか、分析に必要な本数が不足しています。時間をおいて更新してください。")
     st.stop()
 
-now_jst = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-st.markdown(f'<div class="update-time">最終確定足データ取得日時: <b>{now_jst} JST</b> (最新の未確定足は除外)</div>', unsafe_allow_html=True)
+last_bar_jst = safe_to_tokyo_tz(data).index[-1].strftime("%Y-%m-%d %H:%M:%S")
+st.markdown(f'<div class="update-time">最終確定足の時刻: <b>{last_bar_jst} JST</b> (最新の未確定足は除外。取得時刻とは異なります)</div>', unsafe_allow_html=True)
 latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data else latest_price * 0.005
 force_retrain = bool(st.session_state.pop("force_retrain_once", False))
@@ -683,7 +617,7 @@ m1.metric("確定足レート", price_fmt % latest_price)
 m2.markdown("**AI 推奨アクション**")
 badge_html = '<div class="badge-buy">BUY</div>' if status.startswith("BUY") else '<div class="badge-sell">SELL</div>' if status.startswith("SELL") else '<div class="badge-wait">WAIT</div>'
 m2.markdown(badge_html, unsafe_allow_html=True)
-m3.metric("分類一致率", f"{win_rate:.1f}%", f"検証数: {total_signals_count}本")
+m3.metric("時系列テスト分類一致率", f"{win_rate:.1f}%", f"検証数: {total_signals_count}本")
 m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 st.caption("分類一致率は、過去のテスト区間でモデルの3クラス分類が一致した割合です。実際のトレード勝率ではありません。")
 st.markdown("---")
@@ -730,9 +664,9 @@ stop_buffer_val = stop_buffer_pips * pip_unit
 buy_stop_loss, sell_stop_loss = user_lower - stop_buffer_val, user_upper + stop_buffer_val
 
 tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
-    "📈 メインチャート", "⚡ 単発トレード (AIアシスト)",
-    "📰 経済指標＆ニュースAI予測", "📋 松井証券リピート設定",
-    "🤖 AI分析詳細 & ノート"
+    "📈 メインチャート", "⚡ 単発トレード (AI全自動アシスト)",
+    "📰 経済指標＆為替ニュースAI予測", "📋 松井証券 リピート設定 & リスク管理",
+    "🤖 AI分析詳細 & 自己学習ノート"
 ])
 
 with tab_chart:
@@ -756,7 +690,7 @@ with tab_chart:
     with toggle_c2: show_bb = st.checkbox("ボリンジャーバンド", value=True, key="show_bb_check")
     with toggle_c3: show_repeat_lines = st.checkbox("リピートレンジ表示", value=("4時間足" in tf_label), key="show_repeat_lines_check")
     with toggle_c4: show_ai_markers = st.checkbox("AI売買シグナル表示", value=True, key="show_ai_markers_check")
-    df_chart = safe_to_tokyo_tz(data.tail(bars_count)).ffill()
+    df_chart = safe_to_tokyo_tz(data.tail(bars_count)).copy()
     df_chart = df_chart.loc[~df_chart.index.duplicated(keep="last")]
     x_index = df_chart.index
     has_sub = sub_indicator != "なし"
@@ -851,11 +785,12 @@ with tab_single:
         ・数量: <code>{ai_rec_wan:.2f} 万通貨</code> ({int(ai_rec_wan*10000):,}通貨) | 必要証拠金概算: <code>{int(req_margin_yen):,}円</code></div>""",unsafe_allow_html=True)
 
     st.markdown("##### 📝 トレード結果フィードバック")
-    st.caption("実際に結果が確定した取引だけを記録してください。予測時の分類ラベルそのものを書き換える機能ではありません。")
+    st.caption("結果の記録用です。現在の足と実際の取引条件が一致するとは限らないため、この記録をそのままAIの教師ラベルには使いません。")
     fb_col1, fb_col2 = st.columns(2)
     feedback_ts = _normalise_timestamp(data.index[-1])
     def record_feedback(is_win):
         fb_list = load_feedback_data()
+        # Avoid duplicate feedback for the same ticker/timeframe/bar.
         existing = [x for x in fb_list if x.get("ticker")==ticker and x.get("interval")==tf_config["interval"] and _normalise_timestamp(x.get("timestamp"))==feedback_ts]
         if existing:
             for item in fb_list:
@@ -863,16 +798,18 @@ with tab_single:
                     item["is_win"] = bool(is_win)
                     item["updated_at"] = datetime.now(JST).isoformat()
         else:
-            fb_list.append({"ticker":ticker,"interval":tf_config["interval"],"timestamp":feedback_ts,"is_win":bool(is_win),"created_at":datetime.now(JST).isoformat()})
+            fb_list.append({"ticker":ticker,"interval":tf_config["interval"],"timestamp":feedback_ts,
+                            "is_win":bool(is_win),"signal":status,"reference_close":latest_price,
+                            "created_at":datetime.now(JST).isoformat()})
         save_feedback_data(fb_list)
     with fb_col1:
         if st.button("👍 利益になった結果を記録",use_container_width=True):
             record_feedback(True)
-            st.success("結果を記録しました。次回の再学習時に対象バーがあればサンプル重みへ反映します。")
+            st.success("結果を記録しました。AIの再学習データには自動混入させず、取引記録として保持します。")
     with fb_col2:
         if st.button("👎 損失になった結果を記録",use_container_width=True):
             record_feedback(False)
-            st.warning("結果を記録しました。次回の再学習時に対象バーがあればサンプル重みへ反映します。")
+            st.warning("結果を記録しました。AIの再学習データには自動混入させず、取引記録として保持します。")
     st.markdown("---")
     st.markdown("##### 🛠️ 注文条件の手動微調整")
     sc1, sc2 = st.columns(2)
@@ -905,6 +842,7 @@ with tab_single:
     if expected_profit_yen <= 0:
         st.warning("利確幅が想定スプレッド以下のため、コスト控除後の利益が見込めない計算です。")
     st.caption("手動調整欄は計算補助です。入力値・スプレッド・約定価格によって実損益は変わります。")
+
 with tab_news:
     st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
     st.caption("ニュース見出しのキーワード参考表示です。本文理解や実際の市場反応を保証するAI予測ではありません。")
@@ -938,10 +876,12 @@ with tab_repeat:
     st.caption("参考計算です。証券会社の仕様・保有ポジション・実際の証拠金計算を完全には再現しません。")
     if latest_price < user_lower or latest_price > user_upper:
         st.markdown(f'<div class="warn-box">【レンジアウト警告】現在レート <code>{price_fmt%latest_price}</code> は設定レンジ <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_upper}</code> の外側です。</div>',unsafe_allow_html=True)
-    atr_4h_val = float(clean_series(data_4h["ATR"]).iloc[-1]) if data_4h is not None and "ATR" in data_4h else latest_atr
-    ai_rec_trap_pips = max(30,int(round((atr_4h_val/pip_unit)*.8)))
+    atr_4h_series = clean_series(data_4h["ATR"]).dropna() if data_4h is not None and "ATR" in data_4h else pd.Series(dtype=float)
+    atr_4h_val = float(atr_4h_series.iloc[-1]) if not atr_4h_series.empty and float(atr_4h_series.iloc[-1]) > 0 else max(float(latest_atr), pip_unit * 30)
+    ai_rec_trap_pips = int(np.clip(round((atr_4h_val / pip_unit) * 0.8), 10, 500))
     trap_key = f"trap_w_{ticker}"
-    if trap_key not in st.session_state: st.session_state[trap_key] = int(st.session_state.get("trap_width",ai_rec_trap_pips))
+    if trap_key not in st.session_state:
+        st.session_state[trap_key] = int(np.clip(st.session_state.get("trap_width", ai_rec_trap_pips), 10, 500))
     def apply_ai_trap_callback():
         st.session_state[trap_key] = int(ai_rec_trap_pips)
         st.session_state["trap_width"] = int(ai_rec_trap_pips)
@@ -956,16 +896,35 @@ with tab_repeat:
         st.markdown("<br>",unsafe_allow_html=True)
         st.button(f"🤖 AI推奨値 ({ai_rec_trap_pips} pips) を適用",on_click=apply_ai_trap_callback)
     half_range_pips = abs(user_upper-user_half)/pip_unit
-    half_grid_count = max(1,int(np.floor(half_range_pips/max(1.0,float(trap_width_pips)))))
-    total_grid_count = half_grid_count*2
-    quantity_wan_val=float(st.session_state["quantity_wan"])
-    account_balance_val=float(st.session_state["account_balance"])
-    order_units=max(0,int(quantity_wan_val*10000))
-    pip_value_yen=(order_units/10000)*100 if is_jpy else (order_units*.0001*(current_usdjpy_rate if 'current_usdjpy_rate' in locals() and current_usdjpy_rate else 150.0))
-    max_loss_yen=sum((k*float(trap_width_pips)+stop_buffer_pips)*pip_value_yen for k in range(half_grid_count))
-    usd_rate_repeat = latest_price if ticker=="USDJPY=X" else get_usdjpy_rate()
-    total_margin_yen = ((latest_price*order_units)/25 if is_jpy else (latest_price*(usd_rate_repeat or 150.0)*order_units)/25)*half_grid_count
-    risk_ratio=max_loss_yen/account_balance_val*100 if account_balance_val>0 else 0
+    spacing_pips = max(1.0, float(trap_width_pips))
+    half_grid_count = max(1, int(np.floor(half_range_pips / spacing_pips)) + 1)
+    total_grid_count = half_grid_count * 2
+    quantity_wan_val = max(0.0, float(st.session_state["quantity_wan"]))
+    account_balance_val = max(0.0, float(st.session_state["account_balance"]))
+    order_units = max(0, int(quantity_wan_val * 10000))
+    usd_rate_repeat = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
+    risk_calc_available = bool(is_jpy or (usd_rate_repeat is not None and np.isfinite(usd_rate_repeat) and usd_rate_repeat > 0))
+    if is_jpy:
+        pip_value_yen = (order_units / 10000) * 100.0
+    elif risk_calc_available:
+        pip_value_yen = order_units * 0.0001 * float(usd_rate_repeat)
+    else:
+        pip_value_yen = 0.0
+    # Conservative gross stress estimate: assume each grid order is open and moves adversely
+    # to the stop buffer beyond its own half-range edge. This is not a broker execution model.
+    buy_levels = [user_lower + i * spacing_pips * pip_unit for i in range(half_grid_count)]
+    sell_levels = [user_upper - i * spacing_pips * pip_unit for i in range(half_grid_count)]
+    buy_loss_pips = sum(max(0.0, (level - buy_stop_loss) / pip_unit) for level in buy_levels)
+    sell_loss_pips = sum(max(0.0, (sell_stop_loss - level) / pip_unit) for level in sell_levels)
+    max_loss_yen = (buy_loss_pips + sell_loss_pips) * pip_value_yen
+    if order_units > 0 and is_jpy:
+        margin_per_order = (latest_price * order_units) / 25.0
+    elif order_units > 0 and risk_calc_available:
+        margin_per_order = (latest_price * float(usd_rate_repeat) * order_units) / 25.0
+    else:
+        margin_per_order = 0.0
+    total_margin_yen = margin_per_order * total_grid_count
+    risk_ratio = max_loss_yen / account_balance_val * 100 if risk_calc_available and account_balance_val > 0 else float("nan")
     st.markdown(f"""<div class="param-box"><b>【ハーフ＆ハーフ推奨設定値】</b>（4時間足ATR基準）<br>
     ・買い設定（下半）: <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_half}</code> | 停止目安: <code>{price_fmt%buy_stop_loss}</code><br>
     ・売り設定（上半）: <code>{price_fmt%user_half}</code>～<code>{price_fmt%user_upper}</code> | 停止目安: <code>{price_fmt%sell_stop_loss}</code><br>
@@ -979,29 +938,31 @@ with tab_repeat:
 1本あたり数量: {quantity_wan_val:.2f} 万通貨""",language="text")
     st.markdown("##### 🛡️ リスク・資金シミュレーション")
     rc1,rc2,rc3=st.columns(3)
-    rc1.metric("想定含み損シナリオ",f"約 {int(max_loss_yen):,} 円")
-    rc2.metric("片側必要証拠金概算",f"約 {int(total_margin_yen):,} 円")
-    rc3.metric("資金リスク比率",f"{risk_ratio:.1f}%")
-    if risk_ratio>40:
-        st.markdown('<div class="warn-box">警告: 単純試算の損失シナリオが資金の40%を超えています。</div>', unsafe_allow_html=True)
-    elif risk_ratio>20:
-        st.markdown('<div class="alert-box">損失シナリオが大きめです。注文数・数量・レンジを見直してください。</div>', unsafe_allow_html=True)
+    rc1.metric("想定含み損シナリオ", f"約 {int(max_loss_yen):,} 円" if risk_calc_available else "算出不可")
+    rc2.metric("全注文成立時の必要証拠金概算", f"約 {int(total_margin_yen):,} 円" if risk_calc_available else "算出不可")
+    rc3.metric("資金リスク比率", f"{risk_ratio:.1f}%" if np.isfinite(risk_ratio) else "算出不可")
+    if not risk_calc_available:
+        st.error("USD/JPY換算レートを取得できないため、円換算のリスク試算は停止しています。レート取得後に再更新してください。")
+    elif risk_ratio > 40:
+        st.error("警告: 単純試算の損失シナリオが資金の40%を超えています。")
+    elif risk_ratio > 20:
+        st.warning("損失シナリオが大きめです。注文数・数量・レンジを見直してください。")
     else:
         st.info("この単純試算だけでは安全性を判断できません。")
     st.markdown("---")
     st.markdown("##### 📈 リターン・回転数シミュレーション（参考値）")
     st.caption("実際の利確回数を予測する根拠は限定的です。参考シナリオであり、利益予測として利用しないでください。")
-    net_trap_pips=max(0.0,float(trap_width_pips)-spread_pips)
-    estimated_monthly_turns=max(0,int((latest_atr/(max(1.0,float(trap_width_pips))*pip_unit))*6))
-    est_monthly_profit=estimated_monthly_turns*net_trap_pips*pip_value_yen
-    est_annual_profit=est_monthly_profit*12
-    est_monthly_roi=est_monthly_profit/account_balance_val*100 if account_balance_val>0 else 0
-    est_annual_roi=est_annual_profit/account_balance_val*100 if account_balance_val>0 else 0
-    sc1,sc2,sc3,sc4=st.columns(4)
-    sc1.metric("仮定上の月間回数",f"{estimated_monthly_turns} 回")
-    sc2.metric("仮定上の月間損益",f"{est_monthly_profit:,.0f} 円")
-    sc3.metric("仮定上の月間比率",f"{est_monthly_roi:.1f}%")
-    sc4.metric("単純年換算比率",f"{est_annual_roi:.1f}%")
+    net_trap_pips = max(0.0, float(trap_width_pips) - spread_pips)
+    estimated_monthly_turns = max(0, int((latest_atr / (max(1.0, float(trap_width_pips)) * pip_unit)) * 6))
+    est_monthly_profit = estimated_monthly_turns * net_trap_pips * pip_value_yen
+    est_annual_profit = est_monthly_profit * 12
+    est_monthly_roi = est_monthly_profit / account_balance_val * 100 if account_balance_val > 0 else 0
+    est_annual_roi = est_annual_profit / account_balance_val * 100 if account_balance_val > 0 else 0
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("仮定上の月間回数", f"{estimated_monthly_turns} 回")
+    sc2.metric("仮定上の月間損益", f"{est_monthly_profit:,.0f} 円" if risk_calc_available else "算出不可")
+    sc3.metric("仮定上の月間比率", f"{est_monthly_roi:.1f}%" if risk_calc_available else "算出不可")
+    sc4.metric("単純年換算比率", f"{est_annual_roi:.1f}%" if risk_calc_available else "算出不可")
 
 with tab_ai:
     st.markdown("##### 🤖 AI予測モデルの評価と内訳")
@@ -1016,13 +977,13 @@ with tab_ai:
         st.metric("テスト区間の分類一致率",f"{win_rate:.1f}%",f"検証数: {total_signals_count}本")
         st.caption("分類一致率は売買損益の勝率ではありません。")
         current_fb=load_feedback_data()
-        st.info(f"蓄積された自己学習フィードバック数: **{len(current_fb)} 件**")
-        if st.button("🗑️ 自己学習フィードバック履歴をリセット", use_container_width=True):
+        st.info(f"蓄積された取引結果フィードバック記録: **{len(current_fb)} 件**（市場ラベルとは分離して保存）")
+        if st.button("🗑️ 自己学習フィードバック履歴をリセット"):
             try:
                 if os.path.exists(FEEDBACK_FILE): os.remove(FEEDBACK_FILE)
             except OSError:
                 pass
-            st.toast("フィードバック履歴をリセットしました。モデル再学習で反映状況を更新してください。")
+            st.toast("フィードバック記録をリセットしました。保存済みモデルの市場ラベル学習には影響しません。")
             st.rerun()
         if ai_signal_history is not None and not ai_signal_history.empty:
             sig_export_df=ai_signal_history.rename("予測ラベル(1=買い,-1=売り,0=様子見)").rename_axis("日時").reset_index()
@@ -1030,11 +991,16 @@ with tab_ai:
                                file_name=f"ai_signal_history_{ticker.replace('=X','')}.csv",mime="text/csv",use_container_width=True)
     st.markdown("---")
     st.markdown("##### 📊 テクニカル指標ダッシュボード（確定足）")
-    curr_rsi=float(clean_series(data["RSI"]).iloc[-1]) if "RSI" in data else 50
-    curr_adx=float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data else 25
-    curr_bb=float(clean_series(data["BB_PctB"]).iloc[-1]) if "BB_PctB" in data else .5
-    curr_macd=float(clean_series(data["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in data else 0
-    curr_stoch=float(clean_series(data["Stoch_K"]).iloc[-1]) if "Stoch_K" in data else 50
+    def latest_finite(column, default):
+        if column not in data:
+            return float(default)
+        values = clean_series(data[column]).dropna()
+        return float(values.iloc[-1]) if not values.empty and np.isfinite(values.iloc[-1]) else float(default)
+    curr_rsi = latest_finite("RSI", 50)
+    curr_adx = latest_finite("ADX", 25)
+    curr_bb = latest_finite("BB_PctB", 0.5)
+    curr_macd = latest_finite("MACD_Hist", 0)
+    curr_stoch = latest_finite("Stoch_K", 50)
     st.markdown(f"""<table class="custom-table"><thead><tr><th>指標名</th><th>確定足数値</th><th>状態判定</th></tr></thead><tbody>
     <tr><td><b>RSI (14)</b></td><td><code>{curr_rsi:.1f}</code></td><td>{'買われ過ぎ' if curr_rsi>70 else '売られ過ぎ' if curr_rsi<30 else 'ニュートラル'}</td></tr>
     <tr><td><b>ADX</b></td><td><code>{curr_adx:.1f}</code></td><td>{'強いトレンド' if curr_adx>25 else 'レンジ/膠着'}</td></tr>
@@ -1049,7 +1015,7 @@ with tab_ai:
         with col_imp_btn:
             csv_data=feature_importances.rename(index=lambda x:FEATURE_LABELS.get(x,x)).rename("重要度スコア").rename_axis("指標名").reset_index()
             st.download_button("📥 重要度CSV",data=csv_data.to_csv(index=False).encode("utf-8-sig"),
-                               file_name=f"ai_feature_importances_{ticker.replace('=X','')}.csv",mime="text/csv",key="download_csv_btn", use_container_width=True)
+                               file_name=f"ai_feature_importances_{ticker.replace('=X','')}.csv",mime="text/csv",key="download_csv_btn")
         top10_imp=feature_importances.nlargest(10).sort_values(ascending=True)
         fig_imp=go.Figure(go.Bar(x=top10_imp.values,y=[FEATURE_LABELS.get(x,x) for x in top10_imp.index],orientation="h"))
         fig_imp.update_layout(height=340,margin=dict(l=10,r=20,t=10,b=30),template="plotly_dark",xaxis_title="重要度スコア",yaxis=dict(autorange="reversed"))
@@ -1061,4 +1027,4 @@ with tab_ai:
     memo_text=st.session_state.get("trade_memo","")
     if memo_text.strip():
         st.download_button("📥 トレードノートをテキスト保存 (.txt)",data=memo_text.encode("utf-8"),
-                           file_name=f"trade_memo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",mime="text/plain",key="download_memo_btn", use_container_width=True)
+                           file_name=f"trade_memo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",mime="text/plain",key="download_memo_btn")
