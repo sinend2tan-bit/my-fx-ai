@@ -82,7 +82,7 @@ DEFAULT_SPREAD_PIPS = {
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 4
 
-# 🎨 スマホ・iPad・PC完全対応の洗練されたカスタムCSS
+# 🎨 iPad・スマホ・PC完全対応：タブ見切れ防止・レスポンシブ最適化CSS
 st.markdown("""
 <style>
 .stApp { background: #0b1220; color: #e5e7eb; }
@@ -132,22 +132,36 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
     white-space:normal;
     line-height:1.35;
 }
+
+/* 🎯 タブの完全折り返し（見切れ防止）設定 */
 [data-testid="stTabs"] [role="tablist"] {
-    gap: 4px;
-    flex-wrap: wrap;
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    background-color: #172033 !important;
+    padding: 8px !important;
+    border-radius: 10px !important;
 }
 [data-testid="stTabs"] [role="tab"] {
-    color:#cbd5e1 !important;
-    white-space:normal !important;
-    height:auto !important;
-    min-height:46px;
-    padding:8px 12px !important;
-    font-size:clamp(13px, 1.4vw, 15px) !important;
+    flex: 1 1 auto !important;
+    min-width: 140px !important;
+    max-width: 100% !important;
+    color: #cbd5e1 !important;
+    white-space: normal !important;
+    height: auto !important;
+    min-height: 48px !important;
+    padding: 8px 12px !important;
+    font-size: 13px !important;
+    background-color: #111827 !important;
+    border-radius: 6px !important;
+    text-align: center !important;
 }
 [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
-    color:#fca5a5 !important;
-    font-weight:700 !important;
+    background-color: #0284c7 !important;
+    color: #ffffff !important;
+    font-weight: 800 !important;
 }
+
 [data-testid="stPlotlyChart"] { width:100% !important; }
 [data-testid="stDataFrame"], .custom-table { max-width:100%; }
 .news-card, .param-box, .alert-box, .warn-box {
@@ -164,8 +178,8 @@ code { overflow-wrap:anywhere; }
         max-width: 100% !important;
     }
     [data-testid="stTabs"] [role="tab"] {
-        min-width: 130px;
-        flex: 1 1 auto;
+        min-width: calc(33% - 8px) !important;
+        font-size: 12px !important;
     }
     [data-testid="stMetricValue"] {
         font-size: 1.45rem !important;
@@ -181,8 +195,7 @@ code { overflow-wrap:anywhere; }
         max-width:100% !important;
     }
     [data-testid="stTabs"] [role="tab"] {
-        min-width: 110px;
-        flex: 1 1 auto;
+        min-width: calc(50% - 6px) !important;
         padding: 6px 8px !important;
         font-size: 12px !important;
     }
