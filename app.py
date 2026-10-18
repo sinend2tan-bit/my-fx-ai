@@ -229,6 +229,11 @@ use_hist = isinstance(hist, pd.DataFrame) and len(hist) >= 30 and st.session_sta
 if use_hist:
     default_low = float(hist["low"].tail(120).quantile(0.05))
     default_high = float(hist["high"].tail(120).quantile(0.95))
+    # 価格がほぼ動かない等でレンジ幅がゼロになった場合の安全な初期値
+    if not np.isfinite(default_low) or default_low <= 0:
+        default_low = 150.0
+    if not np.isfinite(default_high) or default_high <= default_low:
+        default_high = default_low + max(0.5, default_low * 0.01)
     repeat_atr = float(hist["atr"].dropna().iloc[-1])
     st.caption("初期レンジは直近データの5～95パーセンタイルです。将来の値幅を保証しません。")
 else:
@@ -253,7 +258,7 @@ with c2:
                                  value=float(round(default_high, 3)), step=0.01, format="%.3f")
     qty_per_order = st.number_input("1注文あたり数量（通貨）", min_value=1, max_value=1000000,
                                     value=1000, step=100)
-    stop_line = st.number_input("運用停止ライン（円・0なら未設定）", min_value=0.0, max_value=1000.0,
+    stop_line = st.number_input("運用停止ラインの目安（円・0なら未設定／自動停止なし）", min_value=0.0, max_value=1000.0,
                                 value=0.0, step=0.1, format="%.3f")
 
 margin_rate_pct = st.number_input("必要証拠金の概算率（%）", min_value=1.0, max_value=10.0,
@@ -296,7 +301,8 @@ else:
     c.metric("必要証拠金の概算", f"{margin_est:,.0f}円")
     st.write(f"- 概算含み損（単純計算）：約 {float_est:,.0f}円")
     st.write(f"- 設定した含み損予算：{max_float_budget:,.0f}円")
-    st.write(f"- 運用停止ライン：{'未設定' if stop_line == 0 else price(stop_line) + ' 円'}")
+    st.write(f"- 運用停止ラインの目安：{'未設定' if stop_line == 0 else price(stop_line) + ' 円'}")
+    st.caption("重要：運用停止ラインは表示用の目安です。このツールは価格監視・自動停止・決済を行いません。")
     if float_est > max_float_budget:
         st.error("概算含み損が設定予算を超えています。数量を減らす、注文数を減らす、またはレンジを見直してください。")
     elif margin_est > capital * 0.5:
@@ -313,7 +319,7 @@ st.subheader("④ 発注前チェック")
 for i, item in enumerate([
     "松井証券アプリの最新レートとスプレッドを確認した",
     "注文数量・注文本数・必要証拠金を確認した",
-    "買い／売り方向と損切り・停止ラインを確認した",
+    "買い／売り方向と損切り・停止ラインの目安を確認した（自動停止はされない）",
     "経済指標・週末・急変リスクを確認した",
 ]):
     st.checkbox(item, key=f"preflight_{i}")
