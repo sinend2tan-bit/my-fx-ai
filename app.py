@@ -284,6 +284,11 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             df = df.resample("4h", closed="left", label="left").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
             if tz_before is not None and df.index.tz is None: df.index = df.index.tz_localize(tz_before)
         if len(df) < 50: return None
+        
+        # 改善: 未確定足（形成中の最新バー）の除外（最新足のノイズによるシグナル変動を防止）
+        df = df.iloc[:-1].copy()
+        if len(df) < 50: return None
+
         c, h, l, o = clean_series(df["Close"]), clean_series(df["High"]), clean_series(df["Low"]), clean_series(df["Open"])
         new_cols = {}
         new_cols["SMA_20"] = c.rolling(20, min_periods=1).mean()
@@ -342,7 +347,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         df = pd.concat([df, df_feat], axis=1)
         
-        # 改善: スプレッドを考慮した学習ラベル生成ロジック
+        # 改善: 学習ラベル判定ロジックの厳密化（TPとSLが同時ヒットした場合は保守的に負け・様子見とする）
         is_jpy = "JPY" in symbol
         pip_unit = 0.01 if is_jpy else 0.0001
         spread_pips = DEFAULT_SPREAD_PIPS.get(symbol, 0.3)
@@ -354,29 +359,42 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         n = len(df)
         c_vals, h_vals, l_vals = c.values, h.values, l.values
         tp_vals, sl_vals = tp_t.values, sl_t.values
+        
         for i in range(n - LOOKAHEAD_BARS):
             entry_p = c_vals[i]
             tp_dist, sl_dist = tp_vals[i], sl_vals[i]
             if np.isnan(tp_dist) or np.isnan(sl_dist) or tp_dist <= 0 or sl_dist <= 0: continue
-            outcome = 0
+            
+            buy_outcome, sell_outcome = 0, 0
+            # 買いトレードの検証
             for j in range(1, LOOKAHEAD_BARS + 1):
                 idx = i + j
                 if idx >= n: break
                 curr_h, curr_l = h_vals[idx], l_vals[idx]
-                
-                # スプレッドコストを考慮した買い・売り判定
                 buy_tp_hit = (curr_h - (entry_p + spread_val)) >= tp_dist
                 buy_sl_hit = ((entry_p + spread_val) - curr_l) >= sl_dist
-                
+                if buy_tp_hit and buy_sl_hit:
+                    buy_outcome = 0; break # 同時ヒットは保守的に無効
+                elif buy_tp_hit: buy_outcome = 1; break
+                elif buy_sl_hit: buy_outcome = -1; break
+            
+            # 売りトレードの検証
+            for j in range(1, LOOKAHEAD_BARS + 1):
+                idx = i + j
+                if idx >= n: break
+                curr_h, curr_l = h_vals[idx], l_vals[idx]
                 sell_tp_hit = ((entry_p - spread_val) - curr_l) >= tp_dist
                 sell_sl_hit = (curr_h - (entry_p - spread_val)) >= sl_dist
-                
-                if (buy_tp_hit and buy_sl_hit) or (sell_tp_hit and sell_sl_hit):
-                    outcome = 0; break
-                elif buy_tp_hit and not buy_sl_hit: outcome = 1; break
-                elif sell_tp_hit and not sell_sl_hit: outcome = -1; break
-                elif buy_sl_hit or sell_sl_hit: outcome = 0; break
-            target_values[i] = outcome
+                if sell_tp_hit and sell_sl_hit:
+                    sell_outcome = 0; break
+                elif sell_tp_hit: sell_outcome = 1; break
+                elif sell_sl_hit: sell_outcome = -1; break
+
+            # 最終ラベルの決定（買い勝ちなら1、売り勝ちなら-1、それ以外は0）
+            if buy_outcome == 1 and sell_outcome != 1: target_values[i] = 1
+            elif sell_outcome == 1 and buy_outcome != 1: target_values[i] = -1
+            else: target_values[i] = 0
+
         target_series = pd.Series(target_values, index=df.index, dtype="float64")
         target_series.iloc[-LOOKAHEAD_BARS:] = np.nan
         df["Target"] = target_series
@@ -420,7 +438,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             except Exception: model = None
 
         if model is None:
-            # 精度向上・過学習防止のためのハイパーパラメータ最適化
             model = RandomForestClassifier(
                 n_estimators=300, max_depth=6, min_samples_leaf=8, 
                 class_weight="balanced", random_state=42, n_jobs=1
@@ -443,25 +460,12 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         
         rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
-        macd_hist = float(clean_series(df_current["MACD_Hist"]).iloc[-1]) if "MACD_Hist" in df_current.columns else 0.0
 
-        htf_bullish, htf_bearish = False, False
-        if df_htf is not None and not df_htf.empty and "Close" in df_htf.columns:
-            htf_close = float(clean_series(df_htf["Close"]).iloc[-1])
-            if "EMA_200" in df_htf.columns and not np.isnan(clean_series(df_htf["EMA_200"]).iloc[-1]):
-                htf_ema200 = float(clean_series(df_htf["EMA_200"]).iloc[-1])
-                htf_bullish, htf_bearish = htf_close > htf_ema200, htf_close < htf_ema200
-
-        buy_score, sell_score = prob_up, prob_down
-        if macd_hist > 0: buy_score += 0.08
-        elif macd_hist < 0: sell_score += 0.08
-
-        if htf_bullish: buy_score += 0.12
-        elif htf_bearish: sell_score += 0.12
-
-        buy_score, sell_score = max(0.0, buy_score), max(0.0, sell_score)
-        total_s = buy_score + sell_score + prob_wait + 1e-10
-        p_up_final, p_down_final, p_wait_final = buy_score / total_s, sell_score / total_s, prob_wait / total_s
+        # 改善: 固定加点（ゲタ履き）を廃止し、モデル自体の確率をそのまま信頼する設計にリファイン
+        buy_score, sell_score, prob_wait_val = prob_up, prob_down, prob_wait
+        total_s = buy_score + sell_score + prob_wait_val + 1e-10
+        p_up_final, p_down_final, p_wait_final = buy_score / total_s, sell_score / total_s, prob_wait_val / total_s
+        
         prob_dict = {"buy": round(p_up_final * 100, 1), "sell": round(p_down_final * 100, 1), "wait": round(p_wait_final * 100, 1)}
         importances = pd.Series(model.feature_importances_, index=[FEATURE_LABELS_JA.get(col, col) for col in avail]).sort_values(ascending=True)
         
@@ -504,6 +508,8 @@ st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_val
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 AIモデル管理")
+
+# 改善: キャッシュ削除を確実に実行してモデル再学習を保証
 if st.sidebar.button("🧠 AIモデルを再学習・更新"):
     clean_ticker = str(ticker).replace("=X", "").replace("/", "")
     model_filename = f"model_{clean_ticker}_{tf_config['interval']}.joblib"
@@ -511,8 +517,17 @@ if st.sidebar.button("🧠 AIモデルを再学習・更新"):
         try: os.remove(model_filename)
         except Exception: pass
     st.cache_data.clear()
-    st.toast("AIモデルを再学習しました！", icon="🧠")
+    st.toast("AIモデルを再学習・キャッシュクリアしました！", icon="🧠")
     st.rerun()
+
+# 改善: モデルファイルの読み込み日時状態を表示
+clean_ticker_info = str(ticker).replace("=X", "").replace("/", "")
+m_file_info = f"model_{clean_ticker_info}_{tf_config['interval']}.joblib"
+if os.path.exists(m_file_info):
+    m_time = datetime.fromtimestamp(os.path.getmtime(m_file_info), tz=ZoneInfo("Asia/Tokyo")).strftime("%m/%d %H:%M")
+    st.sidebar.caption(f"🤖 現在使用中のモデル: `{m_time} 更新`")
+else:
+    st.sidebar.caption("🤖 現在使用中のモデル: `未作成 (自動生成予定)`")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新・メンテナンス")
@@ -577,7 +592,7 @@ if data is None:
     st.stop()
 
 now_jst = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S")
-st.markdown(f'<div class="update-time">最終データ取得日時: <b>{now_jst} JST</b></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="update-time">最終確定足データ取得日時: <b>{now_jst} JST</b> (最新の未確定足は除外済み)</div>', unsafe_allow_html=True)
 
 latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns else (latest_price * 0.005)
@@ -586,12 +601,15 @@ status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importan
     data, data_htf, ticker, tf_config["interval"]
 )
 
-bb_pct = float(clean_series(data["BB_PctB"]).iloc[-1]) if "BB_PctB" in data.columns else 0.5
+# 改善: スクイズ判定の正規化（バンド幅自体を計算）
+std_series = clean_series(data["Close"]).rolling(20, min_periods=1).std()
+band_width_pct = (std_series.iloc[-1] * 4.0) / (latest_price + 1e-10) * 100
 adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 20.0
 vol_ratio_curr = float(clean_series(data["Vol_Ratio"]).iloc[-1]) if "Vol_Ratio" in data.columns else 0.01
 
 is_volatility_expanding = vol_ratio_curr > (clean_series(data["Vol_Ratio"]).mean() * 1.2)
-is_squeeze = bb_pct < 0.15 or bb_pct > 0.85
+is_squeeze = band_width_pct < 0.35 # バンド幅割合が非常に狭い場合をスクイズと判定
+
 vol_alert_msg = None
 if is_volatility_expanding or adx_val_curr > 28.0:
     if prob_dict["buy"] > prob_dict["sell"]:
@@ -599,12 +617,10 @@ if is_volatility_expanding or adx_val_curr > 28.0:
     else:
         vol_alert_msg = f"⚠️ <b>【急変動・下方ブレイク警戒】</b> <b>下方向（売り優勢・確率 {prob_dict['sell']}%）</b>へ大きく動くエネルギーが高まっています！"
 elif is_squeeze:
-    vol_alert_msg = f"⚡ <b>【エネルギー蓄積中（スクイーズ）】</b> ボリンジャーバンドが収縮しており、まもなく大きく急変動する前兆です。"
+    vol_alert_msg = f"⚡ <b>【エネルギー蓄積中（スクイーズ）】</b> ボリンジャーバンド幅が非常に収縮しており（{band_width_pct:.2f}%）、まもなく大きく急変動する前兆です。"
 
 if vol_alert_msg:
     st.markdown(f'<div class="alert-box">{vol_alert_msg}</div>', unsafe_allow_html=True)
-    
-    # Webhook通知の重複送信防止
     webhook_url = st.session_state.get("webhook_url")
     if webhook_url:
         last_sent_key = f"last_webhook_{ticker}_{tf_config['interval']}"
@@ -614,11 +630,13 @@ if vol_alert_msg:
             st.session_state[last_sent_key] = current_clean_msg
 
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("現在レート", price_fmt % latest_price)
+m1.metric("確定足レート", price_fmt % latest_price)
 badge_html = f'<div class="badge-buy">{status}</div>' if "BUY" in status else f'<div class="badge-sell">{status}</div>' if "SELL" in status else f'<div class="badge-wait">{status}</div>'
 m2.markdown("**AI 推奨アクション**")
 m2.markdown(badge_html, unsafe_allow_html=True)
-m3.metric("直近バックテスト勝率 (スプレッド考慮)", f"{win_rate:.1f}%", f"検証シグナル数: {total_signals_count}回")
+
+# 改善: 表示ラベルを誤解のない「分類一致率（正解率）」に修正
+m3.metric("時系列テスト分類一致率 (正解率)", f"{win_rate:.1f}%", f"検証数: {total_signals_count}回")
 m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 st.markdown("---")
 
@@ -803,13 +821,16 @@ with tab_single:
     ai_tp_price = ai_entry + (ai_tp_pips * pip_unit) if "BUY" in ai_direction else ai_entry - (ai_tp_pips * pip_unit)
 
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
-    raw_ai_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.0
     
-    if raw_ai_wan < 0.01:
+    # 改善: 安全側に切り捨てるフロア計算（絶対リスク制限超過を防止）
+    raw_ai_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.0
+    floored_ai_wan = np.floor(raw_ai_wan * 100.0) / 100.0
+
+    if floored_ai_wan < 0.01:
         ai_rec_wan = 0.0
         is_risk_exceeded = True
     else:
-        ai_rec_wan = round(raw_ai_wan, 2)
+        ai_rec_wan = floored_ai_wan
         is_risk_exceeded = False
 
     ai_profit_yen = (ai_tp_pips - spread_pips) * pip_val_per_wan * ai_rec_wan
@@ -818,11 +839,11 @@ with tab_single:
 
     st.markdown("#### 🤖 AI提案トレードプラン")
     if is_risk_exceeded:
-        st.error("🚨 **【リスク超過警告】口座資金・許容リスクに対して、安全な最小単位（0.01万通貨）の損失が許容範囲を超えています。取引見送りを強く推奨します。**")
+        st.error("🚨 **【リスク超過警告】口座資金・許容リスクに対して、安全な最小単位（0.01万通貨）の損失が許容範囲を超えています。発注数量は `0.00` 万通貨（取引見送り）に設定されました。**")
     elif "WAIT" in status: 
         st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。相場が不安定なため見送りを強く推奨します。**")
     else: 
-        st.success(f"🎯 **高確信度AIシグナル: 【{status}】（確信度: {conf:.1f}% / 実効勝率目安: {win_rate:.1f}%）**")
+        st.success(f"🎯 **高確信度AIシグナル: 【{status}】（確信度: {conf:.1f}% / テスト分類一致率: {win_rate:.1f}%）**")
 
     st.markdown(f"""
     <div class="param-box">
@@ -856,13 +877,15 @@ with tab_single:
     tp_price = entry_price + (tp_pips * pip_unit) if is_buy_manual else entry_price - (tp_pips * pip_unit)
 
     loss_per_wan = (sl_pips + spread_pips) * pip_val_per_wan
-    raw_manual_wan = (max_risk_yen / loss_per_wan) if loss_per_wan > 0 else 0.01
-    manual_wan = round(raw_manual_wan, 2) if raw_manual_wan >= 0.01 else 0.01
+    raw_manual_wan = (max_risk_yen / loss_per_wan) if loss_per_wan > 0 else 0.0
+    floored_manual_wan = np.floor(raw_manual_wan * 100.0) / 100.0
+    manual_wan = floored_manual_wan if floored_manual_wan >= 0.01 else 0.0
+
     expected_profit_yen = (tp_pips - spread_pips) * pip_val_per_wan * manual_wan
     actual_loss_yen = (sl_pips + spread_pips) * pip_val_per_wan * manual_wan
 
     res_col1, res_col2, res_col3, res_col4 = st.columns(4)
-    res_col1.metric("調整後の手動ロット数", f"{manual_wan:.2f} 万通貨", f"許容リスク {risk_pct}%")
+    res_col1.metric("調整後の手動ロット数", f"{manual_wan:.2f} 万通貨", f"許容リスク上限 {risk_pct}%")
     res_col2.metric("損切(SL) レート", price_fmt % sl_price, f"-{sl_pips} pips")
     res_col3.metric("利確(TP) レート", price_fmt % tp_price, f"+{tp_pips} pips")
     res_col4.metric("想定純損益", f"+{int(expected_profit_yen):,}円", f"最大損失 -{int(actual_loss_yen):,}円")
@@ -971,7 +994,8 @@ with tab_repeat:
     else: st.success("🟢 資金管理チェック: 適切なリスク範囲内です。")
 
     st.markdown("---")
-    st.markdown("##### 📈 リターン・回転数シミュレーション（スプレッド考慮）")
+    st.markdown("##### 📈 リターン・回転数シミュレーション（参考値・スプレッド考慮）")
+    st.caption("※ 実際の相場での往復回数やスリッページ等により差異が生じるため、あくまで目安の試算値となります。")
     net_trap_pips = max(1.0, trap_width_pips - spread_pips)
     estimated_monthly_turns = max(5, int((latest_atr / (trap_width_pips * pip_unit)) * 12))
     est_monthly_profit = estimated_monthly_turns * (net_trap_pips * pip_value_yen)
@@ -980,7 +1004,7 @@ with tab_repeat:
     est_annual_roi = (est_annual_profit / account_balance_val) * 100 if account_balance_val > 0 else 0.0
 
     sc1, sc2, sc3, sc4 = st.columns(4)
-    sc1.metric("推定月間利確回数", f"約 {estimated_monthly_turns} 回")
+    sc1.metric("推定月间利確回数", f"約 {estimated_monthly_turns} 回")
     sc2.metric("推定月間利益額 (純益)", f"約 +{int(est_monthly_profit):,} 円")
     sc3.metric("推定月間利回り", f"約 {est_monthly_roi:.1f}% / 月")
     sc4.metric("推定年間利回り (年利ROI)", f"約 {est_annual_roi:.1f}% / 年")
@@ -990,7 +1014,7 @@ with tab_ai:
     st.markdown("##### 🤖 AI予測モデル（MTF多重時間足 × 機械学習）の評価と内訳")
     pcol1, pcol2 = st.columns(2)
     with pcol1:
-        st.markdown("**最新バーの分類判定確率（総合スコア）**")
+        st.markdown("**最新確定バーの分類判定確率（総合スコア）**")
         st.write(f"🟢 **BUY (買い)**: {prob_dict['buy']}%")
         st.progress(max(0.0, min(1.0, prob_dict['buy'] / 100.0)))
         st.write(f"🔴 **SELL (売り)**: {prob_dict['sell']}%")
@@ -998,9 +1022,9 @@ with tab_ai:
         st.write(f"⚪ **WAIT (様子見)**: {prob_dict['wait']}%")
         st.progress(max(0.0, min(1.0, prob_dict['wait'] / 100.0)))
     with pcol2:
-        st.markdown("**アウトオブサンプル検証（リーク防止対策・スプレッド考慮済み）**")
-        st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%", f"検証シグナル数: {total_signals_count}回")
-        st.caption("※ 未来データの先読みを完全に排除し、スプレッドコストを加味した現実的な時系列検証精度です。")
+        st.markdown("**時系列アウトオブサンプル検証**")
+        st.metric("テスト区間のラベル分類一致率", f"{win_rate:.1f}%", f"検証データ数: {total_signals_count}回")
+        st.caption("※ 未来データの先読みを完全に排除し、未確定足のブレを除外した時系列検証の客観的なモデル一致率です。")
         
         if ai_signal_history is not None and not ai_signal_history.empty:
             sig_export_df = ai_signal_history.reset_index()
@@ -1014,7 +1038,7 @@ with tab_ai:
             )
 
     st.markdown("---")
-    st.markdown("##### 📊 テクニカル指標ダッシュボード（現在値サマリー）")
+    st.markdown("##### 📊 テクニカル指標ダッシュボード（確定足サマリー）")
     curr_rsi = float(clean_series(data["RSI"]).iloc[-1]) if "RSI" in data.columns else 50.0
     curr_adx = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 25.0
     curr_bb = float(clean_series(data["BB_PctB"]).iloc[-1]) if "BB_PctB" in data.columns else 0.5
@@ -1023,7 +1047,7 @@ with tab_ai:
 
     st.markdown(f"""
     <table class="custom-table">
-        <thead><tr><th>指標名</th><th>現在値</th><th>状態判定</th></tr></thead>
+        <thead><tr><th>指標名</th><th>確定足数値</th><th>状態判定</th></tr></thead>
         <tbody>
             <tr><td><b>RSI (14)</b></td><td><code>{curr_rsi:.1f}</code></td><td><span style="color: {'#f87171' if curr_rsi > 70 else ('#4ade80' if curr_rsi < 30 else '#38bdf8')}">{'買われ過ぎ' if curr_rsi > 70 else ('売られ過ぎ' if curr_rsi < 30 else 'ニュートラル')}</span></td></tr>
             <tr><td><b>ADX (トレンド強度)</b></td><td><code>{curr_adx:.1f}</code></td><td><span style="color: {'#38bdf8' if curr_adx > 25 else '#94a3b8'}">{'強いトレンド' if curr_adx > 25 else 'レンジ / 膠着'}</span></td></tr>
