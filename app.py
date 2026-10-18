@@ -204,10 +204,10 @@ def get_usdjpy_rate():
         df = flatten_yf_df(df)
         if df is not None and not df.empty and "Close" in df.columns:
             c = clean_series(df["Close"]).dropna()
-            val = float(c.iloc[-1]) if len(c) > 0 else 155.0
-            if not np.isnan(val) and val > 0: return val
+            val = float(c.iloc[-1]) if len(c) > 0 else None
+            if val is not None and not np.isnan(val) and val > 0: return val
     except Exception: pass
-    return 155.0
+    return None
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_news_and_impact(symbol):
@@ -241,17 +241,17 @@ def fetch_news_and_impact(symbol):
                 except Exception: dt_str = "直近"
             else: dt_str = "直近"
             t_lower = str(title).lower()
-            impact_level = "ℹ️ 普通"
+            impact_level = "ℹ️ 普通（参考キーワード）"
             direction = "↔️ 中立 / ボラティリティ注意"
-            reason = "全般的な市況ニュース"
+            reason = "全般的な市況ニュースに基づく参考判定"
             if any(k in t_lower for k in ["fed", "powell", "cpi", "gdp", "pmi", "retail", "inflation", "rate", "payroll", "jobs", "fomc", "yield"]):
                 impact_level = "🔥 高（米金融政策・大変動）"
                 if any(k in t_lower for k in ["hike", "high", "rise", "strong", "inflation", "above", "beat"]):
                     direction = "📈 ドル高 / 通貨ペア上昇要因" if "USD" in symbol else "⚡ USD強含み"
-                    reason = "米金利高止まり・経済指標好調によるドル買い圧力"
+                    reason = "米金利高止まり・経済指標好調によるドル買い圧力（キーワード判定）"
                 elif any(k in t_lower for k in ["cut", "fall", "cool", "drop", "weak", "below", "miss"]):
                     direction = "📉 ドル安 / 通貨ペア下落要因" if "USD" in symbol else "⚡ USD弱含み"
-                    reason = "米利下げ観測・経済減速に伴うドル売り圧力"
+                    reason = "米利下げ観測・経済減速に伴うドル売り圧力（キーワード判定）"
                 else:
                     direction = "⚡ 急変動警戒"
                     reason = "米国の重要指標・FRB発言に伴う相場変動"
@@ -294,7 +294,11 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["SMA_20"] = c.rolling(20, min_periods=1).mean()
         new_cols["EMA_200"] = c.ewm(span=min(200, len(c)), adjust=False).mean()
         hl = h - l
-        new_cols["ATR"] = hl.rolling(14, min_periods=1).mean()
+        # True Rangeの採用（前足終値とのギャップ考慮）
+        prev_c = c.shift(1)
+        tr = pd.concat([hl, (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
+        new_cols["ATR"] = tr.rolling(14, min_periods=1).mean()
+        
         new_cols["Return_1"] = c.diff(1) / (c.shift(1) + 1e-10)
         new_cols["Return_5"] = c.diff(5) / (c.shift(5) + 1e-10)
         new_cols["Dev_SMA20"] = (c - new_cols["SMA_20"]) / (new_cols["SMA_20"] + 1e-10)
@@ -327,7 +331,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["Upper_Band"] = new_cols["SMA_20"] + (std20 * 2)
         new_cols["Lower_Band"] = new_cols["SMA_20"] - (std20 * 2)
         new_cols["BB_PctB"] = (c - new_cols["Lower_Band"]) / ((new_cols["Upper_Band"] - new_cols["Lower_Band"]) + 1e-10)
-        tr = pd.concat([hl, (h - c.shift(1)).abs(), (l - c.shift(1)).abs()], axis=1).max(axis=1)
+        
         up, down = h - h.shift(1), l.shift(1) - l
         up_cond = (up > down) & (up > 0)
         down_cond = (down > up) & (down > 0)
@@ -347,7 +351,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         df = pd.concat([df, df_feat], axis=1)
         
-        # 学習ラベル判定ロジックの厳密化
+        # 学習ラベル判定ロジック
         is_jpy = "JPY" in symbol
         pip_unit = 0.01 if is_jpy else 0.0001
         spread_pips = DEFAULT_SPREAD_PIPS.get(symbol, 0.3)
@@ -414,7 +418,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         clean_ticker = str(ticker).replace("=X", "").replace("/", "")
         model_filename = f"model_{clean_ticker}_{interval}.joblib"
 
-        # --- 自動再学習の期限チェックロジック (4時間ごとに自動再学習) ---
         auto_retrain_interval_seconds = 4 * 3600
         if not force_retrain and os.path.exists(model_filename):
             file_age = datetime.now().timestamp() - os.path.getmtime(model_filename)
@@ -436,6 +439,21 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         if len(np.unique(y_train)) < 2:
             return ("WAIT (データ偏り)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
         
+        # 改善指摘対応: 検証用モデル（テスト区間予測用）を訓練データで独立してトレーニングし、評価の純度を高める
+        eval_model = RandomForestClassifier(
+            n_estimators=300, max_depth=6, min_samples_leaf=8, 
+            class_weight="balanced", random_state=42, n_jobs=1
+        )
+        eval_model.fit(X_train, y_train)
+
+        preds_series = pd.Series(eval_model.predict(X_test), index=y_test.index)
+        trade_signals = preds_series != 0
+        total_signals_count = int(trade_signals.sum())
+        win_rate = float(((preds_series[trade_signals] == y_test[trade_signals]).sum() / total_signals_count) * 100) if total_signals_count > 0 else 50.0
+        
+        all_preds_series = pd.Series(eval_model.predict(X), index=X.index)
+
+        # 運用・予測用の最終モデルのロードまたは全体学習
         model = None
         if not force_retrain and os.path.exists(model_filename):
             try: model = joblib.load(model_filename)
@@ -446,16 +464,9 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
                 n_estimators=300, max_depth=6, min_samples_leaf=8, 
                 class_weight="balanced", random_state=42, n_jobs=1
             )
-            model.fit(X_train, y_train)
+            model.fit(X, y) # 全データまたは訓練用データで学習
             try: joblib.dump(model, model_filename)
             except Exception: pass
-
-        preds_series = pd.Series(model.predict(X_test), index=y_test.index)
-        trade_signals = preds_series != 0
-        total_signals_count = int(trade_signals.sum())
-        win_rate = float(((preds_series[trade_signals] == y_test[trade_signals]).sum() / total_signals_count) * 100) if total_signals_count > 0 else 50.0
-        
-        all_preds_series = pd.Series(model.predict(X), index=X.index)
 
         latest_X = df_current[avail].iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
         prob_array = model.predict_proba(latest_X)[0]
@@ -546,8 +557,11 @@ if st.sidebar.button("💾 設定を即時手動保存"):
     save_settings()
     st.toast("設定を保存しました！", icon="💾")
 
+# 改善対応: Webhook URLを含めない安全な設定バックアップ
 with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", expanded=False):
-    current_settings_json = json.dumps(load_settings(), ensure_ascii=False, indent=2)
+    safe_backup_settings = load_settings().copy()
+    safe_backup_settings["webhook_url"] = "" # バックアップにWebhook URLを含めない
+    current_settings_json = json.dumps(safe_backup_settings, ensure_ascii=False, indent=2)
     st.download_button(
         label="📥 設定をバックアップ (.json)",
         data=current_settings_json.encode("utf-8"),
@@ -625,9 +639,15 @@ if vol_alert_msg:
     if webhook_url:
         last_sent_key = f"last_webhook_{ticker}_{tf_config['interval']}"
         current_clean_msg = vol_alert_msg.replace('<b>','').replace('</b>','')
-        if st.session_state.get(last_sent_key) != current_clean_msg:
+        # 改善対応: クールダウン時間を設け、同一警告の重複連送を防止
+        last_sent_time_key = f"last_webhook_time_{ticker}_{tf_config['interval']}"
+        current_time = datetime.now().timestamp()
+        last_time = st.session_state.get(last_sent_time_key, 0.0)
+        
+        if st.session_state.get(last_sent_key) != current_clean_msg or (current_time - last_time > 1800):
             send_webhook_alert(webhook_url, f"🚨 【FX自動アラート】{selected_label}\n{current_clean_msg}")
             st.session_state[last_sent_key] = current_clean_msg
+            st.session_state[last_sent_time_key] = current_time
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("確定足レート", price_fmt % latest_price)
@@ -804,7 +824,13 @@ with tab_single:
     st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）AI発注アシスタント")
     st.caption("AIが現在の相場・ボラティリティ・口座資金を統合解析し、最適シグナルと注文数値をリアルタイムで自動計算します。")
 
-    usd_rate = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
+    # 改善対応: レート取得失敗時に155円等で誤魔化さず、安全に警告を表示して停止
+    current_usdjpy_rate = get_usdjpy_rate()
+    if not is_jpy and current_usdjpy_rate is None:
+        st.error("🚨 【エラー】為替換算用のUSD/JPYレートが取得できませんでした。通信環境を確認するか、時間をおいて再読み込みしてください。")
+        st.stop()
+    usd_rate = latest_price if ticker == "USDJPY=X" else current_usdjpy_rate
+
     pip_val_per_wan = 100.0 if is_jpy else (0.0001 * usd_rate * 10000.0)
     account_bal = float(st.session_state["account_balance"])
     risk_pct = float(st.session_state["risk_percent"])
@@ -818,6 +844,7 @@ with tab_single:
     ai_sl_price = ai_entry - (ai_sl_pips * pip_unit) if "BUY" in ai_direction else ai_entry + (ai_sl_pips * pip_unit)
     ai_tp_price = ai_entry + (ai_tp_pips * pip_unit) if "BUY" in ai_direction else ai_entry - (ai_tp_pips * pip_unit)
 
+    # 改善対応: スプレッドを考慮した厳密な損失・利益計算
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
     raw_ai_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.0
     floored_ai_wan = np.floor(raw_ai_wan * 100.0) / 100.0
@@ -888,8 +915,8 @@ with tab_single:
 
 # --- タブ3: 📰 経済指標＆為替ニュースAI予測 ---
 with tab_news:
-    st.markdown("##### 📰 リアルタイム為替ニュース & AI事前影響予測")
-    st.caption("最新ニュースを自動取得し、市場への影響度や値動きの方向性をAIが事前予測します。")
+    st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
+    st.caption("最新ニュースを自動取得し、含まれるキーワードに基づいて市場への影響度や方向性を参考提示します。")
     with st.expander("🔔 主要経済指標と為替への影響パターン", expanded=True):
         st.markdown("""
         | 経済指標・イベント | 注目ポイント | ドル円(USD/JPY)への影響予測 |
@@ -900,7 +927,7 @@ with tab_news:
         | **日銀金融政策決定会合** | 植田総裁会見 & 政策金利 | **利上げ/政策修正** ➔ 📉 急激な円高 / **緩和維持** ➔ 📈 円安 |
         """)
     st.markdown("---")
-    st.markdown(f"##### 🌐 `{selected_label}` 関連の最新ニュース速報 & AI予測")
+    st.markdown(f"##### 🌐 `{selected_label}` 関連の最新ニュース速報 & キーワード参考判定")
     if not news_items: st.info("現在関連する最新ニュースが取得できないか、市場が落ち着いています。")
     else:
         for news in news_items:
@@ -914,7 +941,7 @@ with tab_news:
                     <a href="{html.escape(str(news.get('link', '#')))}" target="_blank" style="color: #f8fafc; text-decoration: none;">{html.escape(str(news.get('title', '')))} 🔗</a>
                 </div>
                 <div style="background-color: #0f172a; padding: 10px 14px; border-radius: 4px; font-size: 0.95rem; line-height: 1.6;">
-                    🎯 <b>AI予測影響</b>: <span style="color: #facc15; font-weight: bold;">{html.escape(str(news.get('direction', '')))}</span><br>
+                    🎯 <b>キーワード参考判定</b>: <span style="color: #facc15; font-weight: bold;">{html.escape(str(news.get('direction', '')))}</span><br>
                     💡 <b>判定理由</b>: {html.escape(str(news.get('reason', '')))}
                 </div>
             </div>
@@ -923,7 +950,7 @@ with tab_news:
 # --- タブ4: 松井証券 リピート設定 & リスク管理 ---
 with tab_repeat:
     st.markdown("##### 📋 松井証券リピート自動売買（ハーフ＆ハーフ）設定アシスタント")
-    st.caption("中期的な4時間足のボラティリティ（ATR）を基準に、リピート売買に最適な注文幅・利幅を自動算出します。")
+    st.caption("中期的な4時間足のボラティリティ（ATR）を基準に、リピート売買に最適な注文幅・利幅を算出します。")
 
     if latest_price < user_lower or latest_price > user_upper:
         st.markdown(f"""
@@ -958,9 +985,9 @@ with tab_repeat:
     quantity_wan_val = float(st.session_state["quantity_wan"])
     account_balance_val = float(st.session_state["account_balance"])
     order_units = int(quantity_wan_val * 10000)
-    pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * usd_rate)
+    pip_value_yen = (order_units / 10000.0) * 100 if is_jpy else (order_units * 0.0001 * (current_usdjpy_rate if current_usdjpy_rate else 155.0))
     max_loss_yen = sum((k * trap_width_pips + stop_buffer_pips) * pip_value_yen for k in range(half_grid_count))
-    total_margin_yen = ((latest_price * order_units) / 25.0 if is_jpy else (latest_price * usd_rate * order_units) / 25.0) * half_grid_count
+    total_margin_yen = ((latest_price * order_units) / 25.0 if is_jpy else (latest_price * (current_usdjpy_rate if current_usdjpy_rate else 155.0) * order_units) / 25.0) * half_grid_count
     risk_ratio = (max_loss_yen / account_balance_val) * 100 if account_balance_val > 0 else 0.0
 
     st.markdown(f"""
@@ -1020,7 +1047,7 @@ with tab_ai:
     with pcol2:
         st.markdown("**時系列アウトオブサンプル検証**")
         st.metric("テスト区間のラベル分類一致率", f"{win_rate:.1f}%", f"検証データ数: {total_signals_count}回")
-        st.caption("※ 未来データの先読みを完全に排除し、未確定足のブレを除外した時系列検証の客観的なモデル一致率です。")
+        st.caption("※ 未来データの先読みを完全に排除し、未確定足のブレを除外した独立検証の分類一致率です。")
         
         if ai_signal_history is not None and not ai_signal_history.empty:
             sig_export_df = ai_signal_history.reset_index()
