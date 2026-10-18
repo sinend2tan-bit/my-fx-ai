@@ -1,4 +1,4 @@
-# app.py
+# app.py (前編)
 # Pro FX Analyzer & Signal Pro
 # 価格分析・注文補助専用です。証券口座接続・自動発注は行いません。
 
@@ -81,149 +81,6 @@ DEFAULT_SPREAD_PIPS = {
 }
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 4
-
-# 🎨 すべての入力フォーム・セレクトボックス・ドロップダウンの白抜け・文字同化問題を完全に根絶するCSS
-st.markdown("""
-<style>
-.stApp { background: #0b1220; color: #e5e7eb; }
-[data-testid="stSidebar"] { background: #111827; }
-.update-time { padding: 8px 12px; background:#172033; border-radius:8px; margin:8px 0 14px; }
-.param-box,.news-card { padding:14px; border:1px solid #334155; border-radius:10px; background:#111827; margin:8px 0; }
-.alert-box,.warn-box { padding:12px; border-radius:8px; background:#422006; border:1px solid #f59e0b; margin:10px 0; }
-.badge-buy,.badge-sell,.badge-wait { padding:8px 12px; border-radius:8px; font-weight:800; display:inline-block; }
-.badge-buy { background:#14532d; color:#86efac; } .badge-sell { background:#7f1d1d; color:#fecaca; }
-.badge-wait { background:#374151; color:#e5e7eb; }
-.custom-table { width:100%; border-collapse:collapse; } .custom-table th,.custom-table td { padding:8px; border-bottom:1px solid #334155; text-align:left; }
-
-html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
-.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
-    background-color:#0b1220 !important;
-    color:#e5e7eb !important;
-}
-[data-testid="stSidebar"], [data-testid="stSidebar"] > div {
-    background-color:#111827 !important;
-}
-[data-testid="stSidebar"] * ,
-[data-testid="stMarkdownContainer"],
-[data-testid="stMarkdownContainer"] p,
-[data-testid="stMarkdownContainer"] li,
-[data-testid="stWidgetLabel"],
-[data-testid="stWidgetLabel"] p,
-[data-testid="stCaptionContainer"],
-[data-testid="stMetricLabel"],
-[data-testid="stMetricValue"],
-[data-testid="stMetricDelta"],
-.stRadio label, .stCheckbox label {
-    color:#e5e7eb !important;
-}
-[data-testid="stCaptionContainer"] { color:#cbd5e1 !important; }
-[data-testid="stMetricLabel"] { color:#cbd5e1 !important; }
-[data-testid="stMetricValue"] { color:#f8fafc !important; }
-
-/* 🔍 メイン画面およびサイドバーの全入力フォーム・数値入力欄・テキストエリア・セレクトボックスを完全にダーク化 */
-input, textarea, select {
-    background-color: #1f2937 !important;
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
-}
-
-[data-testid="stTextInput"] input,
-[data-testid="stNumberInput"] input,
-[data-testid="stTextArea"] textarea,
-[data-baseweb="input"] input,
-[data-baseweb="base-input"] input {
-    background-color: #1f2937 !important;
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
-    font-size: 16px !important;
-    min-height: 44px;
-    font-weight: 600 !important;
-    border: 1px solid #334155 !important;
-}
-
-[data-baseweb="select"], [data-testid="stSelectbox"] > div > div {
-    background-color: #1f2937 !important;
-    color: #ffffff !important;
-    border-color: #334155 !important;
-}
-
-[data-baseweb="menu"], [data-baseweb="popover"], [role="listbox"], [role="option"] {
-    background-color: #1f2937 !important;
-    color: #ffffff !important;
-}
-
-[role="option"] div, [role="option"] span {
-    color: #ffffff !important;
-    background-color: #1f2937 !important;
-}
-
-[data-testid="stNumberInput"] button {
-    color: #ffffff !important;
-    background-color: #334155 !important;
-}
-
-.stButton > button, [data-testid="stDownloadButton"] button {
-    min-height:44px;
-    white-space:normal;
-    line-height:1.35;
-}
-
-/* 🎯 タブの完全折り返し（見切れ防止）設定 */
-[data-testid="stTabs"] [role="tablist"] {
-    display: flex !important;
-    flex-wrap: wrap !important;
-    gap: 6px !important;
-    background-color: #172033 !important;
-    padding: 8px !important;
-    border-radius: 10px !important;
-}
-[data-testid="stTabs"] [role="tab"] {
-    flex: 1 1 calc(33% - 6px) !important;
-    min-width: 130px !important;
-    max-width: 100% !important;
-    color: #cbd5e1 !important;
-    white-space: normal !important;
-    height: auto !important;
-    min-height: 48px !important;
-    padding: 8px 10px !important;
-    font-size: 12px !important;
-    background-color: #111827 !important;
-    border-radius: 6px !important;
-    text-align: center !important;
-}
-[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
-    background-color: #0284c7 !important;
-    color: #ffffff !important;
-    font-weight: 800 !important;
-}
-
-[data-testid="stPlotlyChart"] { width:100% !important; }
-[data-testid="stDataFrame"], .custom-table { max-width:100%; }
-.news-card, .param-box, .alert-box, .warn-box {
-    overflow-wrap:anywhere;
-    word-break:normal;
-}
-code { overflow-wrap:anywhere; }
-
-@media (max-width: 767px) {
-    .block-container {
-        padding-left:.75rem !important;
-        padding-right:.75rem !important;
-        padding-top:1rem !important;
-        max-width:100% !important;
-    }
-    [data-testid="stTabs"] [role="tab"] {
-        flex: 1 1 calc(50% - 4px) !important;
-        min-width: 110px !important;
-        padding: 6px 8px !important;
-        font-size: 11.5px !important;
-    }
-    [data-testid="stSidebar"] {
-        min-width: min(85vw, 320px) !important;
-    }
-}
-</style>
-""", unsafe_allow_html=True)
 
 
 def _json_default(obj):
@@ -310,10 +167,6 @@ def flatten_yf_df(df):
         out.columns = [str(c[0] if str(c[0]).lower() in {"open","high","low","close","adj close","volume"} else c[-1]) for c in out.columns]
     out.columns = [str(c).replace(" ", "_").title() for c in out.columns]
     return out
-
-
-def _safe_div(a, b):
-    return a / b.replace(0, np.nan)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -957,6 +810,7 @@ with tab_single:
     if expected_profit_yen <= 0:
         st.warning("利確幅が想定スプレッド以下のため、コスト控除後の利益が見込めない計算です。")
     st.caption("手動調整欄は計算補助です。入力値・スプレッド・約定価格によって実損益は変わります。")
+# app.py (後編)
 
 with tab_news:
     st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
@@ -990,7 +844,7 @@ with tab_repeat:
     st.markdown("##### 📋 松井証券リピート自動売買（ハーフ＆ハーフ）設定アシスタント")
     st.caption("参考計算です。証券会社の仕様・保有ポジション・実際の証拠金計算を完全には再現しません。")
     if latest_price < user_lower or latest_price > user_upper:
-        st.markdown(f'<div class="warn-box">【レンジアウト警告】現在レート <code>{price_fmt%latest_price}</code> は設定レンジ <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_upper}</code> の外側です。</div>',unsafe_allow_html=True)
+        st.markdown(f'<div class="warn-box">【レンジアウト警告】<div>現在レート <code>{price_fmt%latest_price}</code> は設定レンジ <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_upper}</code> の外側です。</div></div>',unsafe_allow_html=True)
     atr_4h_series = clean_series(data_4h["ATR"]).dropna() if data_4h is not None and "ATR" in data_4h else pd.Series(dtype=float)
     atr_4h_val = float(atr_4h_series.iloc[-1]) if not atr_4h_series.empty and float(atr_4h_series.iloc[-1]) > 0 else max(float(latest_atr), pip_unit * 30)
     ai_rec_trap_pips = int(np.clip(round((atr_4h_val / pip_unit) * 0.8), 10, 500))
@@ -1141,3 +995,159 @@ with tab_ai:
     if memo_text.strip():
         st.download_button("📥 トレードノートをテキスト保存 (.txt)",data=memo_text.encode("utf-8"),
                            file_name=f"trade_memo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",mime="text/plain",key="download_memo_btn")
+
+# 🎨 スライダー・コードブロック・入力欄の視認性を完全に最適化するCSS適用部
+st.markdown("""
+<style>
+.stApp { background: #0b1220; color: #e5e7eb; }
+[data-testid="stSidebar"] { background: #111827; }
+.update-time { padding: 8px 12px; background:#172033; border-radius:8px; margin:8px 0 14px; }
+.param-box,.news-card { padding:14px; border:1px solid #334155; border-radius:10px; background:#111827; margin:8px 0; }
+.alert-box,.warn-box { padding:12px; border-radius:8px; background:#422006; border:1px solid #f59e0b; margin:10px 0; }
+.badge-buy,.badge-sell,.badge-wait { padding:8px 12px; border-radius:8px; font-weight:800; display:inline-block; }
+.badge-buy { background:#14532d; color:#86efac; } .badge-sell { background:#7f1d1d; color:#fecaca; }
+.badge-wait { background:#374151; color:#e5e7eb; }
+.custom-table { width:100%; border-collapse:collapse; } .custom-table th,.custom-table td { padding:8px; border-bottom:1px solid #334155; text-align:left; }
+
+html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+    background-color:#0b1220 !important;
+    color:#e5e7eb !important;
+}
+[data-testid="stSidebar"], [data-testid="stSidebar"] > div {
+    background-color:#111827 !important;
+}
+[data-testid="stSidebar"] * ,
+[data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] p,
+[data-testid="stCaptionContainer"],
+[data-testid="stMetricLabel"],
+[data-testid="stMetricValue"],
+[data-testid="stMetricDelta"],
+.stRadio label, .stCheckbox label {
+    color:#e5e7eb !important;
+}
+[data-testid="stCaptionContainer"] { color:#cbd5e1 !important; }
+[data-testid="stMetricLabel"] { color:#cbd5e1 !important; }
+[data-testid="stMetricValue"] { color:#f8fafc !important; }
+
+input, textarea, select {
+    background-color: #1f2937 !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-baseweb="input"] input,
+[data-baseweb="base-input"] input {
+    background-color: #1f2937 !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-size: 16px !important;
+    min-height: 44px;
+    font-weight: 600 !important;
+    border: 1px solid #334155 !important;
+}
+
+[data-baseweb="select"], [data-testid="stSelectbox"] > div > div {
+    background-color: #1f2937 !important;
+    color: #ffffff !important;
+    border-color: #334155 !important;
+}
+
+[data-baseweb="menu"], [data-baseweb="popover"], [role="listbox"], [role="option"] {
+    background-color: #1f2937 !important;
+    color: #ffffff !important;
+}
+
+[role="option"] div, [role="option"] span {
+    color: #ffffff !important;
+    background-color: #1f2937 !important;
+}
+
+[data-testid="stNumberInput"] button {
+    color: #ffffff !important;
+    background-color: #334155 !important;
+}
+
+[data-testid="stCodeBlock"], pre {
+    background-color: #1f2937 !important;
+    border: 1px solid #334155 !important;
+    border-radius: 8px !important;
+}
+[data-testid="stCodeBlock"] code, pre code {
+    background-color: #1f2937 !important;
+    color: #f8fafc !important;
+    -webkit-text-fill-color: #f8fafc !important;
+}
+
+[data-testid="stSlider"] *, [data-testid="stSlider"] p, [data-testid="stSlider"] span {
+    color: #e5e7eb !important;
+}
+
+.stButton > button, [data-testid="stDownloadButton"] button {
+    min-height:44px;
+    white-space:normal;
+    line-height:1.35;
+}
+
+[data-testid="stTabs"] [role="tablist"] {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    background-color: #172033 !important;
+    padding: 8px !important;
+    border-radius: 10px !important;
+}
+[data-testid="stTabs"] [role="tab"] {
+    flex: 1 1 calc(33% - 6px) !important;
+    min-width: 130px !important;
+    max-width: 100% !important;
+    color: #cbd5e1 !important;
+    white-space: normal !important;
+    height: auto !important;
+    min-height: 48px !important;
+    padding: 8px 10px !important;
+    font-size: 12px !important;
+    background-color: #111827 !important;
+    border-radius: 6px !important;
+    text-align: center !important;
+}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+    background-color: #0284c7 !important;
+    color: #ffffff !important;
+    font-weight: 800 !important;
+}
+
+[data-testid="stPlotlyChart"] { width:100% !important; }
+[data-testid="stDataFrame"], .custom-table { max-width:100%; }
+.news-card, .param-box, .alert-box, .warn-box {
+    overflow-wrap:anywhere;
+    word-break:normal;
+}
+code { overflow-wrap:anywhere; }
+
+@media (max-width: 767px) {
+    .block-container {
+        padding-left:.75rem !important;
+        padding-right:.75rem !important;
+        padding-top:1.0rem !important;
+        max-width:100% !important;
+    }
+    [data-testid="stTabs"] [role="tab"] {
+        flex: 1 1 calc(50% - 4px) !important;
+        min-width: 110px !important;
+        padding: 6px 8px !important;
+        font-size: 11.5px !important;
+    }
+    [data-testid="stSidebar"] {
+        min-width: min(85vw, 320px) !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
