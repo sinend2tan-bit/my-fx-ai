@@ -82,7 +82,7 @@ DEFAULT_SPREAD_PIPS = {
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 4
 
-# 🎨 iPad・スマホ・PC完全対応：セレクトボックス背景・文字色・チャート隙間対策CSS
+# 🎨 入力フィールドの白背景・文字同化問題を完全に解消するCSS
 st.markdown("""
 <style>
 .stApp { background: #0b1220; color: #e5e7eb; }
@@ -95,7 +95,6 @@ st.markdown("""
 .badge-wait { background:#374151; color:#e5e7eb; }
 .custom-table { width:100%; border-collapse:collapse; } .custom-table th,.custom-table td { padding:8px; border-bottom:1px solid #334155; text-align:left; }
 
-/* クロスデバイス：文字のコントラストとタッチ領域の最適化 */
 html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
 .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
     background-color:#0b1220 !important;
@@ -121,18 +120,23 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
 [data-testid="stMetricLabel"] { color:#cbd5e1 !important; }
 [data-testid="stMetricValue"] { color:#f8fafc !important; }
 
-/* 🔍 入力フォーム・数値入力欄の文字をはっきりと見やすく改善 */
+/* 🔍 入力フォーム・数値入力欄・セレクトボックスの背景白抜け・文字同化を完全防止 */
 [data-testid="stTextInput"] input,
 [data-testid="stNumberInput"] input,
 [data-testid="stTextArea"] textarea {
-    font-size: 16px !important;
-    min-height: 44px;
+    background-color: #1f2937 !important;
     color: #ffffff !important;
     -webkit-text-fill-color: #ffffff !important;
+    font-size: 16px !important;
+    min-height: 44px;
     font-weight: 600 !important;
+    border: 1px solid #334155 !important;
 }
 
-/* 🎯 通貨ペア・時間足などのセレクトボックスが白抜けして消えないよう背景・文字色を完全統一 */
+[data-baseweb="input"], [data-baseweb="base-input"] {
+    background-color: #1f2937 !important;
+}
+
 [data-testid="stSelectbox"] [data-baseweb="select"] {
     background-color: #1f2937 !important;
     border-color: #334155 !important;
@@ -151,6 +155,7 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
 
 [data-testid="stNumberInput"] button {
     color: #ffffff !important;
+    background-color: #334155 !important;
 }
 
 .stButton > button, [data-testid="stDownloadButton"] button {
@@ -196,25 +201,7 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
 }
 code { overflow-wrap:anywhere; }
 
-/* 📱 iPad / タブレット専用レンジ (768px - 1024px) でのレイアウト最適化 */
-@media (min-width: 768px) and (max-width: 1024px) {
-    .block-container {
-        padding-left: 1.25rem !important;
-        padding-right: 1.25rem !important;
-        max-width: 100% !important;
-    }
-    [data-testid="stTabs"] [role="tab"] {
-        flex: 1 1 calc(33% - 6px) !important;
-        min-width: 120px !important;
-        font-size: 11.5px !important;
-        padding: 8px 6px !important;
-    }
-    [data-testid="stMetricValue"] {
-        font-size: 1.35rem !important;
-    }
-}
-
-/* 📱 スマートフォン向け (〜767px) */
+/* 📱 スマートフォン・タブレット向け最適化 */
 @media (max-width: 767px) {
     .block-container {
         padding-left:.75rem !important;
@@ -231,10 +218,6 @@ code { overflow-wrap:anywhere; }
     [data-testid="stSidebar"] {
         min-width: min(85vw, 320px) !important;
     }
-    h1 { font-size:1.4rem !important; }
-    h2 { font-size:1.15rem !important; }
-    h3 { font-size:1.05rem !important; }
-    [data-testid="stMetricValue"] { font-size:clamp(1.1rem, 4vw, 1.6rem) !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -819,7 +802,6 @@ with tab_chart:
     df_chart = safe_to_tokyo_tz(data.tail(bars_count)).copy()
     df_chart = df_chart.loc[~df_chart.index.duplicated(keep="last")]
     
-    # 🎯 週末・非取引時間の空白（歯抜け）を完全に無くすため、日付文字列のカテゴリカル軸を作成
     x_labels = df_chart.index.strftime('%m/%d %H:%M').tolist()
     
     has_sub = sub_indicator != "なし"
@@ -866,7 +848,6 @@ with tab_chart:
     span = max(chart_high-chart_low, chart_high*.002)
     fig.update_layout(xaxis_rangeslider_visible=False,height=480,margin=dict(l=10,r=70,t=25,b=10),template="plotly_dark",
                       hovermode="x unified",showlegend=True,legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="right",x=1))
-    # 🎯 カテゴリカル軸にして空白（歯抜け）を完全に排除
     fig.update_xaxes(type="category", showspikes=True, spikemode="across")
     fig.update_yaxes(range=[chart_low-span*0.1,chart_high+span*0.1],side="right",tickformat=".3f" if is_jpy else ".5f",row=1,col=1)
     st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displayModeBar":True,"displaylogo":False})
