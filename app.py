@@ -34,7 +34,6 @@ except ImportError:
     HAS_AUTOREFRESH = False
 
 SETTINGS_FILE = "user_settings.json"
-MODEL_FILE = "fx_rf_model.joblib"
 
 DEFAULT_SETTINGS = {
     "account_balance": 500000,
@@ -126,7 +125,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 精度向上のための拡張特徴量リスト
+# 特徴量定義
 FEATURE_COLUMNS = [
     "Return_1", "Return_5", "Dev_SMA20", "Dev_EMA200", "Dev_EMA20_200", "Vol_Ratio",
     "RSI", "RSI_Diff", "MACD_Hist_Ratio", "BB_PctB", "ADX",
@@ -299,7 +298,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["Dev_EMA20_200"] = (c.ewm(span=20, adjust=False).mean() - new_cols["EMA_200"]) / (new_cols["EMA_200"] + 1e-10)
         new_cols["Vol_Ratio"] = new_cols["ATR"] / (c + 1e-10)
         
-        # 拡張テクニカル指標 (CCI & ROC)
+        # 拡張指標 (CCI & ROC)
         tp = (h + l + c) / 3.0
         tp_sma = tp.rolling(20, min_periods=1).mean()
         tp_mad = (tp - tp_sma).abs().rolling(20, min_periods=1).mean()
@@ -345,6 +344,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         df = pd.concat([df, df_feat], axis=1)
         
+        # 学習ターゲット（ラベル）生成ロジックの修正（売り判定の厳密化）
         tp_t = new_cols["ATR"] * 1.2
         sl_t = new_cols["ATR"] * 0.8
         target_values = np.zeros(len(df), dtype=int)
@@ -360,10 +360,14 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 idx = i + j
                 if idx >= n: break
                 curr_h, curr_l = h_vals[idx], l_vals[idx]
+                
+                # 買いの利確・損切
                 buy_tp_hit = (curr_h - entry_p) >= tp_dist
                 buy_sl_hit = (entry_p - curr_l) >= sl_dist
+                
+                # 売りの利確・損切（修正箇所: 損切判定は高値との差額がsl_distを超えたか）
                 sell_tp_hit = (entry_p - curr_l) >= tp_dist
-                sell_sl_hit = (curr_h - entry_p) >= tp_dist
+                sell_sl_hit = (curr_h - entry_p) >= sl_dist
                 
                 if (buy_tp_hit and buy_sl_hit) or (sell_tp_hit and sell_sl_hit):
                     outcome = 0; break
@@ -386,10 +390,14 @@ def send_webhook_alert(webhook_url, message):
     except Exception: pass
 
 @st.cache_data(ttl=60, show_spinner=False)
-def analyze_signal_with_backtest(df_current, df_htf, force_retrain=False):
+def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
     empty_res = ("WAIT (データ不足)", 0.0, 0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
     if df_current is None or len(df_current) < 150: return empty_res
     try:
+        # 通貨ペアと時間足ごとの個別モデルファイル名（混同防止）
+        clean_ticker = str(ticker).replace("=X", "").replace("/", "")
+        model_filename = f"model_{clean_ticker}_{interval}.joblib"
+
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
         df_valid = df_current.dropna(subset=["Target"]).copy()
         df_valid["Target"] = df_valid["Target"].astype(int)
@@ -406,8 +414,8 @@ def analyze_signal_with_backtest(df_current, df_htf, force_retrain=False):
             return ("WAIT (データ偏り)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
         
         model = None
-        if not force_retrain and os.path.exists(MODEL_FILE):
-            try: model = joblib.load(MODEL_FILE)
+        if not force_retrain and os.path.exists(model_filename):
+            try: model = joblib.load(model_filename)
             except Exception: model = None
 
         if model is None:
@@ -416,12 +424,14 @@ def analyze_signal_with_backtest(df_current, df_htf, force_retrain=False):
                 class_weight="balanced", random_state=42, n_jobs=1
             )
             model.fit(X_train, y_train)
-            try: joblib.dump(model, MODEL_FILE)
+            try: joblib.dump(model, model_filename)
             except Exception: pass
 
         preds_series = pd.Series(model.predict(X_test), index=y_test.index)
         trade_signals = preds_series != 0
         total_signals_count = int(trade_signals.sum())
+        
+        # バックテスト勝率の計算（正解ラベルとの完全一致率）
         win_rate = float(((preds_series[trade_signals] == y_test[trade_signals]).sum() / total_signals_count) * 100) if total_signals_count > 0 else 50.0
         
         all_preds_series = pd.Series(model.predict(X), index=X.index)
@@ -469,6 +479,7 @@ def analyze_signal_with_backtest(df_current, df_htf, force_retrain=False):
         return status, conf, total_signals_count, win_rate, m_type, prob_dict, importances, all_preds_series
     except Exception:
         return ("WAIT (エラー)", 0.0, 0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
+# --- アプリメインUI部分 ---
 st.title("Pro FX Analyzer & Signal Pro")
 
 col_sel1, col_sel2 = st.columns(2)
@@ -494,8 +505,10 @@ st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_val
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 AIモデル管理")
 if st.sidebar.button("🧠 AIモデルを再学習・更新"):
-    if os.path.exists(MODEL_FILE):
-        try: os.remove(MODEL_FILE)
+    clean_ticker = str(ticker).replace("=X", "").replace("/", "")
+    model_filename = f"model_{clean_ticker}_{tf_config['interval']}.joblib"
+    if os.path.exists(model_filename):
+        try: os.remove(model_filename)
         except Exception: pass
     st.cache_data.clear()
     st.toast("AIモデルを再学習しました！", icon="🧠")
@@ -569,7 +582,9 @@ st.markdown(f'<div class="update-time">最終データ取得日時: <b>{now_jst}
 latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data.columns else (latest_price * 0.005)
 
-status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(data, data_htf)
+status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(
+    data, data_htf, ticker, tf_config["interval"]
+)
 
 bb_pct = float(clean_series(data["BB_PctB"]).iloc[-1]) if "BB_PctB" in data.columns else 0.5
 adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 20.0
@@ -588,8 +603,15 @@ elif is_squeeze:
 
 if vol_alert_msg:
     st.markdown(f'<div class="alert-box">{vol_alert_msg}</div>', unsafe_allow_html=True)
-    if st.session_state.get("webhook_url"):
-        send_webhook_alert(st.session_state["webhook_url"], f"🚨 【FX自動アラート】{selected_label}\n{vol_alert_msg.replace('<b>','').replace('</b>','')}")
+    
+    # Webhook通知の重複送信防止ロジック
+    webhook_url = st.session_state.get("webhook_url")
+    if webhook_url:
+        last_sent_key = f"last_webhook_{ticker}_{tf_config['interval']}"
+        current_clean_msg = vol_alert_msg.replace('<b>','').replace('</b>','')
+        if st.session_state.get(last_sent_key) != current_clean_msg:
+            send_webhook_alert(webhook_url, f"🚨 【FX自動アラート】{selected_label}\n{current_clean_msg}")
+            st.session_state[last_sent_key] = current_clean_msg
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("現在レート", price_fmt % latest_price)
@@ -782,6 +804,8 @@ with tab_single:
 
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
     raw_ai_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.0
+    
+    # 資金安全装置: 0.01万通貨未満の場合は0.00に丸めて取引拒否
     if raw_ai_wan < 0.01:
         ai_rec_wan = 0.0
         is_risk_exceeded = True
