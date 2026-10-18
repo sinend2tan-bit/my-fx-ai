@@ -285,7 +285,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             if tz_before is not None and df.index.tz is None: df.index = df.index.tz_localize(tz_before)
         if len(df) < 50: return None
         
-        # 改善: 未確定足（形成中の最新バー）の除外（最新足のノイズによるシグナル変動を防止）
+        # 未確定足（形成中の最新バー）の除外
         df = df.iloc[:-1].copy()
         if len(df) < 50: return None
 
@@ -347,7 +347,7 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         df = pd.concat([df, df_feat], axis=1)
         
-        # 改善: 学習ラベル判定ロジックの厳密化（TPとSLが同時ヒットした場合は保守的に負け・様子見とする）
+        # 学習ラベル判定ロジックの厳密化
         is_jpy = "JPY" in symbol
         pip_unit = 0.01 if is_jpy else 0.0001
         spread_pips = DEFAULT_SPREAD_PIPS.get(symbol, 0.3)
@@ -366,7 +366,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             if np.isnan(tp_dist) or np.isnan(sl_dist) or tp_dist <= 0 or sl_dist <= 0: continue
             
             buy_outcome, sell_outcome = 0, 0
-            # 買いトレードの検証
             for j in range(1, LOOKAHEAD_BARS + 1):
                 idx = i + j
                 if idx >= n: break
@@ -374,11 +373,10 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 buy_tp_hit = (curr_h - (entry_p + spread_val)) >= tp_dist
                 buy_sl_hit = ((entry_p + spread_val) - curr_l) >= sl_dist
                 if buy_tp_hit and buy_sl_hit:
-                    buy_outcome = 0; break # 同時ヒットは保守的に無効
+                    buy_outcome = 0; break
                 elif buy_tp_hit: buy_outcome = 1; break
                 elif buy_sl_hit: buy_outcome = -1; break
             
-            # 売りトレードの検証
             for j in range(1, LOOKAHEAD_BARS + 1):
                 idx = i + j
                 if idx >= n: break
@@ -390,7 +388,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 elif sell_tp_hit: sell_outcome = 1; break
                 elif sell_sl_hit: sell_outcome = -1; break
 
-            # 最終ラベルの決定（買い勝ちなら1、売り勝ちなら-1、それ以外は0）
             if buy_outcome == 1 and sell_outcome != 1: target_values[i] = 1
             elif sell_outcome == 1 and buy_outcome != 1: target_values[i] = -1
             else: target_values[i] = 0
@@ -416,6 +413,13 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
     try:
         clean_ticker = str(ticker).replace("=X", "").replace("/", "")
         model_filename = f"model_{clean_ticker}_{interval}.joblib"
+
+        # --- 自動再学習の期限チェックロジック (4時間ごとに自動再学習) ---
+        auto_retrain_interval_seconds = 4 * 3600
+        if not force_retrain and os.path.exists(model_filename):
+            file_age = datetime.now().timestamp() - os.path.getmtime(model_filename)
+            if file_age > auto_retrain_interval_seconds:
+                force_retrain = True
 
         avail = [f for f in FEATURE_COLUMNS if f in df_current.columns]
         df_valid = df_current.dropna(subset=["Target"]).copy()
@@ -461,7 +465,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         rsi_val = float(clean_series(df_current["RSI"]).iloc[-1]) if "RSI" in df_current.columns else 50.0
         adx_val = float(clean_series(df_current["ADX"]).iloc[-1]) if "ADX" in df_current.columns else 20.0
 
-        # 改善: 固定加点（ゲタ履き）を廃止し、モデル自体の確率をそのまま信頼する設計にリファイン
         buy_score, sell_score, prob_wait_val = prob_up, prob_down, prob_wait
         total_s = buy_score + sell_score + prob_wait_val + 1e-10
         p_up_final, p_down_final, p_wait_final = buy_score / total_s, sell_score / total_s, prob_wait_val / total_s
@@ -507,27 +510,25 @@ st.sidebar.number_input("1取引あたりの許容リスク (%)", min_value=0.1,
 st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_value=0.5, max_value=5.0, step=0.1, key="rr_ratio", on_change=save_settings)
 
 st.sidebar.markdown("---")
-st.sidebar.header("🔄 AIモデル管理")
+st.sidebar.header("🔄 AIモデル管理（自動更新つき）")
 
-# 改善: キャッシュ削除を確実に実行してモデル再学習を保証
-if st.sidebar.button("🧠 AIモデルを再学習・更新"):
+if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習"):
     clean_ticker = str(ticker).replace("=X", "").replace("/", "")
     model_filename = f"model_{clean_ticker}_{tf_config['interval']}.joblib"
     if os.path.exists(model_filename):
         try: os.remove(model_filename)
         except Exception: pass
     st.cache_data.clear()
-    st.toast("AIモデルを再学習・キャッシュクリアしました！", icon="🧠")
+    st.toast("AIモデルを強制再学習しました！", icon="🧠")
     st.rerun()
 
-# 改善: モデルファイルの読み込み日時状態を表示
 clean_ticker_info = str(ticker).replace("=X", "").replace("/", "")
 m_file_info = f"model_{clean_ticker_info}_{tf_config['interval']}.joblib"
 if os.path.exists(m_file_info):
     m_time = datetime.fromtimestamp(os.path.getmtime(m_file_info), tz=ZoneInfo("Asia/Tokyo")).strftime("%m/%d %H:%M")
-    st.sidebar.caption(f"🤖 現在使用中のモデル: `{m_time} 更新`")
+    st.sidebar.caption(f"🤖 最終学習日時: `{m_time}`\n(※4時間ごとに自動再学習されます)")
 else:
-    st.sidebar.caption("🤖 現在使用中のモデル: `未作成 (自動生成予定)`")
+    st.sidebar.caption("🤖 現在のモデル状態: `初回自動作成待ち`")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新・メンテナンス")
@@ -580,7 +581,7 @@ if st.sidebar.button("🔄 最新データに更新"):
     st.cache_data.clear()
     st.rerun()
 
-with st.spinner("最新相場データ & ニュースを取得中..."):
+with st.spinner("最新相場データ & ニュースを取得中... (必要に応じてAI自動再学習を実行)"):
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
     data_4h = load_and_process_data(ticker, "90d", "1h", "4時間足 (中期・リピート用)")
     data_htf = load_and_process_data(ticker, "2y", "1d", "日足")
@@ -601,14 +602,13 @@ status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importan
     data, data_htf, ticker, tf_config["interval"]
 )
 
-# 改善: スクイズ判定の正規化（バンド幅自体を計算）
 std_series = clean_series(data["Close"]).rolling(20, min_periods=1).std()
 band_width_pct = (std_series.iloc[-1] * 4.0) / (latest_price + 1e-10) * 100
 adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data.columns else 20.0
 vol_ratio_curr = float(clean_series(data["Vol_Ratio"]).iloc[-1]) if "Vol_Ratio" in data.columns else 0.01
 
 is_volatility_expanding = vol_ratio_curr > (clean_series(data["Vol_Ratio"]).mean() * 1.2)
-is_squeeze = band_width_pct < 0.35 # バンド幅割合が非常に狭い場合をスクイズと判定
+is_squeeze = band_width_pct < 0.35
 
 vol_alert_msg = None
 if is_volatility_expanding or adx_val_curr > 28.0:
@@ -634,8 +634,6 @@ m1.metric("確定足レート", price_fmt % latest_price)
 badge_html = f'<div class="badge-buy">{status}</div>' if "BUY" in status else f'<div class="badge-sell">{status}</div>' if "SELL" in status else f'<div class="badge-wait">{status}</div>'
 m2.markdown("**AI 推奨アクション**")
 m2.markdown(badge_html, unsafe_allow_html=True)
-
-# 改善: 表示ラベルを誤解のない「分類一致率（正解率）」に修正
 m3.metric("時系列テスト分類一致率 (正解率)", f"{win_rate:.1f}%", f"検証数: {total_signals_count}回")
 m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 st.markdown("---")
@@ -821,8 +819,6 @@ with tab_single:
     ai_tp_price = ai_entry + (ai_tp_pips * pip_unit) if "BUY" in ai_direction else ai_entry - (ai_tp_pips * pip_unit)
 
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
-    
-    # 改善: 安全側に切り捨てるフロア計算（絶対リスク制限超過を防止）
     raw_ai_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.0
     floored_ai_wan = np.floor(raw_ai_wan * 100.0) / 100.0
 
@@ -1004,7 +1000,7 @@ with tab_repeat:
     est_annual_roi = (est_annual_profit / account_balance_val) * 100 if account_balance_val > 0 else 0.0
 
     sc1, sc2, sc3, sc4 = st.columns(4)
-    sc1.metric("推定月间利確回数", f"約 {estimated_monthly_turns} 回")
+    sc1.metric("推定月間利確回数", f"約 {estimated_monthly_turns} 回")
     sc2.metric("推定月間利益額 (純益)", f"約 +{int(est_monthly_profit):,} 円")
     sc3.metric("推定月間利回り", f"約 {est_monthly_roi:.1f}% / 月")
     sc4.metric("推定年間利回り (年利ROI)", f"約 {est_annual_roi:.1f}% / 年")
