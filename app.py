@@ -82,7 +82,7 @@ DEFAULT_SPREAD_PIPS = {
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 4
 
-# 🎨 iPad・スマホ・PC完全対応：チャート見切れ防止・レスポンシブ最適化CSS
+# 🎨 iPad・スマホ・PC完全対応：入力値の視認性改善・チャート見切れ防止CSS
 st.markdown("""
 <style>
 .stApp { background: #0b1220; color: #e5e7eb; }
@@ -120,13 +120,22 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
 [data-testid="stCaptionContainer"] { color:#cbd5e1 !important; }
 [data-testid="stMetricLabel"] { color:#cbd5e1 !important; }
 [data-testid="stMetricValue"] { color:#f8fafc !important; }
+
+/* 🔍 入力フォーム・数値入力欄の文字をはっきりと見やすく改善 */
 [data-testid="stTextInput"] input,
 [data-testid="stNumberInput"] input,
 [data-testid="stSelectbox"] [role="combobox"],
 [data-testid="stTextArea"] textarea {
-    font-size:16px !important;
-    min-height:44px;
+    font-size: 16px !important;
+    min-height: 44px;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-weight: 600 !important;
 }
+[data-testid="stNumberInput"] button {
+    color: #ffffff !important;
+}
+
 .stButton > button, [data-testid="stDownloadButton"] button {
     min-height:44px;
     white-space:normal;
@@ -581,6 +590,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
     except Exception as exc:
         st.warning(f"AI分析で問題が発生したため、様子見にしています（{type(exc).__name__}）。")
         return fallback
+
 if "settings_loaded" not in st.session_state:
     _settings = load_settings()
     for _k, _v in _settings.items():
@@ -832,11 +842,11 @@ with tab_chart:
         fig.update_yaxes(side="right",row=2,col=1)
     chart_high, chart_low = float(df_chart["High"].max()), float(df_chart["Low"].min())
     span = max(chart_high-chart_low, chart_high*.002)
-    # 🎯 iPad等のタブレットでも途中で見切れないようチャート高さを480pxに最適化
+    # 🎯 チャートが途中で切れないよう上下のマージン範囲を広めに確保 (0.05 -> 0.1)
     fig.update_layout(xaxis_rangeslider_visible=False,height=480,margin=dict(l=10,r=70,t=25,b=10),template="plotly_dark",
                       hovermode="x unified",showlegend=True,legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="right",x=1))
     fig.update_xaxes(type="date",rangebreaks=[dict(bounds=["sat","mon"])] if tf_config["interval"] in ("5m","15m","1h") else [],showspikes=True,spikemode="across")
-    fig.update_yaxes(range=[chart_low-span*.05,chart_high+span*.05],side="right",tickformat=".3f" if is_jpy else ".5f",row=1,col=1)
+    fig.update_yaxes(range=[chart_low-span*0.1,chart_high+span*0.1],side="right",tickformat=".3f" if is_jpy else ".5f",row=1,col=1)
     st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displayModeBar":True,"displaylogo":False})
 
 with tab_single:
@@ -941,6 +951,7 @@ with tab_single:
     if expected_profit_yen <= 0:
         st.warning("利確幅が想定スプレッド以下のため、コスト控除後の利益が見込めない計算です。")
     st.caption("手動調整欄は計算補助です。入力値・スプレッド・約定価格によって実損益は変わります。")
+
 with tab_news:
     st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
     st.caption("ニュース見出しのキーワード参考表示です。本文理解や実際の市場反応を保証するAI予測ではありません。")
