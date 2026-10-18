@@ -1,7 +1,6 @@
 # app.py
 # Pro FX Analyzer & Signal Pro
 # 価格分析・注文補助専用です。証券口座接続・自動発注は行いません。
-# 予測確率・バックテスト結果は将来の利益や実際の勝率を保証しません。
 
 import html
 import json
@@ -32,7 +31,7 @@ try:
 except Exception:
     HAS_AUTOREFRESH = False
 
-st.set_page_config(page_title="Pro FX Analyzer & Signal Pro", page_icon="📈", layout="wide")
+st.set_page_config(page_title="AI FX分析ツール", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
 SETTINGS_FILE = "user_settings.json"
 FEEDBACK_FILE = "trade_feedback.json"
@@ -83,6 +82,7 @@ DEFAULT_SPREAD_PIPS = {
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 4
 
+# 🎨 スマホ・iPad・PC完全対応の洗練されたカスタムCSS
 st.markdown("""
 <style>
 .stApp { background: #0b1220; color: #e5e7eb; }
@@ -94,6 +94,106 @@ st.markdown("""
 .badge-buy { background:#14532d; color:#86efac; } .badge-sell { background:#7f1d1d; color:#fecaca; }
 .badge-wait { background:#374151; color:#e5e7eb; }
 .custom-table { width:100%; border-collapse:collapse; } .custom-table th,.custom-table td { padding:8px; border-bottom:1px solid #334155; text-align:left; }
+
+/* クロスデバイス：文字のコントラストとタッチ領域の最適化 */
+html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+    background-color:#0b1220 !important;
+    color:#e5e7eb !important;
+}
+[data-testid="stSidebar"], [data-testid="stSidebar"] > div {
+    background-color:#111827 !important;
+}
+[data-testid="stSidebar"] * ,
+[data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] p,
+[data-testid="stCaptionContainer"],
+[data-testid="stMetricLabel"],
+[data-testid="stMetricValue"],
+[data-testid="stMetricDelta"],
+.stRadio label, .stCheckbox label {
+    color:#e5e7eb !important;
+}
+[data-testid="stCaptionContainer"] { color:#cbd5e1 !important; }
+[data-testid="stMetricLabel"] { color:#cbd5e1 !important; }
+[data-testid="stMetricValue"] { color:#f8fafc !important; }
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stSelectbox"] [role="combobox"],
+[data-testid="stTextArea"] textarea {
+    font-size:16px !important;
+    min-height:44px;
+}
+.stButton > button, [data-testid="stDownloadButton"] button {
+    min-height:44px;
+    white-space:normal;
+    line-height:1.35;
+}
+[data-testid="stTabs"] [role="tablist"] {
+    gap: 4px;
+    flex-wrap: wrap;
+}
+[data-testid="stTabs"] [role="tab"] {
+    color:#cbd5e1 !important;
+    white-space:normal !important;
+    height:auto !important;
+    min-height:46px;
+    padding:8px 12px !important;
+    font-size:clamp(13px, 1.4vw, 15px) !important;
+}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+    color:#fca5a5 !important;
+    font-weight:700 !important;
+}
+[data-testid="stPlotlyChart"] { width:100% !important; }
+[data-testid="stDataFrame"], .custom-table { max-width:100%; }
+.news-card, .param-box, .alert-box, .warn-box {
+    overflow-wrap:anywhere;
+    word-break:normal;
+}
+code { overflow-wrap:anywhere; }
+
+/* 📱 iPad / タブレット専用レンジ (768px - 1024px) でのレイアウト最適化 */
+@media (min-width: 768px) and (max-width: 1024px) {
+    .block-container {
+        padding-left: 1.5rem !important;
+        padding-right: 1.5rem !important;
+        max-width: 100% !important;
+    }
+    [data-testid="stTabs"] [role="tab"] {
+        min-width: 130px;
+        flex: 1 1 auto;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.45rem !important;
+    }
+}
+
+/* 📱 スマートフォン向け (〜767px) */
+@media (max-width: 767px) {
+    .block-container {
+        padding-left:.75rem !important;
+        padding-right:.75rem !important;
+        padding-top:1rem !important;
+        max-width:100% !important;
+    }
+    [data-testid="stTabs"] [role="tab"] {
+        min-width: 110px;
+        flex: 1 1 auto;
+        padding: 6px 8px !important;
+        font-size: 12px !important;
+    }
+    [data-testid="stSidebar"] {
+        min-width: min(85vw, 320px) !important;
+    }
+    h1 { font-size:1.5rem !important; }
+    h2 { font-size:1.25rem !important; }
+    h3 { font-size:1.1rem !important; }
+    [data-testid="stMetricValue"] { font-size:clamp(1.2rem, 4.5vw, 1.8rem) !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -132,7 +232,6 @@ def save_settings():
 
 
 def reset_settings_callback():
-    """Reset persisted settings before widgets are instantiated on the next run."""
     for key, value in DEFAULT_SETTINGS.items():
         st.session_state[key] = value.copy() if isinstance(value, (dict, list)) else value
     try:
@@ -180,7 +279,6 @@ def flatten_yf_df(df):
         return pd.DataFrame()
     out = df.copy()
     if isinstance(out.columns, pd.MultiIndex):
-        # yfinance has changed the order of MultiIndex levels across versions.
         out.columns = [str(c[0] if str(c[0]).lower() in {"open","high","low","close","adj close","volume"} else c[-1]) for c in out.columns]
     out.columns = [str(c).replace(" ", "_").title() for c in out.columns]
     return out
@@ -263,7 +361,6 @@ def load_and_process_data(ticker, period, interval, label=""):
             agg = {"Open":"first","High":"max","Low":"min","Close":"last"}
             if "Volume" in df: agg["Volume"] = "sum"
             df = df.resample("4h").agg(agg).dropna(subset=required)
-        # Discard the newest bar because it may still be forming.
         if len(df) > 2:
             df = df.iloc[:-1]
         if len(df) < 80:
@@ -315,9 +412,6 @@ def load_and_process_data(ticker, period, interval, label=""):
         df["CCI"] = (tp-tp_sma)/(0.015*mad.replace(0, np.nan))
         df["ROC"] = close.pct_change(10)*100
 
-        # First-touch labels: determine which barrier is touched first in the next N bars.
-        # If both barriers are touched within the same OHLC bar, intrabar order is unknowable,
-        # so that sample is labeled WAIT (0) rather than guessing.
         pip_unit = 0.01 if "JPY" in ticker else 0.0001
         spread = DEFAULT_SPREAD_PIPS.get(ticker, 0.5) * pip_unit
         barrier = (df["ATR"] * 1.0).clip(lower=spread * 2).to_numpy(dtype=float)
@@ -335,7 +429,7 @@ def load_and_process_data(ticker, period, interval, label=""):
                 hit_up = high_values[j] >= upper_barrier
                 hit_down = low_values[j] <= lower_barrier
                 if hit_up and hit_down:
-                    label = 0  # same-bar order cannot be inferred from OHLC data
+                    label = 0
                     break
                 if hit_up:
                     label = 1
@@ -354,7 +448,6 @@ def load_and_process_data(ticker, period, interval, label=""):
 def send_webhook_alert(url, message):
     if not url or requests is None:
         return False
-    # Only permit HTTPS endpoints; never include secrets or account information in the message.
     if not str(url).lower().startswith("https://"):
         return False
     try:
@@ -382,7 +475,6 @@ def _normalise_timestamp(value):
 
 
 def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
-    """Returns the same tuple shape expected by the UI."""
     fallback = ("WAIT (様子見)", 0.0, 0, 0.0, "データ不足",
                 {"buy": 0, "sell": 0, "wait": 100}, pd.Series(dtype=float), pd.Series(dtype=int))
     if df_current is None or len(df_current) < 180:
@@ -398,7 +490,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         if len(X) < 160 or y.nunique() < 2:
             return fallback
 
-        # Chronological holdout with an embargo at least as long as the label horizon.
         test_n = min(120, max(40, int(len(X) * 0.20)))
         split = len(X) - test_n
         train_end = max(1, split - LOOKAHEAD_BARS)
@@ -417,7 +508,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         accuracy = float(accuracy_score(y_test, pred_test) * 100)
         test_count = int(len(y_test))
 
-        # History contains only truly out-of-sample test predictions; prior bars are NaN.
         history = pd.Series(np.nan, index=data.index, dtype=float)
         history.loc[X_test.index] = pred_test.astype(float)
 
@@ -435,15 +525,11 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             except Exception:
                 model = None
 
-        # Retrain with all eligible labelled rows. Feedback reweights only matching training rows.
         if model is None or force_retrain:
             model = RandomForestClassifier(
                 n_estimators=260, max_depth=7, min_samples_leaf=8,
                 class_weight="balanced_subsample", random_state=43, n_jobs=-1
             )
-            # Trade outcome buttons do not contain enough information to alter a market label
-            # safely (trade side, entry/exit, and timing may differ from the current bar).
-            # Keep them as a review log; train only on reproducible first-touch market labels.
             sw = compute_sample_weight(class_weight="balanced", y=y)
             model.fit(X, y, sample_weight=sw)
             try:
@@ -479,9 +565,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
     except Exception as exc:
         st.warning(f"AI分析で問題が発生したため、様子見にしています（{type(exc).__name__}）。")
         return fallback
-
-
-# Load persisted settings once into Streamlit state.
 if "settings_loaded" not in st.session_state:
     _settings = load_settings()
     for _k, _v in _settings.items():
@@ -555,7 +638,7 @@ with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", e
             imported_data = json.load(uploaded_file)
             if isinstance(imported_data, dict):
                 safe_data = {k: imported_data[k] for k in DEFAULT_SETTINGS if k in imported_data}
-                safe_data["webhook_url"] = ""  # Never import a webhook URL from an untrusted backup.
+                safe_data["webhook_url"] = ""
                 with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                     json.dump(safe_data, f, ensure_ascii=False, indent=2)
                 st.success("設定を復元しました。再読み込みしてください。")
@@ -578,7 +661,7 @@ if data is None or data.empty:
     st.stop()
 
 last_bar_jst = safe_to_tokyo_tz(data).index[-1].strftime("%Y-%m-%d %H:%M:%S")
-st.markdown(f'<div class="update-time">最終確定足の時刻: <b>{last_bar_jst} JST</b> (最新の未確定足は除外。取得時刻とは異なります)</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="update-time">最終確定足の時刻: <b>{last_bar_jst} JST</b> (最新の未確定足は除外)</div>', unsafe_allow_html=True)
 latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data else latest_price * 0.005
 force_retrain = bool(st.session_state.pop("force_retrain_once", False))
@@ -790,7 +873,6 @@ with tab_single:
     feedback_ts = _normalise_timestamp(data.index[-1])
     def record_feedback(is_win):
         fb_list = load_feedback_data()
-        # Avoid duplicate feedback for the same ticker/timeframe/bar.
         existing = [x for x in fb_list if x.get("ticker")==ticker and x.get("interval")==tf_config["interval"] and _normalise_timestamp(x.get("timestamp"))==feedback_ts]
         if existing:
             for item in fb_list:
@@ -842,7 +924,6 @@ with tab_single:
     if expected_profit_yen <= 0:
         st.warning("利確幅が想定スプレッド以下のため、コスト控除後の利益が見込めない計算です。")
     st.caption("手動調整欄は計算補助です。入力値・スプレッド・約定価格によって実損益は変わります。")
-
 with tab_news:
     st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
     st.caption("ニュース見出しのキーワード参考表示です。本文理解や実際の市場反応を保証するAI予測ではありません。")
@@ -910,8 +991,6 @@ with tab_repeat:
         pip_value_yen = order_units * 0.0001 * float(usd_rate_repeat)
     else:
         pip_value_yen = 0.0
-    # Conservative gross stress estimate: assume each grid order is open and moves adversely
-    # to the stop buffer beyond its own half-range edge. This is not a broker execution model.
     buy_levels = [user_lower + i * spacing_pips * pip_unit for i in range(half_grid_count)]
     sell_levels = [user_upper - i * spacing_pips * pip_unit for i in range(half_grid_count)]
     buy_loss_pips = sum(max(0.0, (level - buy_stop_loss) / pip_unit) for level in buy_levels)
