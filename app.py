@@ -82,7 +82,7 @@ DEFAULT_SPREAD_PIPS = {
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 4
 
-# 🎨 iPad・スマホ・PC完全対応：タブ見切れ防止・レスポンシブ最適化CSS
+# 🎨 iPad・スマホ・PC完全対応：チャート見切れ防止・レスポンシブ最適化CSS
 st.markdown("""
 <style>
 .stApp { background: #0b1220; color: #e5e7eb; }
@@ -143,15 +143,15 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
     border-radius: 10px !important;
 }
 [data-testid="stTabs"] [role="tab"] {
-    flex: 1 1 auto !important;
-    min-width: 140px !important;
+    flex: 1 1 calc(33% - 6px) !important;
+    min-width: 130px !important;
     max-width: 100% !important;
     color: #cbd5e1 !important;
     white-space: normal !important;
     height: auto !important;
     min-height: 48px !important;
-    padding: 8px 12px !important;
-    font-size: 13px !important;
+    padding: 8px 10px !important;
+    font-size: 12px !important;
     background-color: #111827 !important;
     border-radius: 6px !important;
     text-align: center !important;
@@ -173,16 +173,18 @@ code { overflow-wrap:anywhere; }
 /* 📱 iPad / タブレット専用レンジ (768px - 1024px) でのレイアウト最適化 */
 @media (min-width: 768px) and (max-width: 1024px) {
     .block-container {
-        padding-left: 1.5rem !important;
-        padding-right: 1.5rem !important;
+        padding-left: 1.25rem !important;
+        padding-right: 1.25rem !important;
         max-width: 100% !important;
     }
     [data-testid="stTabs"] [role="tab"] {
-        min-width: calc(33% - 8px) !important;
-        font-size: 12px !important;
+        flex: 1 1 calc(33% - 6px) !important;
+        min-width: 120px !important;
+        font-size: 11.5px !important;
+        padding: 8px 6px !important;
     }
     [data-testid="stMetricValue"] {
-        font-size: 1.45rem !important;
+        font-size: 1.35rem !important;
     }
 }
 
@@ -195,17 +197,18 @@ code { overflow-wrap:anywhere; }
         max-width:100% !important;
     }
     [data-testid="stTabs"] [role="tab"] {
-        min-width: calc(50% - 6px) !important;
+        flex: 1 1 calc(50% - 4px) !important;
+        min-width: 110px !important;
         padding: 6px 8px !important;
-        font-size: 12px !important;
+        font-size: 11.5px !important;
     }
     [data-testid="stSidebar"] {
         min-width: min(85vw, 320px) !important;
     }
-    h1 { font-size:1.5rem !important; }
-    h2 { font-size:1.25rem !important; }
-    h3 { font-size:1.1rem !important; }
-    [data-testid="stMetricValue"] { font-size:clamp(1.2rem, 4.5vw, 1.8rem) !important; }
+    h1 { font-size:1.4rem !important; }
+    h2 { font-size:1.15rem !important; }
+    h3 { font-size:1.05rem !important; }
+    [data-testid="stMetricValue"] { font-size:clamp(1.1rem, 4vw, 1.6rem) !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -829,7 +832,8 @@ with tab_chart:
         fig.update_yaxes(side="right",row=2,col=1)
     chart_high, chart_low = float(df_chart["High"].max()), float(df_chart["Low"].min())
     span = max(chart_high-chart_low, chart_high*.002)
-    fig.update_layout(xaxis_rangeslider_visible=False,height=580,margin=dict(l=10,r=70,t=25,b=10),template="plotly_dark",
+    # 🎯 iPad等のタブレットでも途中で見切れないようチャート高さを480pxに最適化
+    fig.update_layout(xaxis_rangeslider_visible=False,height=480,margin=dict(l=10,r=70,t=25,b=10),template="plotly_dark",
                       hovermode="x unified",showlegend=True,legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="right",x=1))
     fig.update_xaxes(type="date",rangebreaks=[dict(bounds=["sat","mon"])] if tf_config["interval"] in ("5m","15m","1h") else [],showspikes=True,spikemode="across")
     fig.update_yaxes(range=[chart_low-span*.05,chart_high+span*.05],side="right",tickformat=".3f" if is_jpy else ".5f",row=1,col=1)
