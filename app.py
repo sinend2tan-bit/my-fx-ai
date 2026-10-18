@@ -125,7 +125,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 特徴量定義
 FEATURE_COLUMNS = [
     "Return_1", "Return_5", "Dev_SMA20", "Dev_EMA200", "Dev_EMA20_200", "Vol_Ratio",
     "RSI", "RSI_Diff", "MACD_Hist_Ratio", "BB_PctB", "ADX",
@@ -298,7 +297,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["Dev_EMA20_200"] = (c.ewm(span=20, adjust=False).mean() - new_cols["EMA_200"]) / (new_cols["EMA_200"] + 1e-10)
         new_cols["Vol_Ratio"] = new_cols["ATR"] / (c + 1e-10)
         
-        # 拡張指標 (CCI & ROC)
         tp = (h + l + c) / 3.0
         tp_sma = tp.rolling(20, min_periods=1).mean()
         tp_mad = (tp - tp_sma).abs().rolling(20, min_periods=1).mean()
@@ -344,7 +342,12 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         df = pd.concat([df, df_feat], axis=1)
         
-        # 学習ターゲット（ラベル）生成ロジックの修正（売り判定の厳密化）
+        # 改善: スプレッドを考慮した学習ラベル生成ロジック
+        is_jpy = "JPY" in symbol
+        pip_unit = 0.01 if is_jpy else 0.0001
+        spread_pips = DEFAULT_SPREAD_PIPS.get(symbol, 0.3)
+        spread_val = spread_pips * pip_unit
+
         tp_t = new_cols["ATR"] * 1.2
         sl_t = new_cols["ATR"] * 0.8
         target_values = np.zeros(len(df), dtype=int)
@@ -361,13 +364,12 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
                 if idx >= n: break
                 curr_h, curr_l = h_vals[idx], l_vals[idx]
                 
-                # 買いの利確・損切
-                buy_tp_hit = (curr_h - entry_p) >= tp_dist
-                buy_sl_hit = (entry_p - curr_l) >= sl_dist
+                # スプレッドコストを考慮した買い・売り判定
+                buy_tp_hit = (curr_h - (entry_p + spread_val)) >= tp_dist
+                buy_sl_hit = ((entry_p + spread_val) - curr_l) >= sl_dist
                 
-                # 売りの利確・損切（修正箇所: 損切判定は高値との差額がsl_distを超えたか）
-                sell_tp_hit = (entry_p - curr_l) >= tp_dist
-                sell_sl_hit = (curr_h - entry_p) >= sl_dist
+                sell_tp_hit = ((entry_p - spread_val) - curr_l) >= tp_dist
+                sell_sl_hit = (curr_h - (entry_p - spread_val)) >= sl_dist
                 
                 if (buy_tp_hit and buy_sl_hit) or (sell_tp_hit and sell_sl_hit):
                     outcome = 0; break
@@ -394,7 +396,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
     empty_res = ("WAIT (データ不足)", 0.0, 0, 0.0, "不明", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
     if df_current is None or len(df_current) < 150: return empty_res
     try:
-        # 通貨ペアと時間足ごとの個別モデルファイル名（混同防止）
         clean_ticker = str(ticker).replace("=X", "").replace("/", "")
         model_filename = f"model_{clean_ticker}_{interval}.joblib"
 
@@ -419,8 +420,9 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             except Exception: model = None
 
         if model is None:
+            # 精度向上・過学習防止のためのハイパーパラメータ最適化
             model = RandomForestClassifier(
-                n_estimators=250, max_depth=7, min_samples_leaf=5, 
+                n_estimators=300, max_depth=6, min_samples_leaf=8, 
                 class_weight="balanced", random_state=42, n_jobs=1
             )
             model.fit(X_train, y_train)
@@ -430,8 +432,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         preds_series = pd.Series(model.predict(X_test), index=y_test.index)
         trade_signals = preds_series != 0
         total_signals_count = int(trade_signals.sum())
-        
-        # バックテスト勝率の計算（正解ラベルとの完全一致率）
         win_rate = float(((preds_series[trade_signals] == y_test[trade_signals]).sum() / total_signals_count) * 100) if total_signals_count > 0 else 50.0
         
         all_preds_series = pd.Series(model.predict(X), index=X.index)
@@ -604,7 +604,7 @@ elif is_squeeze:
 if vol_alert_msg:
     st.markdown(f'<div class="alert-box">{vol_alert_msg}</div>', unsafe_allow_html=True)
     
-    # Webhook通知の重複送信防止ロジック
+    # Webhook通知の重複送信防止
     webhook_url = st.session_state.get("webhook_url")
     if webhook_url:
         last_sent_key = f"last_webhook_{ticker}_{tf_config['interval']}"
@@ -618,7 +618,7 @@ m1.metric("現在レート", price_fmt % latest_price)
 badge_html = f'<div class="badge-buy">{status}</div>' if "BUY" in status else f'<div class="badge-sell">{status}</div>' if "SELL" in status else f'<div class="badge-wait">{status}</div>'
 m2.markdown("**AI 推奨アクション**")
 m2.markdown(badge_html, unsafe_allow_html=True)
-m3.metric("直近バックテスト勝率", f"{win_rate:.1f}%", f"検証シグナル数: {total_signals_count}回")
+m3.metric("直近バックテスト勝率 (スプレッド考慮)", f"{win_rate:.1f}%", f"検証シグナル数: {total_signals_count}回")
 m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 st.markdown("---")
 
@@ -805,7 +805,6 @@ with tab_single:
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
     raw_ai_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.0
     
-    # 資金安全装置: 0.01万通貨未満の場合は0.00に丸めて取引拒否
     if raw_ai_wan < 0.01:
         ai_rec_wan = 0.0
         is_risk_exceeded = True
@@ -823,7 +822,7 @@ with tab_single:
     elif "WAIT" in status: 
         st.warning("⚠️ **現在AIシグナルは【WAIT (様子見)】です。相場が不安定なため見送りを強く推奨します。**")
     else: 
-        st.success(f"🎯 **高確信度AIシグナル: 【{status}】（確信度: {conf:.1f}% / 勝率目安: {win_rate:.1f}%）**")
+        st.success(f"🎯 **高確信度AIシグナル: 【{status}】（確信度: {conf:.1f}% / 実効勝率目安: {win_rate:.1f}%）**")
 
     st.markdown(f"""
     <div class="param-box">
@@ -999,9 +998,9 @@ with tab_ai:
         st.write(f"⚪ **WAIT (様子見)**: {prob_dict['wait']}%")
         st.progress(max(0.0, min(1.0, prob_dict['wait'] / 100.0)))
     with pcol2:
-        st.markdown("**アウトオブサンプル検証（リーク防止対策済み）**")
+        st.markdown("**アウトオブサンプル検証（リーク防止対策・スプレッド考慮済み）**")
         st.metric("直近テスト80足の実効勝率", f"{win_rate:.1f}%", f"検証シグナル数: {total_signals_count}回")
-        st.caption("※ 未来データの先読みを完全に排除した時系列検証精度です。")
+        st.caption("※ 未来データの先読みを完全に排除し、スプレッドコストを加味した現実的な時系列検証精度です。")
         
         if ai_signal_history is not None and not ai_signal_history.empty:
             sig_export_df = ai_signal_history.reset_index()
