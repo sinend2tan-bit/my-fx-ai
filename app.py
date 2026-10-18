@@ -82,7 +82,7 @@ DEFAULT_SPREAD_PIPS = {
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 4
 
-# 🎨 入力フィールドの白背景・文字同化問題を完全に解消するCSS
+# 🎨 すべての入力フォーム・セレクトボックス・ドロップダウンの白抜け・文字同化問題を完全に根絶するCSS
 st.markdown("""
 <style>
 .stApp { background: #0b1220; color: #e5e7eb; }
@@ -120,10 +120,18 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
 [data-testid="stMetricLabel"] { color:#cbd5e1 !important; }
 [data-testid="stMetricValue"] { color:#f8fafc !important; }
 
-/* 🔍 入力フォーム・数値入力欄・セレクトボックスの背景白抜け・文字同化を完全防止 */
+/* 🔍 メイン画面およびサイドバーの全入力フォーム・数値入力欄・テキストエリア・セレクトボックスを完全にダーク化 */
+input, textarea, select {
+    background-color: #1f2937 !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+
 [data-testid="stTextInput"] input,
 [data-testid="stNumberInput"] input,
-[data-testid="stTextArea"] textarea {
+[data-testid="stTextArea"] textarea,
+[data-baseweb="input"] input,
+[data-baseweb="base-input"] input {
     background-color: #1f2937 !important;
     color: #ffffff !important;
     -webkit-text-fill-color: #ffffff !important;
@@ -133,24 +141,20 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
     border: 1px solid #334155 !important;
 }
 
-[data-baseweb="input"], [data-baseweb="base-input"] {
+[data-baseweb="select"], [data-testid="stSelectbox"] > div > div {
     background-color: #1f2937 !important;
-}
-
-[data-testid="stSelectbox"] [data-baseweb="select"] {
-    background-color: #1f2937 !important;
+    color: #ffffff !important;
     border-color: #334155 !important;
 }
-[data-testid="stSelectbox"] [role="combobox"] {
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
-    font-weight: 600 !important;
-    font-size: 16px !important;
-}
-[data-testid="stSelectbox"] div[data-baseweb="popover"],
-[data-testid="stSelectbox"] div[data-baseweb="menu"] {
+
+[data-baseweb="menu"], [data-baseweb="popover"], [role="listbox"], [role="option"] {
     background-color: #1f2937 !important;
     color: #ffffff !important;
+}
+
+[role="option"] div, [role="option"] span {
+    color: #ffffff !important;
+    background-color: #1f2937 !important;
 }
 
 [data-testid="stNumberInput"] button {
@@ -201,7 +205,6 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
 }
 code { overflow-wrap:anywhere; }
 
-/* 📱 スマートフォン・タブレット向け最適化 */
 @media (max-width: 767px) {
     .block-container {
         padding-left:.75rem !important;
