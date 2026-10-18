@@ -92,11 +92,11 @@ def save_settings():
         st.error(f"設定の保存に失敗しました: {e}")
 
 saved_config = load_settings()
-
 for k, v in DEFAULT_SETTINGS.items():
     if k not in st.session_state:
         st.session_state[k] = saved_config.get(k, v)
 
+# 視認性・文字見切れを改善したCSSデザイン
 st.markdown("""
 <style>
     .stApp { background-color: #0f172a !important; color: #f8fafc !important; }
@@ -113,7 +113,7 @@ st.markdown("""
     .badge-wait { background-color: #334155; color: #ffffff !important; padding: 8px 16px; border-radius: 6px; font-weight: 900; font-size: 1.1rem; display: inline-block; letter-spacing: 0.05em; }
     .alert-box { background-color: #1e293b; border-left: 6px solid #f59e0b; padding: 16px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.05rem; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .warn-box { background-color: #1e293b; border-left: 6px solid #ef4444; padding: 16px; border-radius: 6px; margin-bottom: 16px; color: #f8fafc !important; font-size: 1.05rem; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-    .param-box { background-color: #1e293b !important; border-left: 5px solid #3b82f6; padding: 18px; border-radius: 6px; font-family: monospace; line-height: 1.9; color: #f8fafc !important; font-size: 1.0rem; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+    .param-box { background-color: #1e293b !important; border-left: 5px solid #3b82f6; padding: 18px; border-radius: 6px; font-family: monospace; line-height: 1.9; color: #f8fafc !important; font-size: 1.0rem; box-shadow: 0 4px 6px rgba(0,0,0,0.3); overflow-x: auto; }
     .param-box code { font-size: 1.0rem !important; font-weight: 800 !important; color: #38bdf8 !important; background-color: #0f172a !important; padding: 3px 8px; border-radius: 4px; }
     .news-card { background-color: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 16px; margin-bottom: 12px; color: #f8fafc !important; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
     .update-time { font-size: 0.9rem; color: #cbd5e1; text-align: right; margin-bottom: 8px; font-weight: 700; }
@@ -285,7 +285,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
             if tz_before is not None and df.index.tz is None: df.index = df.index.tz_localize(tz_before)
         if len(df) < 50: return None
         
-        # 未確定足（形成中の最新バー）の除外
         df = df.iloc[:-1].copy()
         if len(df) < 50: return None
 
@@ -294,7 +293,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         new_cols["SMA_20"] = c.rolling(20, min_periods=1).mean()
         new_cols["EMA_200"] = c.ewm(span=min(200, len(c)), adjust=False).mean()
         hl = h - l
-        # True Rangeの採用（前足終値とのギャップ考慮）
         prev_c = c.shift(1)
         tr = pd.concat([hl, (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
         new_cols["ATR"] = tr.rolling(14, min_periods=1).mean()
@@ -351,7 +349,6 @@ def load_and_process_data(symbol, period, interval, tf_name=""):
         df_feat = pd.DataFrame(new_cols, index=df.index).replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         df = pd.concat([df, df_feat], axis=1)
         
-        # 学習ラベル判定ロジック
         is_jpy = "JPY" in symbol
         pip_unit = 0.01 if is_jpy else 0.0001
         spread_pips = DEFAULT_SPREAD_PIPS.get(symbol, 0.3)
@@ -439,7 +436,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         if len(np.unique(y_train)) < 2:
             return ("WAIT (データ偏り)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
         
-        # 改善指摘対応: 検証用モデル（テスト区間予測用）を訓練データで独立してトレーニングし、評価の純度を高める
         eval_model = RandomForestClassifier(
             n_estimators=300, max_depth=6, min_samples_leaf=8, 
             class_weight="balanced", random_state=42, n_jobs=1
@@ -453,7 +449,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         
         all_preds_series = pd.Series(eval_model.predict(X), index=X.index)
 
-        # 運用・予測用の最終モデルのロードまたは全体学習
         model = None
         if not force_retrain and os.path.exists(model_filename):
             try: model = joblib.load(model_filename)
@@ -464,7 +459,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
                 n_estimators=300, max_depth=6, min_samples_leaf=8, 
                 class_weight="balanced", random_state=42, n_jobs=1
             )
-            model.fit(X, y) # 全データまたは訓練用データで学習
+            model.fit(X, y)
             try: joblib.dump(model, model_filename)
             except Exception: pass
 
@@ -497,7 +492,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         return status, conf, total_signals_count, win_rate, m_type, prob_dict, importances, all_preds_series
     except Exception:
         return ("WAIT (エラー)", 0.0, 0, 0.0, "エラー", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
-# --- アプリメインUI部分 ---
 st.title("Pro FX Analyzer & Signal Pro")
 
 col_sel1, col_sel2 = st.columns(2)
@@ -557,10 +551,9 @@ if st.sidebar.button("💾 設定を即時手動保存"):
     save_settings()
     st.toast("設定を保存しました！", icon="💾")
 
-# 改善対応: Webhook URLを含めない安全な設定バックアップ
 with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", expanded=False):
     safe_backup_settings = load_settings().copy()
-    safe_backup_settings["webhook_url"] = "" # バックアップにWebhook URLを含めない
+    safe_backup_settings["webhook_url"] = ""
     current_settings_json = json.dumps(safe_backup_settings, ensure_ascii=False, indent=2)
     st.download_button(
         label="📥 設定をバックアップ (.json)",
@@ -639,7 +632,6 @@ if vol_alert_msg:
     if webhook_url:
         last_sent_key = f"last_webhook_{ticker}_{tf_config['interval']}"
         current_clean_msg = vol_alert_msg.replace('<b>','').replace('</b>','')
-        # 改善対応: クールダウン時間を設け、同一警告の重複連送を防止
         last_sent_time_key = f"last_webhook_time_{ticker}_{tf_config['interval']}"
         current_time = datetime.now().timestamp()
         last_time = st.session_state.get(last_sent_time_key, 0.0)
@@ -824,7 +816,6 @@ with tab_single:
     st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）AI発注アシスタント")
     st.caption("AIが現在の相場・ボラティリティ・口座資金を統合解析し、最適シグナルと注文数値をリアルタイムで自動計算します。")
 
-    # 改善対応: レート取得失敗時に155円等で誤魔化さず、安全に警告を表示して停止
     current_usdjpy_rate = get_usdjpy_rate()
     if not is_jpy and current_usdjpy_rate is None:
         st.error("🚨 【エラー】為替換算用のUSD/JPYレートが取得できませんでした。通信環境を確認するか、時間をおいて再読み込みしてください。")
@@ -844,7 +835,6 @@ with tab_single:
     ai_sl_price = ai_entry - (ai_sl_pips * pip_unit) if "BUY" in ai_direction else ai_entry + (ai_sl_pips * pip_unit)
     ai_tp_price = ai_entry + (ai_tp_pips * pip_unit) if "BUY" in ai_direction else ai_entry - (ai_tp_pips * pip_unit)
 
-    # 改善対応: スプレッドを考慮した厳密な損失・利益計算
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
     raw_ai_wan = (max_risk_yen / ai_loss_per_wan) if ai_loss_per_wan > 0 else 0.0
     floored_ai_wan = np.floor(raw_ai_wan * 100.0) / 100.0
@@ -912,7 +902,6 @@ with tab_single:
     res_col2.metric("損切(SL) レート", price_fmt % sl_price, f"-{sl_pips} pips")
     res_col3.metric("利確(TP) レート", price_fmt % tp_price, f"+{tp_pips} pips")
     res_col4.metric("想定純損益", f"+{int(expected_profit_yen):,}円", f"最大損失 -{int(actual_loss_yen):,}円")
-
 # --- タブ3: 📰 経済指標＆為替ニュースAI予測 ---
 with tab_news:
     st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
@@ -1046,7 +1035,7 @@ with tab_ai:
         st.progress(max(0.0, min(1.0, prob_dict['wait'] / 100.0)))
     with pcol2:
         st.markdown("**時系列アウトオブサンプル検証**")
-        st.metric("テスト区間のラベル分類一致率", f"{win_rate:.1f}%", f"検証データ数: {total_signals_count}回")
+        st.metric("テスト区間のラベル分類一致率", f"{win_rate:.1f}%", f"検証数: {total_signals_count}回")
         st.caption("※ 未来データの先読みを完全に排除し、未確定足のブレを除外した独立検証の分類一致率です。")
         
         if ai_signal_history is not None and not ai_signal_history.empty:
