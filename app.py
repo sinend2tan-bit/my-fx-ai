@@ -82,16 +82,16 @@ DEFAULT_SPREAD_PIPS = {
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 3
 
-# 🎨 視認性・文字見切れ・暗い表示を劇的に補正するカスタムCSS
+# 🎨 タブ見切れ解消・文字色・コントラストを極限まで高めたカスタムCSS
 st.markdown("""
 <style>
     /* 全体背景と文字色 */
-    .stApp { background-color: #0f172a !important; color: #f8fafc !important; }
+    .stApp { background-color: #0b132b !important; color: #f8fafc !important; }
     
     /* サイドバーの視認性向上 */
-    [data-testid="stSidebar"] { background-color: #1e293b !important; }
+    [data-testid="stSidebar"] { background-color: #172554 !important; }
     [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] span, [data-testid="stSidebar"] p { 
-        color: #f1f5f9 !important; 
+        color: #f8fafc !important; 
         font-weight: 600 !important; 
     }
     [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 { 
@@ -99,9 +99,38 @@ st.markdown("""
         font-weight: 800 !important; 
     }
 
+    /* タブの折り返し対応（見切れ防止）とデザイン強化 */
+    [data-baseweb="tab-list"] {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 6px !important;
+        background-color: #1e293b !important;
+        padding: 8px !important;
+        border-radius: 10px !important;
+    }
+    [data-baseweb="tab"] { 
+        background-color: #0f172a !important;
+        border-radius: 6px !important;
+        padding: 8px 14px !important;
+        height: auto !important;
+    }
+    [data-baseweb="tab"] p { 
+        color: #cbd5e1 !important; 
+        font-size: 0.95rem !important; 
+        font-weight: 700 !important; 
+    }
+    [data-baseweb="tab"][aria-selected="true"] { 
+        background-color: #0284c7 !important; 
+        border-bottom-color: transparent !important; 
+    }
+    [data-baseweb="tab"][aria-selected="true"] p { 
+        color: #ffffff !important; 
+        font-weight: 900 !important; 
+    }
+
     /* ボタン & ダウンロードボタンの背景・文字色補正 */
     .stButton button, [data-testid="stDownloadButton"] button { 
-        background-color: #334155 !important; 
+        background-color: #1e293b !important; 
         color: #ffffff !important; 
         border: 1px solid #475569 !important; 
         font-weight: 700 !important; 
@@ -109,18 +138,12 @@ st.markdown("""
         padding: 6px 12px !important;
     }
     .stButton button:hover, [data-testid="stDownloadButton"] button:hover { 
-        background-color: #475569 !important; 
+        background-color: #334155 !important; 
         color: #38bdf8 !important; 
         border-color: #38bdf8 !important; 
     }
 
-    /* タブの文字色と視認性 */
-    [data-baseweb="tab"] { color: #94a3b8 !important; font-weight: 700 !important; }
-    [data-baseweb="tab"] p { color: #94a3b8 !important; font-size: 1.0rem !important; }
-    [data-baseweb="tab"][aria-selected="true"] { color: #38bdf8 !important; border-bottom-color: #38bdf8 !important; }
-    [data-baseweb="tab"][aria-selected="true"] p { color: #38bdf8 !important; font-weight: 800 !important; }
-
-    /* メトリクス（数値表示）のサイズ・文字切れ補正 */
+    /* メトリクス（数値表示）のサイズ・文字切れ防止 */
     [data-testid="stMetricValue"] { 
         font-size: 1.35rem !important; 
         font-weight: 900 !important; 
@@ -128,7 +151,7 @@ st.markdown("""
         white-space: nowrap !important;
         overflow: visible !important;
     }
-    [data-testid="stMetricLabel"] { font-size: 0.95rem !important; font-weight: 800 !important; color: #cbd5e1 !important; }
+    [data-testid="stMetricLabel"] { font-size: 0.95rem !important; font-weight: 800 !important; color: #e2e8f0 !important; }
     [data-testid="stMetricDelta"] { font-weight: 700 !important; font-size: 0.85rem !important; }
 
     /* バッジ・カード表示 */
@@ -136,11 +159,13 @@ st.markdown("""
     .badge-sell { background:#7f1d1d; color:#fecaca !important; padding:6px 14px; border-radius:6px; font-weight:900; display:inline-block; }
     .badge-wait { background:#334155; color:#f8fafc !important; padding:6px 14px; border-radius:6px; font-weight:900; display:inline-block; }
     
-    .update-time { padding: 8px 14px; background:#1e293b; border: 1px solid #334155; border-radius:8px; margin:8px 0 14px; color:#cbd5e1; font-weight:600; text-align:right; }
+    .update-time { padding: 10px 14px; background:#1e293b; border: 1px solid #334155; border-radius:8px; margin:8px 0 14px; color:#e2e8f0; font-weight:600; text-align:right; }
     .param-box, .news-card { padding:14px; border:1px solid #334155; border-radius:8px; background:#1e293b; margin:8px 0; color:#f8fafc; }
     .param-box code { background-color: #0f172a !important; color: #38bdf8 !important; font-weight: bold; padding: 2px 6px; border-radius: 4px; }
-    .alert-box { padding:14px; border-radius:8px; background:#422006; border:1px solid #f59e0b; color:#fef3c7; font-weight:700; margin:10px 0; }
-    .warn-box { padding:14px; border-radius:8px; background:#451a1a; border:1px solid #ef4444; color:#fecaca; font-weight:700; margin:10px 0; }
+    
+    /* 警告・注意ボックスの文字色・背景を鮮明に改善 */
+    .alert-box { padding:14px; border-radius:8px; background:#78350f; border:1px solid #f59e0b; color:#fef3c7; font-weight:700; margin:10px 0; }
+    .warn-box { padding:14px; border-radius:8px; background:#7f1d1d; border:1px solid #ef4444; color:#fee2e2; font-weight:700; margin:10px 0; }
     
     .custom-table { width:100%; border-collapse:collapse; background:#1e293b; border-radius:8px; overflow:hidden; } 
     .custom-table th { background:#0f172a; color:#38bdf8; padding:10px; text-align:left; font-weight:800; border-bottom:2px solid #334155; }
@@ -559,12 +584,21 @@ if HAS_AUTOREFRESH:
         st_autorefresh(interval=60000, key="datarefresh")
 else:
     st.sidebar.caption("💡 `pip install streamlit-autorefresh` で自動更新有効")
+
 with st.sidebar.expander("🔔 通知設定 (Webhook)", expanded=False):
     st.text_input("Webhook URL (Discord等)", key="webhook_url", on_change=save_settings, placeholder="https://discord.com/api/webhooks/...")
     st.caption("URLはローカル設定ファイルに保存されます。共有環境では入力しないでください。")
+    if st.button("🚀 Webhookテスト送信", use_container_width=True):
+        url_val = st.session_state.get("webhook_url", "")
+        if send_webhook_alert(url_val, "【Pro FX Analyzer】テスト通知です。接続が正常に確認できました！"):
+            st.success("テスト通知の送信に成功しました！")
+        else:
+            st.error("送信に失敗しました。URLが正しいか確認してください。")
+
 if st.sidebar.button("💾 設定を即時手動保存", use_container_width=True):
     save_settings()
     st.toast("設定を保存しました！", icon="💾")
+
 with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", expanded=False):
     safe_backup_settings = load_settings().copy()
     safe_backup_settings["webhook_url"] = ""
@@ -582,6 +616,7 @@ with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", e
                 st.success("設定を復元しました。再読み込みしてください。")
         except Exception as exc:
             st.error(f"設定の復元に失敗しました: {exc}")
+
 if st.sidebar.button("🔄 設定を初期値にリセット", use_container_width=True):
     for k, v in DEFAULT_SETTINGS.items():
         st.session_state[k] = v
@@ -592,6 +627,7 @@ if st.sidebar.button("🔄 設定を初期値にリセット", use_container_wid
         pass
     st.session_state["settings_loaded"] = True
     st.rerun()
+
 if st.sidebar.button("🔄 最新データに更新", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
@@ -694,9 +730,9 @@ stop_buffer_val = stop_buffer_pips * pip_unit
 buy_stop_loss, sell_stop_loss = user_lower - stop_buffer_val, user_upper + stop_buffer_val
 
 tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
-    "📈 メインチャート", "⚡ 単発トレード (AI全自動アシスト)",
-    "📰 経済指標＆為替ニュースAI予測", "📋 松井証券 リピート設定 & リスク管理",
-    "🤖 AI分析詳細 & 自己学習ノート"
+    "📈 メインチャート", "⚡ 単発トレード (AIアシスト)",
+    "📰 経済指標＆ニュースAI予測", "📋 松井証券リピート設定",
+    "🤖 AI分析詳細 & ノート"
 ])
 
 with tab_chart:
@@ -947,9 +983,9 @@ with tab_repeat:
     rc2.metric("片側必要証拠金概算",f"約 {int(total_margin_yen):,} 円")
     rc3.metric("資金リスク比率",f"{risk_ratio:.1f}%")
     if risk_ratio>40:
-        st.error("警告: 単純試算の損失シナリオが資金の40%を超えています。")
+        st.markdown('<div class="warn-box">警告: 単純試算の損失シナリオが資金の40%を超えています。</div>', unsafe_allow_html=True)
     elif risk_ratio>20:
-        st.warning("損失シナリオが大きめです。注文数・数量・レンジを見直してください。")
+        st.markdown('<div class="alert-box">損失シナリオが大きめです。注文数・数量・レンジを見直してください。</div>', unsafe_allow_html=True)
     else:
         st.info("この単純試算だけでは安全性を判断できません。")
     st.markdown("---")
