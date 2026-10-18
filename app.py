@@ -81,7 +81,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 4
+MODEL_VERSION = 5
 
 st.markdown("""
 <style>
@@ -213,8 +213,45 @@ def load_settings():
                     result[key] = loaded[key]
     except (OSError, ValueError, TypeError):
         pass
+    # Validate persisted values before they are passed to Streamlit widgets.
+    try:
+        result["account_balance"] = int(np.clip(float(result.get("account_balance", 500000)), 10000, 100000000000))
+    except (TypeError, ValueError, OverflowError):
+        result["account_balance"] = DEFAULT_SETTINGS["account_balance"]
+    try:
+        result["quantity_wan"] = float(np.clip(float(result.get("quantity_wan", 0.10)), 0.01, 1000.0))
+    except (TypeError, ValueError, OverflowError):
+        result["quantity_wan"] = DEFAULT_SETTINGS["quantity_wan"]
+    try:
+        result["risk_percent"] = float(np.clip(float(result.get("risk_percent", 1.0)), 0.1, 5.0))
+    except (TypeError, ValueError, OverflowError):
+        result["risk_percent"] = DEFAULT_SETTINGS["risk_percent"]
+    try:
+        result["rr_ratio"] = float(np.clip(float(result.get("rr_ratio", 1.5)), 0.5, 5.0))
+    except (TypeError, ValueError, OverflowError):
+        result["rr_ratio"] = DEFAULT_SETTINGS["rr_ratio"]
+    try:
+        result["trap_width"] = int(np.clip(float(result.get("trap_width", 30)), 10, 500))
+    except (TypeError, ValueError, OverflowError):
+        result["trap_width"] = DEFAULT_SETTINGS["trap_width"]
+    result["auto_refresh"] = bool(result.get("auto_refresh", False))
+    result["trade_memo"] = str(result.get("trade_memo", ""))[:20000]
+    # Never trust a webhook URL restored from a settings backup.
+    result["webhook_url"] = str(result.get("webhook_url", "")) if str(result.get("webhook_url", "")).lower().startswith("https://") else ""
     if not isinstance(result.get("ranges"), dict):
         result["ranges"] = {}
+    else:
+        cleaned_ranges = {}
+        for pair, bounds in result["ranges"].items():
+            if pair not in PAIRS.values() or not isinstance(bounds, dict):
+                continue
+            try:
+                lo, hi = float(bounds.get("lower")), float(bounds.get("upper"))
+                if np.isfinite([lo, hi]).all() and 0 < lo < hi:
+                    cleaned_ranges[pair] = {"lower": lo, "upper": hi}
+            except (TypeError, ValueError, OverflowError):
+                continue
+        result["ranges"] = cleaned_ranges
     return result
 
 
@@ -622,10 +659,18 @@ if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)
     st.rerun()
 m_file_info = _model_filename(ticker, tf_config["interval"])
 if os.path.exists(m_file_info):
-    m_time = datetime.fromtimestamp(os.path.getmtime(m_file_info), tz=JST).strftime("%m/%d %H:%M")
+    m_time_dt = datetime.fromtimestamp(os.path.getmtime(m_file_info), tz=JST)
+    m_time = m_time_dt.strftime("%Y-%m-%d %H:%M")
+    model_age_hours = max(0.0, (time.time() - os.path.getmtime(m_file_info)) / 3600)
     st.sidebar.caption(f"🤖 最終学習日時: `{m_time}`")
+    if model_age_hours > 4:
+        st.sidebar.warning("モデルが4時間以上経過しています。次回分析時に再学習されます。")
+    else:
+        st.sidebar.caption(f"モデル経過時間: 約 {model_age_hours:.1f} 時間")
+    st.sidebar.caption("※再学習はアプリが実行・再分析された時に行われます。取引結果の記録だけでは学習されません。")
 else:
     st.sidebar.caption("🤖 現在のモデル状態: `初回自動作成待ち`")
+    st.sidebar.caption("※十分な価格データを取得できた次回分析時にモデルを作成します。")
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新・メンテナンス")
 if HAS_AUTOREFRESH:
@@ -857,13 +902,23 @@ with tab_single:
     ai_sl_price = ai_entry - ai_sl_pips*pip_unit if ai_is_buy else ai_entry + ai_sl_pips*pip_unit
     ai_tp_price = ai_entry + ai_tp_pips*pip_unit if ai_is_buy else ai_entry - ai_tp_pips*pip_unit
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
-    raw_ai_wan = max_risk_yen / ai_loss_per_wan if ai_loss_per_wan > 0 else 0
-    floored_ai_wan = np.floor(raw_ai_wan*100)/100
+    raw_ai_wan = max_risk_yen / ai_loss_per_wan if ai_loss_per_wan > 0 and np.isfinite(ai_loss_per_wan) else 0.0
+    floored_ai_wan = np.floor(max(0.0, raw_ai_wan) * 100) / 100
     ai_rec_wan = float(floored_ai_wan) if floored_ai_wan >= .01 else 0.0
+    # Final guard against rounding / malformed values exceeding the configured risk budget.
+    if ai_rec_wan > 0 and ai_loss_per_wan * ai_rec_wan > max_risk_yen + 1e-6:
+        ai_rec_wan = max(0.0, np.floor((max_risk_yen / ai_loss_per_wan) * 100) / 100 - 0.01)
     is_risk_exceeded = ai_rec_wan <= 0 or pip_val_per_wan <= 0
-    ai_profit_yen = max(0.0, (ai_tp_pips-spread_pips)*pip_val_per_wan*ai_rec_wan)
+    ai_profit_yen = (ai_tp_pips-spread_pips)*pip_val_per_wan*ai_rec_wan
     ai_loss_yen = (ai_sl_pips+spread_pips)*pip_val_per_wan*ai_rec_wan
-    req_margin_yen = ((ai_entry*ai_rec_wan*10000)/25 if is_jpy else (ai_entry*usd_rate*ai_rec_wan*10000)/25) if usd_rate else 0
+    if ai_rec_wan > 0 and is_jpy:
+        # JPY-quoted pairs: notional is already denominated in JPY.
+        req_margin_yen = (ai_entry * ai_rec_wan * 10000) / 25
+    elif ai_rec_wan > 0 and usd_rate is not None and np.isfinite(usd_rate) and usd_rate > 0:
+        # EUR/USD etc.: convert USD notional to JPY using the latest USD/JPY rate.
+        req_margin_yen = (ai_entry * float(usd_rate) * ai_rec_wan * 10000) / 25
+    else:
+        req_margin_yen = 0.0
     st.markdown("#### 🤖 AI提案トレードプラン")
     if ai_direction.startswith("WAIT"):
         st.warning("現在はAI判定がWAIT（様子見）です。推奨方向・注文数量を提示しません。")
@@ -874,6 +929,8 @@ with tab_single:
     if ai_direction.startswith("WAIT") or is_risk_exceeded:
         st.markdown(f'<div class="param-box"><b>【注文補助】</b><br>売買方向: <code>WAIT（見送り）</code><br>推奨数量: <code>0.00 万通貨</code><br>確定足価格: <code>{price_fmt % ai_entry}</code></div>',unsafe_allow_html=True)
     else:
+        if ai_tp_pips <= spread_pips:
+            st.warning("利確幅が想定スプレッド以下です。コストを考慮すると不利な可能性があるため、利確幅を見直してください。")
         st.markdown(f"""<div class="param-box"><b>【注文コピー用パラメータ】</b>（想定スプレッド {spread_pips:.1f} pips）<br>
         ・通貨ペア: <code>{html.escape(selected_label)}</code> | 方向: <code>{"買い" if ai_is_buy else "売り"}</code><br>
         ・新規価格目安: <code>{price_fmt % ai_entry}</code><br>・利確(TP): <code>{price_fmt % ai_tp_price}</code> (+{ai_tp_pips:.1f} pips / 純益概算 +{int(ai_profit_yen):,}円)<br>
@@ -910,7 +967,8 @@ with tab_single:
     st.markdown("##### 🛠️ 注文条件の手動微調整")
     sc1, sc2 = st.columns(2)
     with sc1:
-        trade_side = st.radio("売買方向",["BUY (買い)","SELL (売り)"],index=0 if status.startswith("BUY") else 1,horizontal=True)
+        # WAIT is not a sell signal; use BUY as a neutral UI default but clearly label this as manual input.
+        trade_side = st.radio("売買方向（手動計算用）",["BUY (買い)","SELL (売り)"],index=0 if not status.startswith("SELL") else 1,horizontal=True)
         entry_price = st.number_input("エントリー想定レート",value=float(latest_price),format=price_fmt,step=0.01 if is_jpy else 0.0001)
     with sc2:
         sl_mode = st.radio("損切(SL)の決め方",["ATRベース (推奨)","固定 pips"],horizontal=True)
@@ -926,7 +984,7 @@ with tab_single:
     sl_price = entry_price-sl_pips*pip_unit if is_buy_manual else entry_price+sl_pips*pip_unit
     tp_price = entry_price+tp_pips*pip_unit if is_buy_manual else entry_price-tp_pips*pip_unit
     loss_per_wan = (sl_pips+spread_pips)*pip_val_per_wan
-    raw_manual_wan = max_risk_yen/loss_per_wan if loss_per_wan>0 else 0
+    raw_manual_wan = max_risk_yen/loss_per_wan if loss_per_wan>0 and np.isfinite(loss_per_wan) else 0
     manual_wan = float(np.floor(raw_manual_wan*100)/100) if np.floor(raw_manual_wan*100)/100>=.01 else 0.0
     expected_profit_yen = (tp_pips-spread_pips)*pip_val_per_wan*manual_wan
     actual_loss_yen = (sl_pips+spread_pips)*pip_val_per_wan*manual_wan
@@ -1062,6 +1120,7 @@ with tab_repeat:
 
 with tab_ai:
     st.markdown("##### 🤖 AI予測モデルの評価と内訳")
+    st.info("モデルは価格データのラベルで再学習します。勝ち/負けボタンは記録用であり、自動的に教師データへ混ぜません。再学習はアプリが動作して分析処理が走った時に行われます。分類一致率は収益性を示すものではありません。")
     pcol1,pcol2=st.columns(2)
     with pcol1:
         st.markdown("**最新確定バーのモデル出力確率（総合スコア）**")
