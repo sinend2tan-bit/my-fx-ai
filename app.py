@@ -1,7 +1,6 @@
 # app.py
 # Pro FX Analyzer & Signal Pro
 # 価格分析・注文補助専用です。証券口座接続・自動発注は行いません。
-# 予測確率・バックテスト結果は将来の利益や実際の勝率を保証しません。
 
 import html
 import json
@@ -83,17 +82,69 @@ DEFAULT_SPREAD_PIPS = {
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 3
 
+# 🎨 視認性・文字見切れ・暗い表示を劇的に補正するカスタムCSS
 st.markdown("""
 <style>
-.stApp { background: #0b1220; color: #e5e7eb; }
-[data-testid="stSidebar"] { background: #111827; }
-.update-time { padding: 8px 12px; background:#172033; border-radius:8px; margin:8px 0 14px; }
-.param-box,.news-card { padding:14px; border:1px solid #334155; border-radius:10px; background:#111827; margin:8px 0; }
-.alert-box,.warn-box { padding:12px; border-radius:8px; background:#422006; border:1px solid #f59e0b; margin:10px 0; }
-.badge-buy,.badge-sell,.badge-wait { padding:8px 12px; border-radius:8px; font-weight:800; display:inline-block; }
-.badge-buy { background:#14532d; color:#86efac; } .badge-sell { background:#7f1d1d; color:#fecaca; }
-.badge-wait { background:#374151; color:#e5e7eb; }
-.custom-table { width:100%; border-collapse:collapse; } .custom-table th,.custom-table td { padding:8px; border-bottom:1px solid #334155; text-align:left; }
+    /* 全体背景と文字色 */
+    .stApp { background-color: #0f172a !important; color: #f8fafc !important; }
+    
+    /* サイドバーの視認性向上 */
+    [data-testid="stSidebar"] { background-color: #1e293b !important; }
+    [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] span, [data-testid="stSidebar"] p { 
+        color: #f1f5f9 !important; 
+        font-weight: 600 !important; 
+    }
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 { 
+        color: #38bdf8 !important; 
+        font-weight: 800 !important; 
+    }
+
+    /* ボタン & ダウンロードボタンの背景・文字色補正 */
+    .stButton button, [data-testid="stDownloadButton"] button { 
+        background-color: #334155 !important; 
+        color: #ffffff !important; 
+        border: 1px solid #475569 !important; 
+        font-weight: 700 !important; 
+        border-radius: 6px !important;
+        padding: 6px 12px !important;
+    }
+    .stButton button:hover, [data-testid="stDownloadButton"] button:hover { 
+        background-color: #475569 !important; 
+        color: #38bdf8 !important; 
+        border-color: #38bdf8 !important; 
+    }
+
+    /* タブの文字色と視認性 */
+    [data-baseweb="tab"] { color: #94a3b8 !important; font-weight: 700 !important; }
+    [data-baseweb="tab"] p { color: #94a3b8 !important; font-size: 1.0rem !important; }
+    [data-baseweb="tab"][aria-selected="true"] { color: #38bdf8 !important; border-bottom-color: #38bdf8 !important; }
+    [data-baseweb="tab"][aria-selected="true"] p { color: #38bdf8 !important; font-weight: 800 !important; }
+
+    /* メトリクス（数値表示）のサイズ・文字切れ補正 */
+    [data-testid="stMetricValue"] { 
+        font-size: 1.35rem !important; 
+        font-weight: 900 !important; 
+        color: #38bdf8 !important; 
+        white-space: nowrap !important;
+        overflow: visible !important;
+    }
+    [data-testid="stMetricLabel"] { font-size: 0.95rem !important; font-weight: 800 !important; color: #cbd5e1 !important; }
+    [data-testid="stMetricDelta"] { font-weight: 700 !important; font-size: 0.85rem !important; }
+
+    /* バッジ・カード表示 */
+    .badge-buy { background:#14532d; color:#86efac !important; padding:6px 14px; border-radius:6px; font-weight:900; display:inline-block; }
+    .badge-sell { background:#7f1d1d; color:#fecaca !important; padding:6px 14px; border-radius:6px; font-weight:900; display:inline-block; }
+    .badge-wait { background:#334155; color:#f8fafc !important; padding:6px 14px; border-radius:6px; font-weight:900; display:inline-block; }
+    
+    .update-time { padding: 8px 14px; background:#1e293b; border: 1px solid #334155; border-radius:8px; margin:8px 0 14px; color:#cbd5e1; font-weight:600; text-align:right; }
+    .param-box, .news-card { padding:14px; border:1px solid #334155; border-radius:8px; background:#1e293b; margin:8px 0; color:#f8fafc; }
+    .param-box code { background-color: #0f172a !important; color: #38bdf8 !important; font-weight: bold; padding: 2px 6px; border-radius: 4px; }
+    .alert-box { padding:14px; border-radius:8px; background:#422006; border:1px solid #f59e0b; color:#fef3c7; font-weight:700; margin:10px 0; }
+    .warn-box { padding:14px; border-radius:8px; background:#451a1a; border:1px solid #ef4444; color:#fecaca; font-weight:700; margin:10px 0; }
+    
+    .custom-table { width:100%; border-collapse:collapse; background:#1e293b; border-radius:8px; overflow:hidden; } 
+    .custom-table th { background:#0f172a; color:#38bdf8; padding:10px; text-align:left; font-weight:800; border-bottom:2px solid #334155; }
+    .custom-table td { padding:10px; border-bottom:1px solid #334155; text-align:left; color:#f8fafc; font-weight:600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -168,14 +219,9 @@ def flatten_yf_df(df):
         return pd.DataFrame()
     out = df.copy()
     if isinstance(out.columns, pd.MultiIndex):
-        # yfinance has changed the order of MultiIndex levels across versions.
         out.columns = [str(c[0] if str(c[0]).lower() in {"open","high","low","close","adj close","volume"} else c[-1]) for c in out.columns]
     out.columns = [str(c).replace(" ", "_").title() for c in out.columns]
     return out
-
-
-def _safe_div(a, b):
-    return a / b.replace(0, np.nan)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -251,7 +297,6 @@ def load_and_process_data(ticker, period, interval, label=""):
             agg = {"Open":"first","High":"max","Low":"min","Close":"last"}
             if "Volume" in df: agg["Volume"] = "sum"
             df = df.resample("4h").agg(agg).dropna(subset=required)
-        # Discard the newest bar because it may still be forming.
         if len(df) > 2:
             df = df.iloc[:-1]
         if len(df) < 80:
@@ -303,7 +348,6 @@ def load_and_process_data(ticker, period, interval, label=""):
         df["CCI"] = (tp-tp_sma)/(0.015*mad.replace(0, np.nan))
         df["ROC"] = close.pct_change(10)*100
 
-        # Label uses only completed future bars; trailing bars are excluded from training.
         pip_unit = 0.01 if "JPY" in ticker else 0.0001
         spread = DEFAULT_SPREAD_PIPS.get(ticker, 0.5) * pip_unit
         future_up = pd.concat([close.shift(-i) for i in range(1, LOOKAHEAD_BARS+1)], axis=1).max(axis=1) - close
@@ -324,7 +368,6 @@ def load_and_process_data(ticker, period, interval, label=""):
 def send_webhook_alert(url, message):
     if not url or requests is None:
         return False
-    # Only permit HTTPS endpoints; never include secrets or account information in the message.
     if not str(url).lower().startswith("https://"):
         return False
     try:
@@ -357,13 +400,11 @@ def _load_feedback_for(ticker, interval):
         if item.get("ticker") != ticker or item.get("interval") != interval:
             continue
         ts = _normalise_timestamp(item.get("timestamp"))
-        # Keep the latest entry for a bar; a later correction replaces the earlier one.
         result[ts] = bool(item.get("is_win"))
     return result
 
 
 def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
-    """Returns the same tuple shape expected by the UI."""
     fallback = ("WAIT (様子見)", 0.0, 0, 0.0, "データ不足",
                 {"buy": 0, "sell": 0, "wait": 100}, pd.Series(dtype=float), pd.Series(dtype=int))
     if df_current is None or len(df_current) < 180:
@@ -379,7 +420,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         if len(X) < 160 or y.nunique() < 2:
             return fallback
 
-        # Chronological holdout with an embargo at least as long as the label horizon.
         test_n = min(120, max(40, int(len(X) * 0.20)))
         split = len(X) - test_n
         train_end = max(1, split - LOOKAHEAD_BARS)
@@ -398,7 +438,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         accuracy = float(accuracy_score(y_test, pred_test) * 100)
         test_count = int(len(y_test))
 
-        # History contains only truly out-of-sample test predictions; prior bars are NaN.
         history = pd.Series(np.nan, index=data.index, dtype=float)
         history.loc[X_test.index] = pred_test.astype(float)
 
@@ -416,7 +455,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             except Exception:
                 model = None
 
-        # Retrain with all eligible labelled rows. Feedback reweights only matching training rows.
         if model is None or force_retrain:
             model = RandomForestClassifier(
                 n_estimators=260, max_depth=7, min_samples_leaf=8,
@@ -429,7 +467,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             for ts, is_win in fb.items():
                 idx = ts_map.get(ts)
                 if idx is not None:
-                    # Feedback adjusts importance modestly; it does not change the ground-truth label.
                     sw[idx] *= 1.15 if is_win else 1.25
                     applied += 1
             model.fit(X, y, sample_weight=sw)
@@ -466,9 +503,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
     except Exception as exc:
         st.warning(f"AI分析で問題が発生したため、様子見にしています（{type(exc).__name__}）。")
         return fallback
-
-
-# Load persisted settings once into Streamlit state.
 if "settings_loaded" not in st.session_state:
     _settings = load_settings()
     for _k, _v in _settings.items():
@@ -500,7 +534,7 @@ st.sidebar.number_input("1取引あたりの許容リスク (%)", min_value=0.1,
 st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_value=0.5, max_value=5.0, step=0.1, key="rr_ratio", on_change=save_settings)
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 AIモデル管理（自己学習つき）")
-if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)"):
+if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)", use_container_width=True):
     model_file = _model_filename(ticker, tf_config["interval"])
     try:
         if os.path.exists(model_file):
@@ -528,7 +562,7 @@ else:
 with st.sidebar.expander("🔔 通知設定 (Webhook)", expanded=False):
     st.text_input("Webhook URL (Discord等)", key="webhook_url", on_change=save_settings, placeholder="https://discord.com/api/webhooks/...")
     st.caption("URLはローカル設定ファイルに保存されます。共有環境では入力しないでください。")
-if st.sidebar.button("💾 設定を即時手動保存"):
+if st.sidebar.button("💾 設定を即時手動保存", use_container_width=True):
     save_settings()
     st.toast("設定を保存しました！", icon="💾")
 with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", expanded=False):
@@ -542,13 +576,13 @@ with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", e
             imported_data = json.load(uploaded_file)
             if isinstance(imported_data, dict):
                 safe_data = {k: imported_data[k] for k in DEFAULT_SETTINGS if k in imported_data}
-                safe_data["webhook_url"] = ""  # Never import a webhook URL from an untrusted backup.
+                safe_data["webhook_url"] = ""
                 with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                     json.dump(safe_data, f, ensure_ascii=False, indent=2)
                 st.success("設定を復元しました。再読み込みしてください。")
         except Exception as exc:
             st.error(f"設定の復元に失敗しました: {exc}")
-if st.sidebar.button("🔄 設定を初期値にリセット"):
+if st.sidebar.button("🔄 設定を初期値にリセット", use_container_width=True):
     for k, v in DEFAULT_SETTINGS.items():
         st.session_state[k] = v
     try:
@@ -558,7 +592,7 @@ if st.sidebar.button("🔄 設定を初期値にリセット"):
         pass
     st.session_state["settings_loaded"] = True
     st.rerun()
-if st.sidebar.button("🔄 最新データに更新"):
+if st.sidebar.button("🔄 最新データに更新", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
@@ -613,7 +647,7 @@ m1.metric("確定足レート", price_fmt % latest_price)
 m2.markdown("**AI 推奨アクション**")
 badge_html = '<div class="badge-buy">BUY</div>' if status.startswith("BUY") else '<div class="badge-sell">SELL</div>' if status.startswith("SELL") else '<div class="badge-wait">WAIT</div>'
 m2.markdown(badge_html, unsafe_allow_html=True)
-m3.metric("時系列テスト分類一致率", f"{win_rate:.1f}%", f"検証数: {total_signals_count}本")
+m3.metric("分類一致率", f"{win_rate:.1f}%", f"検証数: {total_signals_count}本")
 m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
 st.caption("分類一致率は、過去のテスト区間でモデルの3クラス分類が一致した割合です。実際のトレード勝率ではありません。")
 st.markdown("---")
@@ -786,7 +820,6 @@ with tab_single:
     feedback_ts = _normalise_timestamp(data.index[-1])
     def record_feedback(is_win):
         fb_list = load_feedback_data()
-        # Avoid duplicate feedback for the same ticker/timeframe/bar.
         existing = [x for x in fb_list if x.get("ticker")==ticker and x.get("interval")==tf_config["interval"] and _normalise_timestamp(x.get("timestamp"))==feedback_ts]
         if existing:
             for item in fb_list:
@@ -836,7 +869,6 @@ with tab_single:
     if expected_profit_yen <= 0:
         st.warning("利確幅が想定スプレッド以下のため、コスト控除後の利益が見込めない計算です。")
     st.caption("手動調整欄は計算補助です。入力値・スプレッド・約定価格によって実損益は変わります。")
-
 with tab_news:
     st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
     st.caption("ニュース見出しのキーワード参考表示です。本文理解や実際の市場反応を保証するAI予測ではありません。")
@@ -894,7 +926,6 @@ with tab_repeat:
     account_balance_val=float(st.session_state["account_balance"])
     order_units=max(0,int(quantity_wan_val*10000))
     pip_value_yen=(order_units/10000)*100 if is_jpy else (order_units*.0001*(current_usdjpy_rate if 'current_usdjpy_rate' in locals() and current_usdjpy_rate else 150.0))
-    # Loss-to-stop estimate grows with grid distance; clearly a rough stress scenario, not a maximum loss.
     max_loss_yen=sum((k*float(trap_width_pips)+stop_buffer_pips)*pip_value_yen for k in range(half_grid_count))
     usd_rate_repeat = latest_price if ticker=="USDJPY=X" else get_usdjpy_rate()
     total_margin_yen = ((latest_price*order_units)/25 if is_jpy else (latest_price*(usd_rate_repeat or 150.0)*order_units)/25)*half_grid_count
@@ -950,7 +981,7 @@ with tab_ai:
         st.caption("分類一致率は売買損益の勝率ではありません。")
         current_fb=load_feedback_data()
         st.info(f"蓄積された自己学習フィードバック数: **{len(current_fb)} 件**")
-        if st.button("🗑️ 自己学習フィードバック履歴をリセット"):
+        if st.button("🗑️ 自己学習フィードバック履歴をリセット", use_container_width=True):
             try:
                 if os.path.exists(FEEDBACK_FILE): os.remove(FEEDBACK_FILE)
             except OSError:
@@ -982,7 +1013,7 @@ with tab_ai:
         with col_imp_btn:
             csv_data=feature_importances.rename(index=lambda x:FEATURE_LABELS.get(x,x)).rename("重要度スコア").rename_axis("指標名").reset_index()
             st.download_button("📥 重要度CSV",data=csv_data.to_csv(index=False).encode("utf-8-sig"),
-                               file_name=f"ai_feature_importances_{ticker.replace('=X','')}.csv",mime="text/csv",key="download_csv_btn")
+                               file_name=f"ai_feature_importances_{ticker.replace('=X','')}.csv",mime="text/csv",key="download_csv_btn", use_container_width=True)
         top10_imp=feature_importances.nlargest(10).sort_values(ascending=True)
         fig_imp=go.Figure(go.Bar(x=top10_imp.values,y=[FEATURE_LABELS.get(x,x) for x in top10_imp.index],orientation="h"))
         fig_imp.update_layout(height=340,margin=dict(l=10,r=20,t=10,b=30),template="plotly_dark",xaxis_title="重要度スコア",yaxis=dict(autorange="reversed"))
@@ -994,4 +1025,4 @@ with tab_ai:
     memo_text=st.session_state.get("trade_memo","")
     if memo_text.strip():
         st.download_button("📥 トレードノートをテキスト保存 (.txt)",data=memo_text.encode("utf-8"),
-                           file_name=f"trade_memo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",mime="text/plain",key="download_memo_btn")
+                           file_name=f"trade_memo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",mime="text/plain",key="download_memo_btn", use_container_width=True)
