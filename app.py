@@ -34,6 +34,7 @@ except ImportError:
     HAS_AUTOREFRESH = False
 
 SETTINGS_FILE = "user_settings.json"
+FEEDBACK_FILE = "trade_feedback.json"
 
 DEFAULT_SETTINGS = {
     "account_balance": 500000,
@@ -91,6 +92,25 @@ def save_settings():
     except Exception as e:
         st.error(f"設定の保存に失敗しました: {e}")
 
+# 蓄積されたフィードバック（過去の判定結果・勝敗履歴）の管理関数
+def load_feedback_data():
+    if os.path.exists(FEEDBACK_FILE):
+        try:
+            with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+    return []
+
+def save_feedback_data(feedback_list):
+    try:
+        with open(FEEDBACK_FILE, "w", encoding="utf-8") as f:
+            json.dump(feedback_list, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 saved_config = load_settings()
 for k, v in DEFAULT_SETTINGS.items():
     if k not in st.session_state:
@@ -104,7 +124,6 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #1e293b !important; }
     [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] span { color: #f8fafc !important; }
     
-    /* 通常ボタン & ダウンロードボタンの視認性改善 */
     .stButton button, [data-testid="stDownloadButton"] button { 
         background-color: #334155 !important; 
         color: #f8fafc !important; 
@@ -117,20 +136,10 @@ st.markdown("""
         border-color: #38bdf8 !important; 
     }
 
-    /* タブの文字色・視認性改善 */
-    [data-baseweb="tab"] {
-        color: #94a3b8 !important;
-        font-weight: 700 !important;
-    }
-    [data-baseweb="tab"] p {
-        color: #94a3b8 !important;
-    }
-    [data-baseweb="tab"][aria-selected="true"] {
-        color: #38bdf8 !important;
-    }
-    [data-baseweb="tab"][aria-selected="true"] p {
-        color: #38bdf8 !important;
-    }
+    [data-baseweb="tab"] { color: #94a3b8 !important; font-weight: 700 !important; }
+    [data-baseweb="tab"] p { color: #94a3b8 !important; }
+    [data-baseweb="tab"][aria-selected="true"] { color: #38bdf8 !important; }
+    [data-baseweb="tab"][aria-selected="true"] p { color: #38bdf8 !important; }
 
     [data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 900 !important; color: #38bdf8 !important; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
     [data-testid="stMetricLabel"] { font-size: 1.0rem !important; font-weight: 800 !important; color: #cbd5e1 !important; }
@@ -220,6 +229,7 @@ def flatten_yf_df(df):
         except Exception:
             df_out.columns = [str(c[0]) for c in df_out.columns]
     df_out = df_out.loc[:, ~df_out.columns.duplicated()]
+    df_out.columns = [str(c).capitalize() for c in df_out.columns]
     df_out.columns = [str(c).capitalize() for c in df_out.columns]
     df_out = df_out.loc[~df_out.index.duplicated(keep='last')]
     return df_out
@@ -458,8 +468,24 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         X = df_valid[avail].replace([np.inf, -np.inf], np.nan).fillna(0)
         y = df_valid["Target"]
         
+        # --- 🧠 フィードバック蓄積データの反映（性能向上ループ） ---
+        feedback_data = load_feedback_data()
+        sample_weights = np.ones(len(X))
+        if feedback_data:
+            # 蓄積された過去の勝敗・的中履歴を反映し、正解した傾向のサンプルウェイトを高める
+            for fb in feedback_data:
+                if fb.get("ticker") == ticker and fb.get("interval") == interval:
+                    fb_time = fb.get("timestamp")
+                    is_win = fb.get("is_win", True)
+                    # 一致するタイムスタンプ近辺のデータに重みを付与
+                    match_idx = [i for i, ts in enumerate(X.index) if str(ts) == str(fb_time)]
+                    for idx in match_idx:
+                        sample_weights[idx] = 3.0 if is_win else 0.2
+
         X_train, y_train = X.iloc[: -(test_size + gap)], y.iloc[: -(test_size + gap)]
+        w_train = sample_weights[: -(test_size + gap)]
         X_test, y_test = X.iloc[-test_size:], y.iloc[-test_size:]
+        
         if len(np.unique(y_train)) < 2:
             return ("WAIT (データ偏り)", 0.0, 0, 0.0, "判定不可", {"buy": 0.0, "sell": 0.0, "wait": 100.0}, pd.Series(dtype=float), None)
         
@@ -467,7 +493,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             n_estimators=300, max_depth=6, min_samples_leaf=8, 
             class_weight="balanced", random_state=42, n_jobs=1
         )
-        eval_model.fit(X_train, y_train)
+        eval_model.fit(X_train, y_train, sample_weight=w_train)
 
         preds_series = pd.Series(eval_model.predict(X_test), index=y_test.index)
         trade_signals = preds_series != 0
@@ -486,7 +512,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
                 n_estimators=300, max_depth=6, min_samples_leaf=8, 
                 class_weight="balanced", random_state=42, n_jobs=1
             )
-            model.fit(X, y)
+            model.fit(X, y, sample_weight=sample_weights)
             try: joblib.dump(model, model_filename)
             except Exception: pass
 
@@ -542,23 +568,23 @@ st.sidebar.number_input("1取引あたりの許容リスク (%)", min_value=0.1,
 st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_value=0.5, max_value=5.0, step=0.1, key="rr_ratio", on_change=save_settings)
 
 st.sidebar.markdown("---")
-st.sidebar.header("🔄 AIモデル管理（自動更新つき）")
+st.sidebar.header("🔄 AIモデル管理（自己学習つき）")
 
-if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習"):
+if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)"):
     clean_ticker = str(ticker).replace("=X", "").replace("/", "")
     model_filename = f"model_{clean_ticker}_{tf_config['interval']}.joblib"
     if os.path.exists(model_filename):
         try: os.remove(model_filename)
         except Exception: pass
     st.cache_data.clear()
-    st.toast("AIモデルを強制再学習しました！", icon="🧠")
+    st.toast("蓄積されたフィードバックを反映してAIを再学習しました！", icon="🧠")
     st.rerun()
 
 clean_ticker_info = str(ticker).replace("=X", "").replace("/", "")
 m_file_info = f"model_{clean_ticker_info}_{tf_config['interval']}.joblib"
 if os.path.exists(m_file_info):
     m_time = datetime.fromtimestamp(os.path.getmtime(m_file_info), tz=ZoneInfo("Asia/Tokyo")).strftime("%m/%d %H:%M")
-    st.sidebar.caption(f"🤖 最終学習日時: `{m_time}`\n(※4時間ごとに自動再学習されます)")
+    st.sidebar.caption(f"🤖 最終学習日時: `{m_time}`\n(※蓄積データ・自動更新対応)")
 else:
     st.sidebar.caption("🤖 現在のモデル状態: `初回自動作成待ち`")
 
@@ -615,7 +641,7 @@ if st.sidebar.button("🔄 最新データに更新"):
     st.cache_data.clear()
     st.rerun()
 
-with st.spinner("最新相場データ & ニュースを取得中... (必要に応じてAI自動再学習を実行)"):
+with st.spinner("最新相場データ & ニュースを取得中... (AI自己学習・最適化実行中)"):
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
     data_4h = load_and_process_data(ticker, "90d", "1h", "4時間足 (中期・リピート用)")
     data_htf = load_and_process_data(ticker, "2y", "1d", "日足")
@@ -729,7 +755,7 @@ tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
     "⚡ 単発トレード (AI全自動アシスト)", 
     "📰 経済指標＆為替ニュースAI予測",
     "📋 松井証券 リピート設定 & リスク管理", 
-    "🤖 AI分析詳細 & トレードノート"
+    "🤖 AI分析詳細 & 自己学習ノート"
 ])
 
 # --- タブ1: メインチャート ---
@@ -838,7 +864,7 @@ with tab_chart:
 
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
 
-# --- タブ2: 単発トレード (AI全自動アシスト) ---
+# --- タブ2: 単発トレード (AI全自動アシスト & フィードバック記録ボタン) ---
 with tab_single:
     st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）AI発注アシスタント")
     st.caption("AIが現在の相場・ボラティリティ・口座資金を統合解析し、最適シグナルと注文数値をリアルタイムで自動計算します。")
@@ -895,6 +921,26 @@ with tab_single:
     ・<b>推奨発注数量</b>: <code>{ai_rec_wan:.2f} 万通貨</code> ({int(ai_rec_wan * 10000):,} 通貨) | <b>必要証拠金</b>: 約 <code>{int(req_margin_yen):,}円</code>
     </div>
     """, unsafe_allow_html=True)
+
+    # 🌟 新機能: トレード結果のフィードバック記録ボタン（AIの自己学習に即座に反映）
+    st.markdown("##### 📝 トレード結果フィードバック（AIの自己学習用）")
+    st.caption("このトレード（または直近のAIシグナル）の結果を記録すると、次回の学習時にこの相場パターンが重点的に強化または修正されます。")
+    
+    fb_col1, fb_col2 = st.columns(2)
+    with fb_col1:
+        if st.button("👍 【AI判定が勝った (利益獲得)】として記録", use_container_width=True):
+            fb_list = load_feedback_data()
+            latest_ts = str(data.index[-1])
+            fb_list.append({"ticker": ticker, "interval": tf_config["interval"], "timestamp": latest_ts, "is_win": True})
+            save_feedback_data(fb_list)
+            st.success("成功トレードとしてAIにフィードバックを記憶させました！")
+    with fb_col2:
+        if st.button("👎 【AI判定が負けた (損切)】として記録", use_container_width=True):
+            fb_list = load_feedback_data()
+            latest_ts = str(data.index[-1])
+            fb_list.append({"ticker": ticker, "interval": tf_config["interval"], "timestamp": latest_ts, "is_win": False})
+            save_feedback_data(fb_list)
+            st.warning("失敗トレードとしてAIにフィードバックを記憶させました（次回学習で改善されます）。")
 
     st.markdown("---")
     st.markdown("##### 🛠️ 注文条件の手動微調整")
@@ -1048,9 +1094,9 @@ with tab_repeat:
     sc3.metric("推定月間利回り", f"約 {est_monthly_roi:.1f}% / 月")
     sc4.metric("推定年間利回り (年利ROI)", f"約 {est_annual_roi:.1f}% / 年")
 
-# --- タブ5: AIモデル分析詳細 & トレードノート ---
+# --- タブ5: AI自己学習詳細・フィードバック管理 & トレードノート ---
 with tab_ai:
-    st.markdown("##### 🤖 AI予測モデル（MTF多重時間足 × 機械学習）の評価と内訳")
+    st.markdown("##### 🤖 AI予測モデル（自己学習フィードバック対応）の評価と内訳")
     pcol1, pcol2 = st.columns(2)
     with pcol1:
         st.markdown("**最新確定バーの分類判定確率（総合スコア）**")
@@ -1063,8 +1109,17 @@ with tab_ai:
     with pcol2:
         st.markdown("**時系列アウトオブサンプル検証**")
         st.metric("テスト区間のラベル分類一致率", f"{win_rate:.1f}%", f"検証数: {total_signals_count}回")
-        st.caption("※ 未来データの先読みを完全に排除し、未確定足のブレを除外した独立検証の分類一致率です。")
         
+        # 蓄積されたフィードバック数の表示とリセット機能
+        current_fb = load_feedback_data()
+        st.info(ger_fb_count_msg := f"💡 蓄積された自己学習フィードバック数: **{len(current_fb)} 件**")
+        if st.button("🗑️ 自己学習フィードバック履歴をリセット"):
+            if os.path.exists(FEEDBACK_FILE):
+                try: os.remove(FEEDBACK_FILE)
+                except Exception: pass
+            st.toast("フィードバック履歴をリセットしました。", icon="🗑️")
+            st.rerun()
+
         if ai_signal_history is not None and not ai_signal_history.empty:
             sig_export_df = ai_signal_history.reset_index()
             sig_export_df.columns = ["日時", "シグナル判定(1:買,-1:売,0:様子見)"]
