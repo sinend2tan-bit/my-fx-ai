@@ -1,8 +1,5 @@
-streamlit
-yfinance
-pandas
-numpy
-plotly
-scikit-learn
-requests
-streamlit-autorefresh
+streamlit>=1.36
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3
+yfinance>=0.2.40
