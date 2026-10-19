@@ -725,11 +725,26 @@ if "settings_loaded" not in st.session_state:
 st.title("Pro FX Analyzer & Signal Pro")
 st.caption("AI分析・注文補助・リピート設定をまとめた参考ツールです。実際の発注は行いません。")
 
-col_sel1, col_sel2 = st.columns(2)
+# iPad / スマートフォンで selectbox の検索キーボードが出る不便さを避けるため、
+# 通貨ペア・時間足はタップで切り替えるラジオボタンにする。
+# 既存の session_state キーを維持し、保存済みの選択状態との互換性を保つ。
+col_sel1, col_sel2 = st.columns([3, 2])
 with col_sel1:
-    selected_label = st.selectbox("通貨ペア", list(PAIRS.keys()), key="selected_pair_label")
+    st.markdown("**通貨ペア（タップして選択）**")
+    selected_label = st.radio(
+        "通貨ペア", list(PAIRS.keys()),
+        index=list(PAIRS.keys()).index(st.session_state.get("selected_pair_label", list(PAIRS.keys())[0]))
+        if st.session_state.get("selected_pair_label", list(PAIRS.keys())[0]) in PAIRS else 0,
+        key="selected_pair_label", horizontal=True, label_visibility="collapsed",
+    )
 with col_sel2:
-    tf_label = st.selectbox("時間足", list(TIMEFRAMES.keys()), key="selected_tf_label")
+    st.markdown("**時間足（タップして選択）**")
+    tf_label = st.radio(
+        "時間足", list(TIMEFRAMES.keys()),
+        index=list(TIMEFRAMES.keys()).index(st.session_state.get("selected_tf_label", list(TIMEFRAMES.keys())[2]))
+        if st.session_state.get("selected_tf_label", list(TIMEFRAMES.keys())[2]) in TIMEFRAMES else 2,
+        key="selected_tf_label", horizontal=True, label_visibility="collapsed",
+    )
 ticker = PAIRS[selected_label]
 tf_config = TIMEFRAMES[tf_label]
 is_jpy = "JPY" in ticker
