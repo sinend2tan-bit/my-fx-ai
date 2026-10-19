@@ -1065,8 +1065,11 @@ with tab_single:
         quote_gap_pips = abs(matsui_quote - latest_price) / pip_unit
         quote_gap_large = quote_gap_pips > quote_gap_threshold_pips
         entry_reference_price = float(matsui_quote)
+        entry_reference_label = "入力した松井証券FXの現在レート"
     else:
+        # Do not imply that a candle close is a live executable quote.
         entry_reference_price = float(latest_price)
+        entry_reference_label = "最終確定足の終値（参考値のみ・現在レートではありません）"
 
     gap_acknowledged = False
     if matsui_quote is not None:
@@ -1100,6 +1103,19 @@ with tab_single:
     else:
         ai_entry = entry_reference_price + entry_offset_atr if entry_style.startswith("押し目") else entry_reference_price - entry_offset_atr
         entry_order_type = "指値" if entry_style.startswith("押し目") else "逆指値"
+
+    st.markdown("##### 🧭 買い候補価格の根拠")
+    st.write(f"- 計算の基準価格：**{entry_reference_label}**（{price_fmt % entry_reference_price}）")
+    st.write(f"- 計算方法：基準価格 {'−' if entry_style.startswith('押し目') and ai_is_buy else '+' if entry_style.startswith('押し目') else '+' if ai_is_buy else '−'} ATRに基づく幅（{entry_offset_atr / pip_unit:.1f} pips）")
+    if matsui_quote is not None:
+        distance_to_candidate = abs(float(ai_entry) - float(matsui_quote)) / pip_unit
+        st.metric("現在レートから候補価格まで", f"{distance_to_candidate:.1f} pips")
+        if entry_style.startswith("押し目") and ai_is_buy:
+            st.caption("買いの押し目指値は現在レートより下に置く候補です。価格がそこまで下がる保証はなく、届かなければ未約定になります。")
+        elif ai_is_buy:
+            st.caption("買いのブレイク逆指値は現在レートより上に置く候補です。上昇を追う方式なので、約定価格や損失リスクを注文前に確認してください。")
+    else:
+        st.warning("松井証券FXの現在レートが未入力のため、この候補価格は確定足終値を基準にした仮計算です。実際の注文価格として使わず、現在レートを入力して再計算してください。")
 
     quote_position_ok = None
     if matsui_quote is not None and ai_direction.startswith("BUY"):
