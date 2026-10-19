@@ -44,6 +44,7 @@ DEFAULT_SETTINGS = {
     "account_balance": 500000,
     "quantity_wan": 0.10,
     "auto_refresh": False,
+    "auto_pair_scan": False,
     "risk_percent": 1.0,
     "rr_ratio": 1.5,
     "trap_width": 30,
@@ -237,6 +238,7 @@ def load_settings():
     except (TypeError, ValueError, OverflowError):
         result["trap_width"] = DEFAULT_SETTINGS["trap_width"]
     result["auto_refresh"] = bool(result.get("auto_refresh", False))
+    result["auto_pair_scan"] = bool(result.get("auto_pair_scan", False))
     result["trade_memo"] = str(result.get("trade_memo", ""))[:20000]
     # Never trust a webhook URL restored from a settings backup.
     result["webhook_url"] = str(result.get("webhook_url", "")) if str(result.get("webhook_url", "")).lower().startswith("https://") else ""
@@ -790,10 +792,18 @@ st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新・メンテナンス")
 if HAS_AUTOREFRESH:
     st.sidebar.checkbox("60秒ごとに自動更新", key="auto_refresh", on_change=save_settings)
-    if st.session_state["auto_refresh"]:
+    st.sidebar.checkbox(
+        "5分ごとに全5通貨ペアを自動チェック",
+        key="auto_pair_scan",
+        on_change=save_settings,
+        help="自動更新も利用して、5分ごとに候補一覧を再チェックします。自動発注はしません。",
+    )
+    if st.session_state["auto_refresh"] or st.session_state["auto_pair_scan"]:
         st_autorefresh(interval=60000, key="datarefresh")
+    if st.session_state["auto_pair_scan"]:
+        st.sidebar.caption("自動チェックは5分ごとです。通知を受け取るにはWebhook設定も必要です。")
 else:
-    st.sidebar.caption("💡 `pip install streamlit-autorefresh` で自動更新有効")
+    st.sidebar.caption("💡 自動更新・定期チェックには `pip install streamlit-autorefresh` が必要です")
 with st.sidebar.expander("🔔 通知設定 (Webhook)", expanded=False):
     st.text_input("Webhook URL (Discord等)", key="webhook_url", on_change=save_settings, placeholder="https://discord.com/api/webhooks/...")
     st.caption("URLはローカル設定ファイルに保存されます。共有環境では入力しないでください。")
@@ -956,6 +966,17 @@ with scan_note_col:
 
 if "pair_scan_results" not in st.session_state:
     st.session_state["pair_scan_results"] = {}
+# When enabled, the 60-second rerun checks whether the five-minute scan interval elapsed.
+# This is an in-app foreground process; it is not guaranteed to run if the app/browser sleeps.
+now_epoch = time.time()
+last_auto_scan_epoch = float(st.session_state.get("last_auto_pair_scan_epoch", 0.0))
+auto_scan_due = bool(
+    HAS_AUTOREFRESH
+    and st.session_state.get("auto_pair_scan", False)
+    and (now_epoch - last_auto_scan_epoch >= 300)
+)
+manual_scan_requested = bool(run_pair_scan)
+run_pair_scan = manual_scan_requested or auto_scan_due
 if run_pair_scan:
     scan_results = []
     original_eval_metrics = st.session_state.get("model_eval_metrics")
@@ -991,6 +1012,7 @@ if run_pair_scan:
                     "AI方向": {"BUY (買い)":"買い", "SELL (売り)":"売り", "WAIT (様子見)":"様子見"}.get(sig, sig),
                     "買い確率": f"{probs.get('buy', 0)}%", "売り確率": f"{probs.get('sell', 0)}%",
                     "価格": f"{last_price_scan:.3f}" if "JPY" in pair_ticker else f"{last_price_scan:.5f}",
+                    "確定足時刻": safe_to_tokyo_tz(scan_data).index[-1].strftime("%Y-%m-%d %H:%M"),
                     "スプレッド目安(pips)": spread_scan, "検証一致率": f"{metrics.get('balanced_accuracy', 0):.1f}%" if metrics else "不足",
                     "理由": reason,
                 })
@@ -998,7 +1020,32 @@ if run_pair_scan:
             scan_results.append({"通貨ペア": pair_label, "判定": "確認失敗", "AI方向": "—", "買い確率": "—", "売り確率": "—", "価格": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": f"分析エラー: {type(exc).__name__}"})
         progress.progress(idx / len(pair_items), text=f"確認中: {pair_label} ({idx}/{len(pair_items)})")
     progress.empty()
-    st.session_state["pair_scan_results"] = {"time": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST"), "timeframe": tf_label, "rows": scan_results}
+    scan_time_text = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+    st.session_state["pair_scan_results"] = {"time": scan_time_text, "timeframe": tf_label, "rows": scan_results}
+    if auto_scan_due:
+        st.session_state["last_auto_pair_scan_epoch"] = now_epoch
+    # Send one webhook notification per newly observed candidate/bar. A repeated rerun
+    # will not repeatedly alert for the same pair, timeframe, direction, and bar.
+    webhook_url = st.session_state.get("webhook_url", "")
+    if webhook_url:
+        alert_state = st.session_state.setdefault("pair_candidate_alert_keys", [])
+        new_candidate_lines = []
+        for row in scan_results:
+            if row.get("判定") != "候補あり":
+                continue
+            label = row.get("通貨ペア", "不明")
+            pair_ticker = PAIRS.get(label)
+            if not pair_ticker:
+                continue
+            candidate_key = f"{pair_ticker}|{tf_config['interval']}|{row.get('AI方向')}|{row.get('確定足時刻', scan_time_text)}"
+            if candidate_key not in alert_state:
+                new_candidate_lines.append(f"{label}: {row.get('AI方向')} / 価格参考 {row.get('価格')} / {row.get('理由')}")
+                alert_state.append(candidate_key)
+        st.session_state["pair_candidate_alert_keys"] = alert_state[-100:]
+        if new_candidate_lines:
+            alert_message = "AI FX参考候補が検出されました（自動発注なし・松井証券FXの現在レート確認が必要）\n" + "\n".join(new_candidate_lines)
+            if send_webhook_alert(webhook_url, alert_message):
+                st.toast("新しい候補の通知を送信しました", icon="🔔")
     if original_eval_metrics is not None:
         st.session_state["model_eval_metrics"] = original_eval_metrics
     else:
@@ -1016,6 +1063,8 @@ if saved_scan.get("rows") and saved_scan.get("timeframe") == tf_label:
     st.download_button("📥 通貨ペア一覧をCSV保存", data=scan_df.to_csv(index=False).encode("utf-8-sig"),
                        file_name=f"pair_scan_{tf_config['interval']}.csv", mime="text/csv", use_container_width=False)
     st.caption("候補ありでも即注文せず、松井証券FXの現在レート、Bid/Ask、スプレッド、指値の距離、損切り幅を確認してください。検証データ不足やデータ取得失敗は候補に含めません。")
+    if st.session_state.get("auto_pair_scan", False):
+        st.caption("🔄 自動チェック設定中：アプリが動作・更新されている間、約5分ごとに再チェックします。ブラウザや端末の休止中は動作が止まる場合があります。")
 elif saved_scan.get("rows"):
     st.info(f"保存済みの一覧は {saved_scan.get('timeframe')} です。現在の {tf_label} で『全通貨ペアを一括チェック』を押すと更新できます。")
 else:
