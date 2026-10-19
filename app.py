@@ -886,7 +886,7 @@ st.sidebar.button("🔄 設定を初期値にリセット", on_click=reset_setti
 if st.sidebar.button("🔄 最新データに更新"):
     st.cache_data.clear()
     st.rerun()
-st.sidebar.caption("更新ボタンは価格・ニュースのキャッシュを消して再取得します。連続して押す必要はありません。")
+st.sidebar.caption("更新ボタンは価格・ニュースのキャッシュを消して再取得します。選択中の画面は維持されます。連続して押す必要はありません。")
 
 with st.spinner("最新相場データ & ニュースを取得中..."):
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
@@ -1118,13 +1118,24 @@ elif saved_scan.get("rows"):
 else:
     st.info("まだ一括チェックしていません。ボタンを押すと、5通貨ペアのAI方向・検証状況・スプレッド目安をまとめて表示します。")
 
-tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
-    "📈 メインチャート", "⚡ 単発トレード (AI全自動アシスト)",
-    "📰 経済指標＆為替ニュースAI予測", "📋 松井証券 リピート設定 & リスク管理",
-    "🤖 AI分析詳細 & 自己学習ノート"
-])
+# st.tabs() はボタン操作などの再実行後に先頭タブへ戻ることがあるため、
+# session_state に選択中の画面を保存するラジオ式ナビゲーションに変更。
+APP_SECTIONS = [
+    "📈 メインチャート",
+    "⚡ 単発トレード (AI全自動アシスト)",
+    "📰 経済指標＆為替ニュースAI予測",
+    "📋 松井証券 リピート設定 & リスク管理",
+    "🤖 AI分析詳細 & 自己学習ノート",
+]
+active_section = st.radio(
+    "表示する画面",
+    APP_SECTIONS,
+    key="active_app_section",
+    horizontal=True,
+    label_visibility="collapsed",
+)
 
-with tab_chart:
+if active_section == APP_SECTIONS[0]:
     st.markdown("##### 📈 インタラクティブ・メインチャート")
     st.caption("ボタンで表示本数を切替。十字カーソルとマウスホイールでズームできます。")
     qc1, qc2, qc3, qc4, qc5 = st.columns([1.2, 1.2, 1.2, 2.0, 2.4])
@@ -1194,7 +1205,7 @@ with tab_chart:
     fig.update_yaxes(range=[chart_low-span*.05,chart_high+span*.05],side="right",tickformat=".3f" if is_jpy else ".5f",row=1,col=1)
     st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displayModeBar":True,"displaylogo":False})
 
-with tab_single:
+elif active_section == APP_SECTIONS[1]:
     st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）AI発注アシスタント")
     st.caption("AIの分析結果から注文条件の参考値を計算します。発注は行いません。")
 
@@ -1586,7 +1597,7 @@ with tab_single:
         st.warning("利確幅が想定スプレッド以下のため、コスト控除後の利益が見込めない計算です。")
     st.caption("手動調整欄は計算補助です。入力値・スプレッド・約定価格によって実損益は変わります。")
 
-with tab_news:
+elif active_section == APP_SECTIONS[2]:
     st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
     st.caption("ニュース見出しのキーワード参考表示です。本文理解や実際の市場反応を保証するAI予測ではありません。")
     if news_items:
@@ -1620,7 +1631,7 @@ with tab_news:
             🎯 <b>キーワード参考判定</b>: <span style="color:#facc15;font-weight:bold;">{html.escape(str(news.get('direction','')))}</span><br>
             💡 <b>判定理由</b>: {html.escape(str(news.get('reason','')))}</div></div>""",unsafe_allow_html=True)
 
-with tab_repeat:
+elif active_section == APP_SECTIONS[3]:
     st.markdown("##### 📋 松井証券リピート自動売買（ハーフ＆ハーフ）設定アシスタント")
     st.caption("参考計算です。証券会社の仕様・保有ポジション・実際の証拠金計算を完全には再現しません。")
     if latest_price < user_lower or latest_price > user_upper:
@@ -1713,7 +1724,7 @@ with tab_repeat:
     sc3.metric("仮定上の月間比率", f"{est_monthly_roi:.1f}%" if risk_calc_available else "算出不可")
     sc4.metric("単純年換算比率", f"{est_annual_roi:.1f}%" if risk_calc_available else "算出不可")
 
-with tab_ai:
+elif active_section == APP_SECTIONS[4]:
     st.markdown("##### 🤖 AI予測モデルの評価と内訳")
     st.info("モデルは価格データのラベルで再学習します。勝ち/負けボタンは記録用であり、自動的に教師データへ混ぜません。再学習はアプリが動作して分析処理が走った時に行われます。分類一致率は収益性を示すものではありません。")
     # Update saved entry-candidate outcomes from subsequent completed bars.
