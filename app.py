@@ -33,6 +33,7 @@ st.set_page_config(page_title="AI FX分析ツール", page_icon="📈", layout="
 SETTINGS_FILE = "user_settings.json"
 FEEDBACK_FILE = "trade_feedback.json"
 ENTRY_TRACK_FILE = "entry_candidate_history.json"
+FORECAST_TRACK_FILE = "forecast_outcome_history.json"
 JST = ZoneInfo("Asia/Tokyo")
 
 DEFAULT_SETTINGS = {
@@ -309,6 +310,88 @@ def save_entry_tracking(items):
             json.dump(items[-1000:], f, ensure_ascii=False, indent=2, default=_json_default)
     except OSError as exc:
         st.error(f"候補価格の検証履歴を保存できませんでした: {exc}")
+
+
+def load_forecast_history():
+    """Load automatic signal-evaluation records; these are not broker trade results."""
+    try:
+        with open(FORECAST_TRACK_FILE, "r", encoding="utf-8") as f:
+            value = json.load(f)
+        return value if isinstance(value, list) else []
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def save_forecast_history(items):
+    try:
+        with open(FORECAST_TRACK_FILE, "w", encoding="utf-8") as f:
+            json.dump(items[-3000:], f, ensure_ascii=False, indent=2, default=_json_default)
+    except OSError as exc:
+        st.warning(f"自動予測検証履歴を保存できませんでした: {exc}")
+
+
+def update_forecast_history(items, df, ticker, interval, horizon=LOOKAHEAD_BARS):
+    """Resolve saved BUY/SELL/WAIT signals after N completed bars using close-to-close direction.
+
+    This measures directional follow-through only, not profitability or executable fills.
+    """
+    if df is None or df.empty:
+        return items
+    changed = False
+    idx = pd.DatetimeIndex(df.index)
+    idx_utc = idx.tz_localize("UTC") if idx.tz is None else idx.tz_convert("UTC")
+    close_values = pd.to_numeric(df["Close"], errors="coerce").to_numpy(dtype=float)
+    for item in items:
+        if item.get("ticker") != ticker or item.get("interval") != interval or item.get("status") != "PENDING":
+            continue
+        try:
+            saved_ts = pd.Timestamp(item["bar_timestamp"])
+            saved_ts = saved_ts.tz_localize("UTC") if saved_ts.tzinfo is None else saved_ts.tz_convert("UTC")
+            base_pos = int(np.flatnonzero(idx_utc == saved_ts)[-1])
+            target_pos = base_pos + int(item.get("horizon_bars", horizon))
+            if target_pos >= len(df):
+                continue
+            base_close = float(item["reference_close"])
+            future_close = float(close_values[target_pos])
+            signal = item.get("signal")
+            if signal == "BUY":
+                result = "CORRECT" if future_close > base_close else "INCORRECT" if future_close < base_close else "FLAT"
+            elif signal == "SELL":
+                result = "CORRECT" if future_close < base_close else "INCORRECT" if future_close > base_close else "FLAT"
+            else:
+                # WAIT is tracked separately; no directional hit rate is assigned.
+                result = "WAIT_CHECKED"
+            item.update({"status": result, "evaluated_close": future_close,
+                         "evaluated_bar_timestamp": _normalise_timestamp(idx[target_pos]),
+                         "evaluated_at": datetime.now(JST).isoformat(),
+                         "move_pct": (future_close / base_close - 1.0) * 100.0 if base_close else None})
+            changed = True
+        except (KeyError, TypeError, ValueError, IndexError, OverflowError):
+            continue
+    if changed:
+        save_forecast_history(items)
+    return items
+
+
+def record_forecast_and_update(df, ticker, interval, signal, probs, horizon=LOOKAHEAD_BARS):
+    """Automatically log each completed bar once, then score matured forecasts."""
+    if df is None or df.empty:
+        return []
+    items = load_forecast_history()
+    bar_ts = _normalise_timestamp(df.index[-1])
+    exists = any(x.get("ticker") == ticker and x.get("interval") == interval and x.get("bar_timestamp") == bar_ts for x in items)
+    if not exists:
+        raw_signal = "BUY" if str(signal).startswith("BUY") else "SELL" if str(signal).startswith("SELL") else "WAIT"
+        items.append({"ticker": ticker, "interval": interval, "bar_timestamp": bar_ts,
+                      "reference_close": float(df["Close"].iloc[-1]), "signal": raw_signal,
+                      "buy_pct": int(probs.get("buy", 0)), "sell_pct": int(probs.get("sell", 0)),
+                      "wait_pct": int(probs.get("wait", 100)), "horizon_bars": int(horizon),
+                      "status": "PENDING", "created_at": datetime.now(JST).isoformat(),
+                      "data_source": "Yahoo Finance OHLC", "is_broker_trade": False})
+        items = items[-3000:]
+    items = update_forecast_history(items, df, ticker, interval, horizon)
+    save_forecast_history(items)
+    return items
 
 
 def update_entry_tracking_outcomes(items, df, ticker, interval, horizon=8):
@@ -761,6 +844,9 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             status = "SELL (売り)"
         else:
             status = "WAIT (様子見)"
+        # Automatically save a forecast per completed bar and score it after LOOKAHEAD_BARS.
+        # This evaluates price direction only; it does not infer actual trades or net profit.
+        record_forecast_and_update(data, ticker, interval, status, probs, LOOKAHEAD_BARS)
         atr_ratio = float(data["ATR_Ratio"].iloc[-1]) if "ATR_Ratio" in data else 0.0
         market_type = "トレンド相場" if adx >= 25 else "レンジ相場"
         if atr_ratio > 0.01:
@@ -1798,7 +1884,25 @@ def _render_main_area():
 
     elif active_section == APP_SECTIONS[4]:
         st.markdown("##### 🤖 AI予測モデルの評価と内訳")
-        st.info("モデルは価格データのラベルで再学習します。勝ち/負けボタンは記録用であり、自動的に教師データへ混ぜません。再学習はアプリが動作して分析処理が走った時に行われます。分類一致率は収益性を示すものではありません。")
+        st.info("モデルは価格データのラベルで再学習します。予測方向は確定足ごとに自動記録し、後続の確定足で自動採点します。利益/損失ボタンは取引メモで、教師データへ自動混入しません。再学習・採点はアプリが動作して分析処理が走った時に進みます。分類一致率は収益性を示すものではありません。")
+        # Automatic signal evaluation summary for the current pair/timeframe.
+        forecast_items = load_forecast_history()
+        forecast_items = update_forecast_history(forecast_items, data, ticker, tf_config["interval"], LOOKAHEAD_BARS)
+        relevant_forecasts = [x for x in forecast_items if x.get("ticker") == ticker and x.get("interval") == tf_config["interval"]]
+        resolved_forecasts = [x for x in relevant_forecasts if x.get("status") in ("CORRECT", "INCORRECT", "FLAT")]
+        directional_forecasts = [x for x in resolved_forecasts if x.get("signal") in ("BUY", "SELL")]
+        correct_forecasts = sum(x.get("status") == "CORRECT" for x in directional_forecasts)
+        st.markdown("##### 🔁 自動予測記録・方向性検証")
+        fc1, fc2, fc3 = st.columns(3)
+        fc1.metric("記録した予測", f"{len(relevant_forecasts)} 件")
+        fc2.metric("検証済み買い/売り", f"{len(directional_forecasts)} 件")
+        fc3.metric("方向一致率", f"{(correct_forecasts / len(directional_forecasts) * 100):.1f}%" if directional_forecasts else "データ不足")
+        st.caption(f"予測後{LOOKAHEAD_BARS}本の確定足終値で方向を自動採点します。WAITは方向一致率から除外。これはYahoo Finance価格の方向性検証で、実際の取引勝率・利益・約定を示すものではありません。検証はアプリが起動し、対象データを取得したときに進みます。")
+        if relevant_forecasts:
+            _fh = pd.DataFrame(relevant_forecasts).tail(30)
+            _cols = [c for c in ["bar_timestamp", "signal", "buy_pct", "sell_pct", "wait_pct", "status", "reference_close", "evaluated_close"] if c in _fh.columns]
+            st.dataframe(_fh[_cols].rename(columns={"bar_timestamp":"予測足時刻", "signal":"予測方向", "buy_pct":"買い(%)", "sell_pct":"売り(%)", "wait_pct":"様子見(%)", "status":"検証結果", "reference_close":"予測時価格", "evaluated_close":"検証時価格"}), use_container_width=True, hide_index=True)
+            st.download_button("📥 自動予測検証CSVを保存", data=pd.DataFrame(relevant_forecasts).to_csv(index=False).encode("utf-8-sig"), file_name=f"forecast_validation_{ticker.replace('=X','')}_{tf_config['interval']}.csv", mime="text/csv")
         # Update saved entry-candidate outcomes from subsequent completed bars.
         tracking_items = update_entry_tracking_outcomes(load_entry_tracking(), data, ticker, tf_config["interval"], LOOKAHEAD_BARS)
         st.markdown("##### 🎯 候補価格の到達実績")
