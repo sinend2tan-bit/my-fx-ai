@@ -37,6 +37,7 @@ st.set_page_config(page_title="AI FX分析ツール", page_icon="📈", layout="
 
 SETTINGS_FILE = "user_settings.json"
 FEEDBACK_FILE = "trade_feedback.json"
+ENTRY_TRACK_FILE = "entry_candidate_history.json"
 JST = ZoneInfo("Asia/Tokyo")
 
 DEFAULT_SETTINGS = {
@@ -292,6 +293,75 @@ def save_feedback_data(items):
             json.dump(items, f, ensure_ascii=False, indent=2, default=_json_default)
     except OSError as exc:
         st.error(f"フィードバックを保存できませんでした: {exc}")
+
+
+def load_entry_tracking():
+    """Load persisted candidate-price observations; these are not broker executions."""
+    try:
+        with open(ENTRY_TRACK_FILE, "r", encoding="utf-8") as f:
+            value = json.load(f)
+        return value if isinstance(value, list) else []
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def save_entry_tracking(items):
+    try:
+        # Keep the file bounded so it remains practical on mobile/local hosting.
+        with open(ENTRY_TRACK_FILE, "w", encoding="utf-8") as f:
+            json.dump(items[-1000:], f, ensure_ascii=False, indent=2, default=_json_default)
+    except OSError as exc:
+        st.error(f"候補価格の検証履歴を保存できませんでした: {exc}")
+
+
+def update_entry_tracking_outcomes(items, df, ticker, interval, horizon=8):
+    """Evaluate whether later OHLC bars touched saved candidate prices.
+
+    OHLC touch is only a market-data estimate, not proof of a broker fill.
+    If both entry and other levels fall within one bar, intrabar ordering is unknown.
+    """
+    if df is None or df.empty:
+        return items
+    changed = False
+    idx = pd.DatetimeIndex(df.index)
+    for item in items:
+        if item.get("ticker") != ticker or item.get("interval") != interval:
+            continue
+        if item.get("status") in ("HIT", "NOT_REACHED", "EXPIRED"):
+            continue
+        try:
+            saved_ts = pd.Timestamp(item.get("bar_timestamp"))
+            if saved_ts.tzinfo is None:
+                saved_ts = saved_ts.tz_localize("UTC")
+            else:
+                saved_ts = saved_ts.tz_convert("UTC")
+            idx_utc = idx.tz_localize("UTC") if idx.tz is None else idx.tz_convert("UTC")
+            future_positions = np.flatnonzero(idx_utc > saved_ts)
+            if len(future_positions) == 0:
+                continue
+            positions = future_positions[:horizon]
+            price = float(item["candidate_price"])
+            hit_position = None
+            for pos in positions:
+                row = df.iloc[int(pos)]
+                if float(row["Low"]) <= price <= float(row["High"]):
+                    hit_position = int(pos)
+                    break
+            if hit_position is not None:
+                item["status"] = "HIT"
+                item["bars_to_touch"] = int(np.flatnonzero(positions == hit_position)[0]) + 1
+                item["touch_bar_timestamp"] = _normalise_timestamp(idx[hit_position])
+                item["evaluated_at"] = datetime.now(JST).isoformat()
+                changed = True
+            elif len(future_positions) >= horizon:
+                item["status"] = "NOT_REACHED"
+                item["evaluated_at"] = datetime.now(JST).isoformat()
+                changed = True
+        except (TypeError, ValueError, KeyError, IndexError):
+            continue
+    if changed:
+        save_entry_tracking(items)
+    return items
 
 
 def clean_series(series):
@@ -1104,9 +1174,9 @@ with tab_single:
         ai_entry = entry_reference_price + entry_offset_atr if entry_style.startswith("押し目") else entry_reference_price - entry_offset_atr
         entry_order_type = "指値" if entry_style.startswith("押し目") else "逆指値"
 
-    st.markdown("##### 🧭 買い候補価格の根拠")
+    st.markdown("##### 🧭 AI候補価格の計算根拠")
     st.write(f"- 計算の基準価格：**{entry_reference_label}**（{price_fmt % entry_reference_price}）")
-    st.write(f"- 計算方法：基準価格 {'−' if entry_style.startswith('押し目') and ai_is_buy else '+' if entry_style.startswith('押し目') else '+' if ai_is_buy else '−'} ATRに基づく幅（{entry_offset_atr / pip_unit:.1f} pips）")
+    st.write(f"- 計算方法（到達確率の予測ではありません）：基準価格 {'−' if entry_style.startswith('押し目') and ai_is_buy else '+' if entry_style.startswith('押し目') else '+' if ai_is_buy else '−'} ATRに基づく幅（{entry_offset_atr / pip_unit:.1f} pips）")
     if matsui_quote is not None:
         distance_to_candidate = abs(float(ai_entry) - float(matsui_quote)) / pip_unit
         st.metric("現在レートから候補価格まで", f"{distance_to_candidate:.1f} pips")
@@ -1116,6 +1186,38 @@ with tab_single:
             st.caption("買いのブレイク逆指値は現在レートより上に置く候補です。上昇を追う方式なので、約定価格や損失リスクを注文前に確認してください。")
     else:
         st.warning("松井証券FXの現在レートが未入力のため、この候補価格は確定足終値を基準にした仮計算です。実際の注文価格として使わず、現在レートを入力して再計算してください。")
+
+    # Persistent validation of whether a proposed price was touched in the next 8 completed bars.
+    # Requires a manually confirmed Matsui quote; candle-close-only estimates are not tracked by default.
+    st.markdown("##### 🧪 候補価格の到達検証（履歴を保存）")
+    st.caption("候補価格が、その後8本の確定足の高値・安値の範囲に入ったかを記録します。到達は約定を意味しません。Bid/Ask、スプレッド、配信元の差、指値の順番は再現できません。")
+    if matsui_quote is None:
+        st.info("松井証券FXの現在レートを入力すると、現在レート基準の候補を検証履歴に保存できます。")
+    elif status.startswith("WAIT") or status.startswith("様子見"):
+        st.warning("AI判定が様子見のため、候補価格の検証保存はできません。")
+    else:
+        if st.button("📌 この候補価格を検証履歴に保存", key="save_entry_candidate", use_container_width=True):
+            track_items = load_entry_tracking()
+            bar_ts = _normalise_timestamp(data.index[-1])
+            duplicate = any(x.get("ticker") == ticker and x.get("interval") == tf_config["interval"]
+                            and x.get("bar_timestamp") == bar_ts and x.get("entry_style") == entry_style
+                            for x in track_items)
+            if duplicate:
+                st.warning("同じ通貨ペア・時間足・確定足・エントリー方針の候補は既に記録されています。")
+            else:
+                track_items.append({
+                    "ticker": ticker, "interval": tf_config["interval"],
+                    "bar_timestamp": bar_ts, "saved_at": datetime.now(JST).isoformat(),
+                    "signal": ai_direction, "entry_style": entry_style,
+                    "reference_label": entry_reference_label,
+                    "reference_price": float(entry_reference_price),
+                    "candidate_price": float(ai_entry),
+                    "side": "BUY" if ai_is_buy else "SELL",
+                    "source": "yfinance OHLC; candidate based on manually entered Matsui quote",
+                    "status": "PENDING", "horizon_bars": LOOKAHEAD_BARS,
+                })
+                save_entry_tracking(track_items)
+                st.success("検証履歴に保存しました。今後の更新で後続確定足を確認します。")
 
     quote_position_ok = None
     if matsui_quote is not None and ai_direction.startswith("BUY"):
@@ -1386,6 +1488,29 @@ with tab_repeat:
 with tab_ai:
     st.markdown("##### 🤖 AI予測モデルの評価と内訳")
     st.info("モデルは価格データのラベルで再学習します。勝ち/負けボタンは記録用であり、自動的に教師データへ混ぜません。再学習はアプリが動作して分析処理が走った時に行われます。分類一致率は収益性を示すものではありません。")
+    # Update saved entry-candidate outcomes from subsequent completed bars.
+    tracking_items = update_entry_tracking_outcomes(load_entry_tracking(), data, ticker, tf_config["interval"], LOOKAHEAD_BARS)
+    st.markdown("##### 🎯 候補価格の到達実績")
+    relevant_tracking = [x for x in tracking_items if x.get("ticker") == ticker and x.get("interval") == tf_config["interval"]]
+    resolved_tracking = [x for x in relevant_tracking if x.get("status") in ("HIT", "NOT_REACHED")]
+    hit_count = sum(x.get("status") == "HIT" for x in resolved_tracking)
+    pending_count = sum(x.get("status") == "PENDING" for x in relevant_tracking)
+    hit_rate = (hit_count / len(resolved_tracking) * 100) if resolved_tracking else None
+    tc1, tc2, tc3 = st.columns(3)
+    tc1.metric("検証済み候補", f"{len(resolved_tracking)} 件")
+    tc2.metric("8本以内に到達", f"{hit_count} 件")
+    tc3.metric("到達率", f"{hit_rate:.1f}%" if hit_rate is not None else "データ不足")
+    st.caption(f"未判定: {pending_count} 件。判定対象は後続の確定足最大{LOOKAHEAD_BARS}本です。到達率は利益率・約定率・将来予測精度ではなく、yfinanceのOHLCデータによる参考値です。")
+    if relevant_tracking:
+        track_df = pd.DataFrame(relevant_tracking)
+        display_cols = [c for c in ["saved_at", "signal", "entry_style", "reference_price", "candidate_price", "status", "bars_to_touch"] if c in track_df.columns]
+        st.dataframe(track_df[display_cols].rename(columns={"saved_at":"記録日時", "signal":"AI方向", "entry_style":"方針", "reference_price":"基準価格", "candidate_price":"候補価格", "status":"結果", "bars_to_touch":"到達までの本数"}).tail(30), use_container_width=True, hide_index=True)
+        st.download_button("📥 候補価格検証履歴CSV", data=track_df.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"entry_candidate_history_{ticker.replace('=X','')}_{tf_config['interval']}.csv",
+                           mime="text/csv", use_container_width=True)
+    else:
+        st.caption("まだ検証履歴がありません。単発トレードタブで松井証券FXの現在レートを入力し、候補を保存してください。")
+    st.markdown("---")
     pcol1,pcol2=st.columns(2)
     with pcol1:
         st.markdown("**最新確定バーのモデル出力確率（総合スコア）**")
