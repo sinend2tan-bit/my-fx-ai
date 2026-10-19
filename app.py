@@ -83,7 +83,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 5
+MODEL_VERSION = 6
 
 st.markdown("""
 <style>
@@ -833,8 +833,27 @@ if data is None or data.empty:
     st.error("データの取得に失敗したか、分析に必要な本数が不足しています。時間をおいて更新してください。")
     st.stop()
 
+last_bar_index = pd.Timestamp(data.index[-1])
 last_bar_jst = safe_to_tokyo_tz(data).index[-1].strftime("%Y-%m-%d %H:%M:%S")
 st.markdown(f'<div class="update-time">最終確定足の時刻: <b>{last_bar_jst} JST</b> (最新の未確定足は除外。取得時刻とは異なります)</div>', unsafe_allow_html=True)
+# Warn about stale bars, but avoid claiming a data outage during normal FX market closures.
+try:
+    if last_bar_index.tzinfo is None:
+        last_bar_utc = last_bar_index.tz_localize("UTC")
+    else:
+        last_bar_utc = last_bar_index.tz_convert("UTC")
+    now_utc = pd.Timestamp.now(tz="UTC")
+    age_minutes = max(0.0, (now_utc - last_bar_utc).total_seconds() / 60.0)
+    stale_limits = {"5m": 25, "15m": 55, "1h": 210, "4h": 510}
+    stale_limit = stale_limits.get(tf_config["interval"], 210)
+    if age_minutes > stale_limit:
+        st.warning(
+            f"価格データが通常より古い可能性があります（最終確定足から約{age_minutes / 60:.1f}時間）。"
+            "週末・市場休場・配信元の遅延の場合もあります。現在レートを証券会社画面で確認し、"
+            "データが更新されるまで新規注文の判断は見送ってください。"
+        )
+except Exception:
+    st.info("価格データの更新時刻を確認できませんでした。注文前に証券会社の現在レートを確認してください。")
 latest_price = float(clean_series(data["Close"]).iloc[-1])
 latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data else latest_price * 0.005
 force_retrain = bool(st.session_state.pop("force_retrain_once", False))
@@ -875,7 +894,14 @@ badge_html = '<div class="badge-buy">BUY</div>' if status.startswith("BUY") else
 m2.markdown(badge_html, unsafe_allow_html=True)
 m3.metric("時系列テスト分類一致率", f"{win_rate:.1f}%", f"検証数: {total_signals_count}本")
 m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
-st.caption("分類一致率は、過去のテスト区間でモデルの3クラス分類が一致した割合です。実際のトレード勝率ではありません。")
+st.caption("分類一致率は過去データの時系列テストで分類ラベルが一致した割合で、実際のトレード勝率・利益率ではありません。表示スプレッドは固定の参考値で、松井証券FXのリアルタイム提示スプレッドではありません。")
+_eval_metrics_display = st.session_state.get("model_eval_metrics", {})
+if _eval_metrics_display:
+    _em1, _em2, _em3 = st.columns(3)
+    _em1.metric("バランス一致率", f"{_eval_metrics_display.get('balanced_accuracy', 0):.1f}%")
+    _em2.metric("多数派だけの基準", f"{_eval_metrics_display.get('baseline_accuracy', 0):.1f}%")
+    _em3.metric("基準モデル比", "条件を満たす" if _eval_metrics_display.get("quality_ok", False) else "優位性未確認")
+    st.caption("バランス一致率は各クラスの当たりやすさを平均した指標です。検証件数が少ない場合は数値が不安定なため、売買判断の保証には使えません。")
 st.markdown("---")
 
 swing_high_4h = float(clean_series(data_4h["High"]).iloc[-300:].max()) if data_4h is not None else latest_price * 1.03
@@ -1427,7 +1453,7 @@ with tab_single:
     with sc1:
         # WAIT is not a sell signal; use BUY as a neutral UI default but clearly label this as manual input.
         trade_side = st.radio("売買方向（手動計算用）",["BUY (買い)","SELL (売り)"],index=0 if not status.startswith("SELL") else 1,horizontal=True)
-        entry_price = st.number_input("エントリー想定レート",value=float(latest_price),format=price_fmt,step=0.01 if is_jpy else 0.0001)
+        entry_price = st.number_input("エントリー想定レート", min_value=0.0, value=float(latest_price), format=price_fmt, step=0.01 if is_jpy else 0.0001)
     with sc2:
         sl_mode = st.radio("損切(SL)の決め方",["ATRベース (推奨)","固定 pips"],horizontal=True)
         if sl_mode == "ATRベース (推奨)":
@@ -1441,11 +1467,19 @@ with tab_single:
     is_buy_manual = trade_side.startswith("BUY")
     sl_price = entry_price-sl_pips*pip_unit if is_buy_manual else entry_price+sl_pips*pip_unit
     tp_price = entry_price+tp_pips*pip_unit if is_buy_manual else entry_price-tp_pips*pip_unit
-    loss_per_wan = (sl_pips+spread_pips)*pip_val_per_wan
-    raw_manual_wan = max_risk_yen/loss_per_wan if loss_per_wan>0 and np.isfinite(loss_per_wan) else 0
-    manual_wan = float(np.floor(raw_manual_wan*100)/100) if np.floor(raw_manual_wan*100)/100>=.01 else 0.0
-    expected_profit_yen = (tp_pips-spread_pips)*pip_val_per_wan*manual_wan
-    actual_loss_yen = (sl_pips+spread_pips)*pip_val_per_wan*manual_wan
+    loss_per_wan = (sl_pips + spread_pips) * pip_val_per_wan
+    raw_manual_wan = max_risk_yen / loss_per_wan if loss_per_wan > 0 and np.isfinite(loss_per_wan) else 0.0
+    manual_wan = float(np.floor(max(0.0, raw_manual_wan) * 100) / 100) if np.isfinite(raw_manual_wan) else 0.0
+    if manual_wan < 0.01:
+        manual_wan = 0.0
+    # Final conservative guard: never round the suggested quantity above the risk budget.
+    while manual_wan >= 0.01 and (not np.isfinite(loss_per_wan) or loss_per_wan * manual_wan > max_risk_yen + 1e-6):
+        manual_wan = round(manual_wan - 0.01, 2)
+    if not np.isfinite(entry_price) or entry_price <= 0 or not np.isfinite(sl_pips) or sl_pips <= 0:
+        manual_wan = 0.0
+        st.error("入力レートまたは損切幅が無効です。正の価格と損切幅を入力してください。")
+    expected_profit_yen = (tp_pips - spread_pips) * pip_val_per_wan * manual_wan
+    actual_loss_yen = (sl_pips + spread_pips) * pip_val_per_wan * manual_wan
     res_col1,res_col2,res_col3,res_col4=st.columns(4)
     res_col1.metric("調整後の手動ロット数",f"{manual_wan:.2f} 万通貨",f"許容リスク上限 {risk_pct}%")
     res_col2.metric("損切(SL) レート",price_fmt%sl_price,f"-{sl_pips:.1f} pips")
