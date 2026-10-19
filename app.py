@@ -904,6 +904,82 @@ stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
 stop_buffer_val = stop_buffer_pips * pip_unit
 buy_stop_loss, sell_stop_loss = user_lower - stop_buffer_val, user_upper + stop_buffer_val
 
+# All-pair scan: run only on explicit request to avoid slowing every rerun.
+st.markdown("### 🔎 全通貨ペアのトレード候補一覧")
+st.caption("選択中の時間足で登録済みの5通貨ペアをまとめて確認します。『候補あり』はAI条件を満たした参考候補で、注文可能・利益確実という意味ではありません。")
+scan_col, scan_note_col = st.columns([1, 2])
+with scan_col:
+    run_pair_scan = st.button("🔍 全通貨ペアを一括チェック", type="primary", use_container_width=True)
+with scan_note_col:
+    st.caption(f"対象時間足: {tf_label} / データ元: Yahoo Finance（松井証券FXの実レート・約定可否とは異なる場合があります）")
+
+if "pair_scan_results" not in st.session_state:
+    st.session_state["pair_scan_results"] = {}
+if run_pair_scan:
+    scan_results = []
+    original_eval_metrics = st.session_state.get("model_eval_metrics")
+    progress = st.progress(0, text="通貨ペアを確認しています…")
+    pair_items = list(PAIRS.items())
+    for idx, (pair_label, pair_ticker) in enumerate(pair_items, start=1):
+        try:
+            scan_data = load_and_process_data(pair_ticker, tf_config["period"], tf_config["interval"], tf_label)
+            scan_htf = load_and_process_data(pair_ticker, "2y", "1d", "日足")
+            if scan_data is None or scan_data.empty:
+                scan_results.append({"通貨ペア": pair_label, "判定": "データ不足", "AI方向": "—", "買い確率": "—", "売り確率": "—", "価格": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": "価格データを取得できません"})
+            else:
+                result = analyze_signal_with_backtest(scan_data, scan_htf, pair_ticker, tf_config["interval"])
+                sig, confidence, test_n, accuracy, market_type, probs, importances, history = result
+                metrics = st.session_state.get("model_eval_metrics", {})
+                last_price_scan = float(clean_series(scan_data["Close"]).iloc[-1])
+                atr_scan = float(clean_series(scan_data["ATR"]).iloc[-1]) if "ATR" in scan_data else 0.0
+                pip_scan = 0.01 if "JPY" in pair_ticker else 0.0001
+                spread_scan = DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5)
+                quality_ok = bool(metrics.get("quality_ok", False))
+                enough_movement = atr_scan / pip_scan >= spread_scan * 3 if pip_scan else False
+                directional = sig.startswith("BUY") or sig.startswith("SELL")
+                if directional and quality_ok and enough_movement:
+                    decision, reason = "候補あり", "AI方向・検証条件・値動き幅の目安を満たす"
+                elif not quality_ok:
+                    decision, reason = "見送り", "今回の時系列検証でAIの優位性を確認できない"
+                elif not enough_movement:
+                    decision, reason = "見送り", "ATRに対してスプレッド負担が大きい可能性"
+                else:
+                    decision, reason = "様子見", "明確な買い・売り条件なし"
+                scan_results.append({
+                    "通貨ペア": pair_label, "判定": decision,
+                    "AI方向": {"BUY (買い)":"買い", "SELL (売り)":"売り", "WAIT (様子見)":"様子見"}.get(sig, sig),
+                    "買い確率": f"{probs.get('buy', 0)}%", "売り確率": f"{probs.get('sell', 0)}%",
+                    "価格": f"{last_price_scan:.3f}" if "JPY" in pair_ticker else f"{last_price_scan:.5f}",
+                    "スプレッド目安(pips)": spread_scan, "検証一致率": f"{metrics.get('balanced_accuracy', 0):.1f}%" if metrics else "不足",
+                    "理由": reason,
+                })
+        except Exception as exc:
+            scan_results.append({"通貨ペア": pair_label, "判定": "確認失敗", "AI方向": "—", "買い確率": "—", "売り確率": "—", "価格": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": f"分析エラー: {type(exc).__name__}"})
+        progress.progress(idx / len(pair_items), text=f"確認中: {pair_label} ({idx}/{len(pair_items)})")
+    progress.empty()
+    st.session_state["pair_scan_results"] = {"time": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST"), "timeframe": tf_label, "rows": scan_results}
+    if original_eval_metrics is not None:
+        st.session_state["model_eval_metrics"] = original_eval_metrics
+    else:
+        st.session_state.pop("model_eval_metrics", None)
+
+saved_scan = st.session_state.get("pair_scan_results", {})
+if saved_scan.get("rows") and saved_scan.get("timeframe") == tf_label:
+    scan_df = pd.DataFrame(saved_scan["rows"])
+    available_count = int((scan_df["判定"] == "候補あり").sum()) if "判定" in scan_df else 0
+    sca, scb, scc = st.columns(3)
+    sca.metric("候補あり", f"{available_count} ペア")
+    scb.metric("チェック対象", f"{len(scan_df)} ペア")
+    scc.metric("最終チェック", saved_scan.get("time", "—"))
+    st.dataframe(scan_df, use_container_width=True, hide_index=True)
+    st.download_button("📥 通貨ペア一覧をCSV保存", data=scan_df.to_csv(index=False).encode("utf-8-sig"),
+                       file_name=f"pair_scan_{tf_config['interval']}.csv", mime="text/csv", use_container_width=False)
+    st.caption("候補ありでも即注文せず、松井証券FXの現在レート、Bid/Ask、スプレッド、指値の距離、損切り幅を確認してください。検証データ不足やデータ取得失敗は候補に含めません。")
+elif saved_scan.get("rows"):
+    st.info(f"保存済みの一覧は {saved_scan.get('timeframe')} です。現在の {tf_label} で『全通貨ペアを一括チェック』を押すと更新できます。")
+else:
+    st.info("まだ一括チェックしていません。ボタンを押すと、5通貨ペアのAI方向・検証状況・スプレッド目安をまとめて表示します。")
+
 tab_chart, tab_single, tab_news, tab_repeat, tab_ai = st.tabs([
     "📈 メインチャート", "⚡ 単発トレード (AI全自動アシスト)",
     "📰 経済指標＆為替ニュースAI予測", "📋 松井証券 リピート設定 & リスク管理",
