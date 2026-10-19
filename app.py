@@ -927,8 +927,52 @@ with tab_single:
     ai_sl_pips = max(1.0, round((latest_atr / pip_unit) * 1.5, 1))
     ai_rr_ratio = float(st.session_state["rr_ratio"])
     ai_tp_pips = round(ai_sl_pips * ai_rr_ratio, 1)
-    ai_entry = latest_price
+
+    # IFD-OCO helper: use a small ATR-based offset for an entry candidate rather than
+    # presenting the last confirmed candle close as a live executable quote.
+    st.markdown("#### 🧾 IFD-OCO注文入力ガイド")
+    st.caption("確定足の終値は松井証券FXの現在レートではありません。以下は注文候補の計算であり、自動発注は行いません。")
+    entry_style = st.radio(
+        "エントリー方針",
+        ["押し目・戻り待ち（指値）", "ブレイク追随（逆指値）"],
+        horizontal=True,
+        help="押し目・戻り待ちは有利な価格への戻りを待つ方法、ブレイク追随は一定の価格を抜けた場合に入る方法です。",
+        key="ifdoco_entry_style",
+    )
+    check_live_quote = st.checkbox(
+        "松井証券FXの現在レートを入力して、注文種類と価格位置を確認する",
+        value=False,
+        key="ifdoco_check_live_quote",
+    )
+    matsui_quote = None
+    if check_live_quote:
+        matsui_quote = st.number_input(
+            "松井証券FXの現在レート（画面に表示されている価格）",
+            min_value=0.0,
+            value=float(latest_price),
+            step=0.01 if is_jpy else 0.0001,
+            format=price_fmt,
+            help="松井証券FXの画面で確認して手入力してください。Yahoo Financeの確定足終値を現在レートとして扱わないでください。",
+            key="ifdoco_matsui_quote",
+        )
+        if matsui_quote <= 0:
+            st.warning("現在レートが無効です。価格位置の確認は行えません。")
+            matsui_quote = None
+
     ai_is_buy = ai_direction.startswith("BUY")
+    entry_offset_atr = max(float(latest_atr) * (0.5 if entry_style.startswith("押し目") else 0.2), pip_unit)
+    if ai_is_buy:
+        ai_entry = latest_price - entry_offset_atr if entry_style.startswith("押し目") else latest_price + entry_offset_atr
+        entry_order_type = "指値" if entry_style.startswith("押し目") else "逆指値"
+    else:
+        ai_entry = latest_price + entry_offset_atr if entry_style.startswith("押し目") else latest_price - entry_offset_atr
+        entry_order_type = "指値" if entry_style.startswith("押し目") else "逆指値"
+
+    quote_position_ok = None
+    if matsui_quote is not None and ai_direction.startswith("BUY"):
+        quote_position_ok = (ai_entry < matsui_quote) if entry_order_type == "指値" else (ai_entry > matsui_quote)
+    elif matsui_quote is not None and ai_direction.startswith("SELL"):
+        quote_position_ok = (ai_entry > matsui_quote) if entry_order_type == "指値" else (ai_entry < matsui_quote)
     ai_sl_price = ai_entry - ai_sl_pips*pip_unit if ai_is_buy else ai_entry + ai_sl_pips*pip_unit
     ai_tp_price = ai_entry + ai_tp_pips*pip_unit if ai_is_buy else ai_entry - ai_tp_pips*pip_unit
     ai_loss_per_wan = (ai_sl_pips + spread_pips) * pip_val_per_wan
@@ -976,7 +1020,7 @@ with tab_single:
         ・数量: <code>{ai_rec_wan:.2f} 万通貨</code> ({int(ai_rec_wan*10000):,}通貨) | 必要証拠金概算: <code>{int(req_margin_yen):,}円</code></div>""",unsafe_allow_html=True)
         copy_text = (
             f"通貨ペア: {selected_label}\n方向: {'買い' if ai_is_buy else '売り'}\n"
-            f"新規価格目安: {price_fmt % ai_entry}\n利確(TP): {price_fmt % ai_tp_price} ({ai_tp_pips:.1f} pips)\n"
+            f"新規注文種類: {entry_order_type} ({entry_style})\n新規価格候補: {price_fmt % ai_entry}\n利確(TP): {price_fmt % ai_tp_price} ({ai_tp_pips:.1f} pips)\n"
             f"損切(SL): {price_fmt % ai_sl_price} ({ai_sl_pips:.1f} pips)\n"
             f"数量: {ai_rec_wan:.2f} 万通貨\n必要証拠金概算: {int(req_margin_yen):,}円\n"
             f"想定損失: {int(ai_loss_yen):,}円\n想定スプレッド: {spread_pips:.1f} pips\n"
@@ -984,6 +1028,29 @@ with tab_single:
         )
         st.markdown("**コピー用テキスト**（コード枠のコピー機能を使用できます）")
         st.code(copy_text, language="text")
+
+    if not ai_direction.startswith("WAIT") and not is_risk_exceeded:
+        st.markdown("##### 松井証券FXへの転記目安（IFD-OCO）")
+        st.markdown(
+            f"""<div class="param-box">
+            <b>新規注文</b><br>
+            ・方向: <code>{'買い' if ai_is_buy else '売り'}</code><br>
+            ・注文種類: <code>{entry_order_type}</code><br>
+            ・新規注文価格候補: <code>{price_fmt % ai_entry}</code><br><br>
+            <b>新規注文が成立した後の決済注文（OCO）</b><br>
+            ・利益確定の指値: <code>{price_fmt % ai_tp_price}</code><br>
+            ・損切りの逆指値: <code>{price_fmt % ai_sl_price}</code><br>
+            ・数量: <code>{ai_rec_wan:.2f} 万通貨</code>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        if matsui_quote is None:
+            st.info("現在レート未入力のため、新規注文価格が指値・逆指値として適切な位置にあるかは未確認です。松井証券FXの最新レートと注文画面の条件を必ず確認してください。")
+        elif quote_position_ok:
+            st.success(f"入力した松井証券FXの現在レート {price_fmt % matsui_quote} に対して、価格位置は選択した注文種類（{entry_order_type}）と整合しています。Bid/Ask差や注文条件は別途確認してください。")
+        else:
+            st.warning(f"入力した現在レート {price_fmt % matsui_quote} に対して、候補価格が選択した注文種類（{entry_order_type}）に適した位置ではありません。現在レートを再確認するか、エントリー方針を変更してください。")
+        st.caption("IFD-OCOの入力名称や注文条件は松井証券FXの注文画面で確認してください。逆指値は急変時に指定価格どおりに約定するとは限りません。")
 
     st.markdown("##### 📝 トレード結果フィードバック")
     st.caption("結果の記録用です。現在の足と実際の取引条件が一致するとは限らないため、この記録をそのままAIの教師ラベルには使いません。")
