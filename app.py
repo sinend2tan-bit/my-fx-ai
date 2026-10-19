@@ -913,6 +913,98 @@ with tab_chart:
 with tab_single:
     st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）AI発注アシスタント")
     st.caption("AIの分析結果から注文条件の参考値を計算します。発注は行いません。")
+
+    # Signal transition log: records distinct signal states for the selected pair/timeframe/bar.
+    # This is an in-session history only; it does not know whether an order actually filled.
+    signal_history_key = "signal_transition_history"
+    if signal_history_key not in st.session_state:
+        st.session_state[signal_history_key] = []
+    signal_now = "BUY" if status.startswith("BUY") else "SELL" if status.startswith("SELL") else "WAIT"
+    signal_bar_ts = _normalise_timestamp(data.index[-1])
+    signal_log = st.session_state[signal_history_key]
+    relevant_log = [
+        x for x in signal_log
+        if x.get("ticker") == ticker and x.get("interval") == tf_config["interval"]
+    ]
+    previous_signal = relevant_log[-1].get("signal") if relevant_log else None
+    already_logged = any(
+        x.get("ticker") == ticker
+        and x.get("interval") == tf_config["interval"]
+        and x.get("bar_timestamp") == signal_bar_ts
+        and x.get("signal") == signal_now
+        for x in signal_log
+    )
+    if not already_logged:
+        signal_log.append({
+            "recorded_at": datetime.now(JST).isoformat(timespec="seconds"),
+            "ticker": ticker,
+            "interval": tf_config["interval"],
+            "bar_timestamp": signal_bar_ts,
+            "previous_signal": previous_signal or "（初回）",
+            "signal": signal_now,
+            "close": float(latest_price),
+            "confidence_pct": float(conf),
+        })
+        st.session_state[signal_history_key] = signal_log[-100:]
+        signal_log = st.session_state[signal_history_key]
+
+    st.markdown("#### 🔄 AI判定の変化・注文状況ガイド")
+    signal_col1, signal_col2 = st.columns(2)
+    with signal_col1:
+        st.metric("今回のAI判定", {"BUY": "BUY（買い）", "SELL": "SELL（売り）", "WAIT": "WAIT（様子見）"}[signal_now])
+    with signal_col2:
+        st.metric("前回記録した判定", previous_signal or "初回記録")
+    latest_signal_record = relevant_log[-1] if relevant_log else None
+    transition_from = previous_signal
+    if (latest_signal_record
+            and latest_signal_record.get("bar_timestamp") == signal_bar_ts
+            and latest_signal_record.get("signal") == signal_now):
+        transition_from = latest_signal_record.get("previous_signal", previous_signal)
+    if transition_from and transition_from not in (signal_now, "（初回）"):
+        st.warning(
+            f"AI判定が {transition_from} → {signal_now} に変化しました。"
+            "判定変更だけで注文が取消・決済されるわけではありません。実際の注文状況は松井証券FXの注文照会で確認してください。"
+        )
+    else:
+        st.caption("判定履歴は、このアプリのセッション中に確認した状態を記録します。アプリを閉じると履歴は保持されない場合があります。")
+
+    order_state = st.selectbox(
+        "現在の注文状況（ご自身で選択）",
+        ["まだ注文していない", "新規注文を発注したが未約定", "新規注文が約定しポジション保有中", "決済済み・注文取消済み"],
+        key="manual_order_state_guide",
+        help="アプリは松井証券FXの実際の注文状態を自動取得しません。注文照会を確認して選択してください。",
+    )
+    if order_state == "まだ注文していない":
+        if signal_now == "WAIT":
+            st.info("【対応】新規注文は急がず、次の確定足や条件成立を待つのが基本です。")
+        else:
+            st.info("【対応】最新の判定・現在レート・IFD-OCO候補を確認してから発注を判断してください。")
+    elif order_state == "新規注文を発注したが未約定":
+        st.warning("【対応】注文照会で有効期限・注文種類・価格を確認してください。最新判定がWAITに変わった場合は、注文を残すか取消すかを再検討してください。AI判定が変わっても注文は自動取消されません。")
+    elif order_state == "新規注文が約定しポジション保有中":
+        st.warning("【対応】現在の建玉、評価損益、IFD-OCOの決済注文が有効かを確認してください。WAITだけを理由に即時決済せず、事前の損切り条件と資金管理に従って判断してください。")
+    else:
+        st.info("【対応】注文照会で決済・取消が完了していることを確認し、次の取引は最新判定から検討してください。")
+
+    with st.expander("📜 BUY・SELL・WAITの判定履歴", expanded=False):
+        history_for_view = [x for x in st.session_state[signal_history_key] if x.get("ticker") == ticker and x.get("interval") == tf_config["interval"]]
+        if history_for_view:
+            history_df = pd.DataFrame(history_for_view).rename(columns={
+                "recorded_at": "記録時刻", "bar_timestamp": "確定足時刻", "previous_signal": "前回判定",
+                "signal": "今回判定", "close": "確定足終値", "confidence_pct": "確信度(%)",
+                "ticker": "通貨ペア", "interval": "時間足"
+            })
+            st.dataframe(history_df.tail(20), use_container_width=True, hide_index=True)
+            st.download_button(
+                "📥 判定履歴CSVを保存",
+                data=history_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"signal_transition_{ticker.replace('=X','')}_{tf_config['interval']}.csv",
+                mime="text/csv",
+                key="download_signal_transition_history",
+            )
+        else:
+            st.caption("この通貨ペア・時間足の履歴はまだありません。")
+
     current_usdjpy_rate = get_usdjpy_rate()
     if not is_jpy and current_usdjpy_rate is None:
         st.error("為替換算用のUSD/JPYレートが取得できません。換算が必要なため数量計算を停止します。")
