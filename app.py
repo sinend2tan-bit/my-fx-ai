@@ -949,10 +949,10 @@ with tab_single:
         matsui_quote = st.number_input(
             "松井証券FXの現在レート（画面に表示されている価格）",
             min_value=0.0,
-            value=float(latest_price),
+            value=0.0,
             step=0.01 if is_jpy else 0.0001,
             format=price_fmt,
-            help="松井証券FXの画面で確認して手入力してください。Yahoo Financeの確定足終値を現在レートとして扱わないでください。",
+            help="初期値は0です。松井証券FXの画面に表示されている現在レートを確認して入力してください。確定足終値を現在レートとして流用しないでください。",
             key="ifdoco_matsui_quote",
         )
         if matsui_quote <= 0:
@@ -960,12 +960,53 @@ with tab_single:
             matsui_quote = None
 
     ai_is_buy = ai_direction.startswith("BUY")
+    ai_sl_pips = max(1.0, round((latest_atr / pip_unit) * 1.5, 1))
+    ai_rr_ratio = float(st.session_state["rr_ratio"])
+    ai_tp_pips = round(ai_sl_pips * ai_rr_ratio, 1)
+
+    # 1時間足の確定終値とリアルタイム価格の乖離を明示し、
+    # 現在レートを入力した場合はその価格を基準に注文候補を再計算する。
+    quote_gap_pips = None
+    quote_gap_threshold_pips = max(5.0, (latest_atr / pip_unit) * 0.25)
+    quote_gap_large = False
+    if matsui_quote is not None:
+        quote_gap_pips = abs(matsui_quote - latest_price) / pip_unit
+        quote_gap_large = quote_gap_pips > quote_gap_threshold_pips
+        entry_reference_price = float(matsui_quote)
+    else:
+        entry_reference_price = float(latest_price)
+
+    gap_acknowledged = False
+    if matsui_quote is not None:
+        st.markdown("##### 現在レートと確定足の差")
+        gap_col1, gap_col2, gap_col3 = st.columns(3)
+        gap_col1.metric("確定足終値", price_fmt % latest_price)
+        gap_col2.metric("入力した現在レート", price_fmt % matsui_quote)
+        gap_col3.metric("価格差", f"{quote_gap_pips:.1f} pips", f"しきい値 {quote_gap_threshold_pips:.1f} pips" if quote_gap_large else "通常範囲")
+        if quote_gap_large:
+            st.warning(
+                f"確定足と現在レートの差が大きめです（{quote_gap_pips:.1f} pips）。"
+                "古い確定足の価格をそのまま注文に使わないでください。以下の候補は入力した現在レートを基準に再計算します。"
+            )
+            gap_acknowledged = st.checkbox(
+                "松井証券FXの現在レートを再確認し、このレートを基準にした候補値であることを確認しました",
+                value=False,
+                key="ifdoco_gap_acknowledged",
+            )
+        else:
+            st.info("現在レートを基準に注文候補を計算します。Bid/Askの違いと注文画面の条件は別途確認してください。")
+    else:
+        st.warning(
+            f"現在レートが未入力です。確定足終値 {price_fmt % latest_price} はリアルタイム価格ではありません。"
+            "注文候補は参考表示に限り、松井証券FXの現在レートを入力するまで転記用の価格として使わないでください。"
+        )
+
     entry_offset_atr = max(float(latest_atr) * (0.5 if entry_style.startswith("押し目") else 0.2), pip_unit)
     if ai_is_buy:
-        ai_entry = latest_price - entry_offset_atr if entry_style.startswith("押し目") else latest_price + entry_offset_atr
+        ai_entry = entry_reference_price - entry_offset_atr if entry_style.startswith("押し目") else entry_reference_price + entry_offset_atr
         entry_order_type = "指値" if entry_style.startswith("押し目") else "逆指値"
     else:
-        ai_entry = latest_price + entry_offset_atr if entry_style.startswith("押し目") else latest_price - entry_offset_atr
+        ai_entry = entry_reference_price + entry_offset_atr if entry_style.startswith("押し目") else entry_reference_price - entry_offset_atr
         entry_order_type = "指値" if entry_style.startswith("押し目") else "逆指値"
 
     quote_position_ok = None
@@ -1009,7 +1050,10 @@ with tab_single:
     else:
         st.info(f"参考シグナル: {status}（モデル出力確信度 {conf:.1f}%、分類一致率 {win_rate:.1f}%）")
     if ai_direction.startswith("WAIT") or is_risk_exceeded:
-        st.markdown(f'<div class="param-box"><b>【注文補助】</b><br>売買方向: <code>WAIT（見送り）</code><br>推奨数量: <code>0.00 万通貨</code><br>確定足価格: <code>{price_fmt % ai_entry}</code></div>',unsafe_allow_html=True)
+        st.markdown(f'<div class="param-box"><b>【注文補助】</b><br>売買方向: <code>WAIT（見送り）</code><br>推奨数量: <code>0.00 万通貨</code><br>参考価格: <code>{price_fmt % ai_entry}</code></div>',unsafe_allow_html=True)
+    elif matsui_quote is None or (quote_gap_large and not gap_acknowledged):
+        st.warning("現在レートの入力、または価格差の確認が完了するまで、転記用の注文プランは確定扱いにしません。下記の数値は参考候補です。")
+        st.markdown(f'<div class="param-box"><b>【参考候補・未確認】</b><br>方向: <code>{"買い" if ai_is_buy else "売り"}</code><br>注文種類: <code>{entry_order_type}</code><br>候補価格: <code>{price_fmt % ai_entry}</code><br>利確候補: <code>{price_fmt % ai_tp_price}</code><br>損切候補: <code>{price_fmt % ai_sl_price}</code><br>推奨数量: <code>{ai_rec_wan:.2f} 万通貨</code></div>',unsafe_allow_html=True)
     else:
         if ai_tp_pips <= spread_pips:
             st.warning("利確幅が想定スプレッド以下です。コストを考慮すると不利な可能性があるため、利確幅を見直してください。")
@@ -1029,7 +1073,7 @@ with tab_single:
         st.markdown("**コピー用テキスト**（コード枠のコピー機能を使用できます）")
         st.code(copy_text, language="text")
 
-    if not ai_direction.startswith("WAIT") and not is_risk_exceeded:
+    if not ai_direction.startswith("WAIT") and not is_risk_exceeded and matsui_quote is not None and (not quote_gap_large or gap_acknowledged):
         st.markdown("##### 松井証券FXへの転記目安（IFD-OCO）")
         st.markdown(
             f"""<div class="param-box">
@@ -1044,13 +1088,11 @@ with tab_single:
             </div>""",
             unsafe_allow_html=True,
         )
-        if matsui_quote is None:
-            st.info("現在レート未入力のため、新規注文価格が指値・逆指値として適切な位置にあるかは未確認です。松井証券FXの最新レートと注文画面の条件を必ず確認してください。")
-        elif quote_position_ok:
+        if quote_position_ok:
             st.success(f"入力した松井証券FXの現在レート {price_fmt % matsui_quote} に対して、価格位置は選択した注文種類（{entry_order_type}）と整合しています。Bid/Ask差や注文条件は別途確認してください。")
         else:
             st.warning(f"入力した現在レート {price_fmt % matsui_quote} に対して、候補価格が選択した注文種類（{entry_order_type}）に適した位置ではありません。現在レートを再確認するか、エントリー方針を変更してください。")
-        st.caption("IFD-OCOの入力名称や注文条件は松井証券FXの注文画面で確認してください。逆指値は急変時に指定価格どおりに約定するとは限りません。")
+        st.caption("入力したレートは参考価格で、Bid/Askの別を自動判別していません。IFD-OCOの入力名称や注文条件は松井証券FXの注文画面で確認してください。逆指値は急変時に指定価格どおりに約定するとは限りません。")
 
     st.markdown("##### 📝 トレード結果フィードバック")
     st.caption("結果の記録用です。現在の足と実際の取引条件が一致するとは限らないため、この記録をそのままAIの教師ラベルには使いません。")
