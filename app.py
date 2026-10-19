@@ -814,6 +814,25 @@ st.sidebar.header("⚙️ 資金 & リスク設定")
 st.sidebar.number_input("口座資金 (円)", min_value=10000, step=50000, key="account_balance", on_change=save_settings)
 st.sidebar.number_input("1注文の基本数量 (万通貨)", min_value=0.01, step=0.01, key="quantity_wan", on_change=save_settings)
 st.sidebar.markdown("---")
+st.sidebar.header("🕒 取引スタイル")
+trade_style = st.sidebar.radio(
+    "保有時間に合わせて分析の見方を切り替え",
+    ["短期（数分〜数時間）", "中期（1〜数日）", "長期（数日以上）"],
+    index=["短期（数分〜数時間）", "中期（1〜数日）", "長期（数日以上）"].index(
+        st.session_state.get("trade_style", "中期（1〜数日）")
+    ) if st.session_state.get("trade_style", "中期（1〜数日）") in ["短期（数分〜数時間）", "中期（1〜数日）", "長期（数日以上）"] else 1,
+    key="trade_style",
+    help="表示する推奨時間足と確認ポイントを切り替えます。AIモデル自体の学習条件は自動変更しません。",
+)
+_STYLE_GUIDANCE = {
+    "短期（数分〜数時間）": ("15分足で方向・形を確認し、5分足はエントリータイミングの補助に使います。1時間足・4時間足も逆方向の大きな流れがないか確認してください。", "15分足 → 5分足（補助） → 1時間足で逆行リスク確認"),
+    "中期（1〜数日）": ("4時間足で方向を決め、1時間足でエントリーを検討します。15分足はタイミング調整に限定し、5分足の細かな値動きに振り回されないようにします。", "4時間足 → 1時間足 → 15分足（補助）"),
+    "長期（数日以上）": ("利用できる最長の4時間足を中心に、1時間足でエントリーを検討します。日足は内部の参考分析に使いますが、画面の選択肢にはありません。長期保有では週末・経済指標・スワップを必ず確認してください。", "4時間足 → 1時間足。日足は内部参考データ"),
+}
+_style_text, _style_sequence = _STYLE_GUIDANCE[trade_style]
+st.sidebar.caption("推奨：" + _style_sequence)
+st.sidebar.caption(_style_text)
+st.sidebar.markdown("---")
 st.sidebar.header("🎯 単発トレード リスク設定")
 st.sidebar.number_input("1取引あたりの許容リスク (%)", min_value=0.1, max_value=5.0, step=0.1, key="risk_percent", on_change=save_settings)
 st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_value=0.5, max_value=5.0, step=0.1, key="rr_ratio", on_change=save_settings)
@@ -897,6 +916,8 @@ def _render_main_area():
     with st.spinner("最新相場データ & ニュースを取得中..."):
         data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
         data_4h = load_and_process_data(ticker, "90d", "4h", "4時間足 (中期・リピート用)")
+        data_1h = data if tf_config["interval"] == "1h" else load_and_process_data(ticker, "60d", "1h", "1時間足 (方向確認用)")
+        data_15m = data if tf_config["interval"] == "15m" else load_and_process_data(ticker, "30d", "15m", "15分足 (タイミング確認用)")
         data_htf = load_and_process_data(ticker, "2y", "1d", "日足")
         news_result = fetch_news_and_impact(ticker)
         news_items = news_result.get("items", []) if isinstance(news_result, dict) else []
@@ -970,6 +991,51 @@ def _render_main_area():
     m3.metric("時系列テスト分類一致率", f"{win_rate:.1f}%", f"検証数: {total_signals_count}本")
     m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
     st.caption("分類一致率は過去データの時系列テストで分類ラベルが一致した割合で、実際のトレード勝率・利益率ではありません。表示スプレッドは固定の参考値で、松井証券FXのリアルタイム提示スプレッドではありません。")
+
+    # Multi-timeframe context panel: trend alignment is a descriptive filter, not a standalone signal.
+    def _trend_summary(frame):
+        try:
+            if frame is None or frame.empty or "Close" not in frame or len(frame) < 50:
+                return "データ不足", None
+            close = clean_series(frame["Close"]).dropna()
+            if len(close) < 50:
+                return "データ不足", None
+            ema20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+            ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
+            last = float(close.iloc[-1])
+            if last > ema20 > ema50:
+                return "上昇", 1
+            if last < ema20 < ema50:
+                return "下降", -1
+            return "中立・混在", 0
+        except Exception:
+            return "判定不可", None
+
+    _trend_frames = [("4時間足", data_4h), ("1時間足", data_1h), ("15分足", data_15m), ("日足（参考）", data_htf)]
+    _trend_rows = []
+    _trend_signs = {}
+    for _tf_name, _tf_frame in _trend_frames:
+        _trend_text, _trend_sign = _trend_summary(_tf_frame)
+        _trend_rows.append({"時間足": _tf_name, "EMA20/50による方向の目安": _trend_text})
+        _trend_signs[_tf_name] = _trend_sign
+    with st.expander("🧭 マルチ時間足の方向確認（補助判定）", expanded=True):
+        st.caption("終値とEMA20・EMA50の位置関係による簡易判定です。将来の方向や利益を保証せず、AI推奨アクションを置き換えるものではありません。")
+        st.dataframe(pd.DataFrame(_trend_rows), use_container_width=True, hide_index=True)
+        if trade_style == "短期（数分〜数時間）":
+            _required_trends = [_trend_signs.get("15分足"), _trend_signs.get("1時間足")]
+            _mode_label = "15分足・1時間足"
+        elif trade_style == "中期（1〜数日）":
+            _required_trends = [_trend_signs.get("4時間足"), _trend_signs.get("1時間足")]
+            _mode_label = "4時間足・1時間足"
+        else:
+            _required_trends = [_trend_signs.get("日足（参考）"), _trend_signs.get("4時間足")]
+            _mode_label = "日足（参考）・4時間足"
+        if None in _required_trends:
+            st.info(f"{trade_style}：{_mode_label}の方向一致は、データ不足のため判定できません。")
+        elif _required_trends[0] == _required_trends[1] and _required_trends[0] in (1, -1):
+            st.success(f"{trade_style}：{_mode_label}の方向は一致しています（{ '上昇' if _required_trends[0] == 1 else '下降' }）。ほかの条件とリスクも確認してください。")
+        else:
+            st.warning(f"{trade_style}：{_mode_label}の方向が一致していないか、中立です。無理なエントリーを避けるための注意表示です。")
     _eval_metrics_display = st.session_state.get("model_eval_metrics", {})
     if _eval_metrics_display:
         _em1, _em2, _em3 = st.columns(3)
