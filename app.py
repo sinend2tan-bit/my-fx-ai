@@ -7,6 +7,7 @@ import html
 import json
 import os
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -424,7 +425,13 @@ def _impact_from_text(title, summary=""):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_news_and_impact(ticker):
+    """Fetch Yahoo Finance headlines first, then official central-bank RSS as fallback.
+
+    This is headline keyword triage only, not semantic AI or a directional forecast.
+    Returns source/status metadata so an empty feed is visible to the user.
+    """
     items = []
+    errors = []
     try:
         d = yf.Ticker(ticker)
         news = d.news or []
@@ -445,12 +452,65 @@ def fetch_news_and_impact(ticker):
             canonical = content.get("canonicalUrl", {}) if isinstance(content.get("canonicalUrl"), dict) else {}
             link = canonical.get("url") or n.get("link") or "#"
             impact, reason, direction = _impact_from_text(str(title), str(content.get("summary", "")))
-            items.append({"title": str(title), "publisher": str(publisher or "配信元不明"),
+            items.append({"title": str(title), "publisher": str(publisher or "Yahoo Finance"),
                           "time": time_str, "link": str(link), "impact": impact,
-                          "reason": reason, "direction": direction})
-    except Exception:
-        return []
-    return items
+                          "reason": reason, "direction": direction, "source": "Yahoo Finance"})
+    except Exception as exc:
+        errors.append(f"Yahoo Finance: {type(exc).__name__}")
+
+    # If Yahoo has no currency headlines, use official central-bank feeds as a fallback.
+    # These are official announcements, not a full economic calendar or real-time newswire.
+    if not items and requests is not None:
+        feeds = [
+            ("日本銀行（公式）", "https://www.boj.or.jp/rss/whatsnew.xml"),
+            ("米連邦準備制度（公式）", "https://www.federalreserve.gov/feeds/press_monetary.xml"),
+        ]
+        for publisher, url in feeds:
+            try:
+                response = requests.get(url, timeout=6, headers={"User-Agent": "Mozilla/5.0 FX-analysis-tool"})
+                response.raise_for_status()
+                root = ET.fromstring(response.content)
+                nodes = root.findall(".//item")
+                if not nodes:
+                    nodes = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+                for node in nodes:
+                    title_node = node.find("title")
+                    if title_node is None:
+                        title_node = node.find("{http://www.w3.org/2005/Atom}title")
+                    title = (title_node.text or "").strip() if title_node is not None else ""
+                    if not title:
+                        continue
+                    # Keep macro / monetary-policy related headlines rather than unrelated notices.
+                    lower_title = title.lower()
+                    terms = ("金融政策", "政策金利", "物価", "経済", "為替", "日銀", "総裁", "金融", "monetary", "fomc", "interest rate", "inflation", "economic", "federal funds", "policy rate")
+                    if not any(term in lower_title for term in terms):
+                        continue
+                    link = "#"
+                    link_node = node.find("link")
+                    if link_node is not None:
+                        link = link_node.attrib.get("href", "#") if link_node.attrib else (link_node.text or "#")
+                    if link == "#":
+                        atom_link = node.find("{http://www.w3.org/2005/Atom}link")
+                        if atom_link is not None:
+                            link = atom_link.attrib.get("href", "#")
+                    date_node = node.find("pubDate") or node.find("{http://www.w3.org/2005/Atom}updated") or node.find("{http://www.w3.org/2005/Atom}published")
+                    time_str = (date_node.text or "")[:25] if date_node is not None else "時刻不明"
+                    impact, reason, direction = _impact_from_text(title)
+                    items.append({"title": title, "publisher": publisher, "time": time_str,
+                                  "link": link, "impact": impact, "reason": reason,
+                                  "direction": direction, "source": publisher})
+                if len(items) >= 12:
+                    break
+            except Exception as exc:
+                errors.append(f"{publisher}: {type(exc).__name__}")
+    items = items[:12]
+    if items:
+        status = "取得成功（見出しのキーワード分類のみ）"
+    elif requests is None:
+        status = "取得失敗：requests が利用できず、公式RSSへの代替接続もできません"
+    else:
+        status = "取得できるニュースがありません。ネットワーク、配信元、取得制限を確認してください"
+    return {"items": items, "status": status, "errors": errors}
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -761,6 +821,14 @@ st.sidebar.markdown("---")
 st.sidebar.header("🎯 単発トレード リスク設定")
 st.sidebar.number_input("1取引あたりの許容リスク (%)", min_value=0.1, max_value=5.0, step=0.1, key="risk_percent", on_change=save_settings)
 st.sidebar.number_input("デフォルト リスクリワード比 (RR)", min_value=0.5, max_value=5.0, step=0.1, key="rr_ratio", on_change=save_settings)
+def apply_conservative_risk_defaults():
+    # A transparent conservative preset, not a claim of AI-optimized profitability.
+    st.session_state["risk_percent"] = 0.5
+    st.session_state["rr_ratio"] = 1.5
+    save_settings()
+st.sidebar.button("🛡️ 安全寄りの基本設定を適用", on_click=apply_conservative_risk_defaults,
+                  help="許容リスク0.5%、RR1.5に設定します。利益を保証する設定ではありません。")
+st.sidebar.caption("※リスク率は資金管理の設定です。AIが勝率を保証して自動最適化するものではありません。")
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 AIモデル管理（自己学習つき）")
 if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)"):
@@ -836,7 +904,10 @@ with st.spinner("最新相場データ & ニュースを取得中..."):
     data = load_and_process_data(ticker, tf_config["period"], tf_config["interval"], tf_label)
     data_4h = load_and_process_data(ticker, "90d", "4h", "4時間足 (中期・リピート用)")
     data_htf = load_and_process_data(ticker, "2y", "1d", "日足")
-    news_items = fetch_news_and_impact(ticker)
+    news_result = fetch_news_and_impact(ticker)
+    news_items = news_result.get("items", []) if isinstance(news_result, dict) else []
+    news_status = news_result.get("status", "ニュース取得状況は不明です") if isinstance(news_result, dict) else "ニュース取得状況は不明です"
+    news_errors = news_result.get("errors", []) if isinstance(news_result, dict) else []
 if data_4h is None and data is not None:
     data_4h = data
 if data is None or data.empty:
@@ -1541,6 +1612,12 @@ with tab_single:
 with tab_news:
     st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
     st.caption("ニュース見出しのキーワード参考表示です。本文理解や実際の市場反応を保証するAI予測ではありません。")
+    if news_items:
+        st.success(f"ニュース状態：{news_status}（{len(news_items)}件）")
+    else:
+        st.warning(f"ニュース状態：{news_status}")
+        if news_errors:
+            st.caption("接続診断：" + " / ".join(news_errors[:3]))
     with st.expander("🔔 主要経済指標と為替への影響パターン",expanded=True):
         st.markdown("""
         | 経済指標・イベント | 注目ポイント | ドル円への一般的な影響例 |
@@ -1558,7 +1635,7 @@ with tab_news:
         for news in news_items:
             st.markdown(f"""<div class="news-card">
             <div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;">
-            <span style="font-weight:bold;color:#38bdf8;">{html.escape(str(news.get('publisher','')))} ({html.escape(str(news.get('time','')) )})</span>
+            <span style="font-weight:bold;color:#38bdf8;">{html.escape(str(news.get('publisher','')))} / {html.escape(str(news.get('source','')))} ({html.escape(str(news.get('time','')) )})</span>
             <span>{html.escape(str(news.get('impact','')))}</span></div>
             <div style="font-size:1.05rem;font-weight:800;margin-bottom:8px;">
             <a href="{html.escape(str(news.get('link','#')),quote=True)}" target="_blank" rel="noopener noreferrer" style="color:#f8fafc;text-decoration:none;">{html.escape(str(news.get('title','')))} 🔗</a></div>
