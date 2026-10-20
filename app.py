@@ -1140,16 +1140,6 @@ def _render_main_area():
         elif _s4h == 0 or _s1h == 0 or _s4h != _s1h:
             status = "WAIT（複数時間足不一致）"
             mtf_gate_reason = "4時間足・1時間足の方向が一致していないため、判定保留です。"
-        else:
-            # Important: alignment alone is not enough. The AI's raw signal must
-            # also agree with the aligned 4h/1h direction; otherwise show WAIT.
-            _aligned_direction = "BUY" if _s4h == 1 else "SELL"
-            if status.startswith("BUY") and _aligned_direction != "BUY":
-                status = "WAIT（AIと時間足が逆方向）"
-                mtf_gate_reason = "AIは買い方向ですが、4時間足・1時間足は下降です。方向が一致しないため判定保留です。"
-            elif status.startswith("SELL") and _aligned_direction != "SELL":
-                status = "WAIT（AIと時間足が逆方向）"
-                mtf_gate_reason = "AIは売り方向ですが、4時間足・1時間足は上昇です。方向が一致しないため判定保留です。"
     std_series = clean_series(data["Close"]).rolling(20, min_periods=1).std()
     band_width_pct = float((std_series.iloc[-1] * 4.0) / (latest_price + 1e-10) * 100)
     adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data else 20.0
@@ -1217,7 +1207,7 @@ def _render_main_area():
         _trend_rows.append({"時間足": _tf_name, "EMA20/50による方向の目安": _trend_text})
         _trend_signs[_tf_name] = _trend_sign
     with st.expander("🧭 マルチ時間足の方向確認（詳細）", expanded=False):
-        st.caption("終値とEMA20・EMA50の位置関係による簡易判定です。デイトレードでは4時間足・1時間足を方向確認、15分足をタイミング補助、日足を背景確認に使います。AI推奨と4時間足・1時間足が逆方向の場合、最終推奨は様子見にします。将来の方向や利益を保証するものではありません。")
+        st.caption("終値とEMA20・EMA50の位置関係による簡易判定です。デイトレードでは4時間足・1時間足を方向確認、15分足をタイミング補助、日足を背景確認に使います。将来の方向や利益を保証せず、AI推奨アクションを置き換えるものではありません。")
         st.dataframe(pd.DataFrame(_trend_rows), use_container_width=True, hide_index=True)
         if trade_style == "短期（数分〜数時間）":
             _required_trends = [_trend_signs.get("15分足"), _trend_signs.get("1時間足")]
@@ -1424,8 +1414,14 @@ def _render_main_area():
     )
 
     if active_section == APP_SECTIONS[0]:
-        st.markdown("##### 📈 インタラクティブ・メインチャート")
-        st.caption("ボタンで表示本数を切替。十字カーソルとマウスホイールでズームできます。")
+        st.markdown("##### 📈 メインチャート")
+        st.caption("通常は固定表示です。表示が動いて見失うのを防ぎ、表示本数や指標は下の操作欄から変更できます。")
+        chart_interactive = st.toggle(
+            "チャートの拡大・移動を有効にする",
+            value=False,
+            key="chart_interactive_toggle",
+            help="通常はOFFがおすすめです。ONにするとチャート上で拡大・移動できます。"
+        )
         qc1, qc2, qc3, qc4, qc5 = st.columns([1.2, 1.2, 1.2, 2.0, 2.4])
         with qc1: btn_50 = st.button("直近 50本", use_container_width=True)
         with qc2: btn_120 = st.button("標準 120本", use_container_width=True)
@@ -1487,11 +1483,48 @@ def _render_main_area():
             fig.update_yaxes(side="right",row=2,col=1)
         chart_high, chart_low = float(df_chart["High"].max()), float(df_chart["Low"].min())
         span = max(chart_high-chart_low, chart_high*.002)
-        fig.update_layout(xaxis_rangeslider_visible=False,height=580,margin=dict(l=10,r=70,t=25,b=10),template="plotly_dark",
-                          hovermode="x unified",showlegend=True,legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="right",x=1))
-        fig.update_xaxes(type="date",rangebreaks=[dict(bounds=["sat","mon"])] if tf_config["interval"] in ("5m","15m","1h") else [],showspikes=True,spikemode="across")
-        fig.update_yaxes(range=[chart_low-span*.05,chart_high+span*.05],side="right",tickformat=".3f" if is_jpy else ".5f",row=1,col=1)
-        st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displayModeBar":True,"displaylogo":False})
+        fig.update_layout(
+            xaxis_rangeslider_visible=False,
+            height=580,
+            margin=dict(l=10, r=70, t=25, b=10),
+            template="plotly_dark",
+            hovermode="x unified" if chart_interactive else False,
+            dragmode="pan" if chart_interactive else False,
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+            uirevision=f"{ticker}-{tf_config['interval']}-{bars_count}-{sub_indicator}",
+        )
+        fig.update_xaxes(
+            type="date",
+            rangebreaks=[dict(bounds=["sat", "mon"])] if tf_config["interval"] in ("5m", "15m", "1h") else [],
+            showspikes=chart_interactive,
+            spikemode="across" if chart_interactive else None,
+            fixedrange=not chart_interactive,
+        )
+        fig.update_yaxes(
+            range=[chart_low-span*.05, chart_high+span*.05],
+            side="right",
+            tickformat=".3f" if is_jpy else ".5f",
+            fixedrange=not chart_interactive,
+            row=1,
+            col=1,
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={
+                "scrollZoom": bool(chart_interactive),
+                "displayModeBar": bool(chart_interactive),
+                "displaylogo": False,
+                "doubleClick": "reset" if chart_interactive else False,
+                "responsive": True,
+            },
+            key="main_chart_plot",
+        )
+        if chart_interactive:
+            st.caption("操作ヒント：ドラッグで移動、ホイール／ピンチで拡大、ダブルタップ（ダブルクリック）でリセットできます。操作後に見失った場合は、このスイッチをOFFにして固定表示へ戻してください。")
+        else:
+            st.caption("固定表示中：チャートを触っても拡大・移動しません。見たい範囲は『直近50本／標準120本／長期250本』または表示本数スライダーで切り替えてください。")
 
     elif active_section == APP_SECTIONS[1]:
         st.markdown("##### ⚡ 単発トレード（スキャル・デイトレ）AI発注アシスタント")
@@ -1606,7 +1639,7 @@ def _render_main_area():
         # IFD-OCO helper: use a small ATR-based offset for an entry candidate rather than
         # presenting the last confirmed candle close as a live executable quote.
         st.markdown("#### 🧾 単発注文の入力ガイド")
-        st.caption("成行での単発トレードにも対応しました。松井証券FXの現在レートを入力して計算します。自動発注は行いません。")
+        st.caption("AIが方向・損切り幅・利確幅・数量を計算します。手入力は松井証券FXの現在レート確認が中心です。口座への接続・自動発注は行いません。")
         entry_style = st.radio(
             "エントリー方針",
             ["成行（現在レートで単発）", "押し目・戻り待ち（指値）", "ブレイク追随（逆指値）"],
@@ -1917,22 +1950,40 @@ def _render_main_area():
             st.checkbox("想定損失額と必要証拠金を確認した", key="preflight_risk_margin")
             st.checkbox("経済指標・急変・週末リスクを確認した", key="preflight_events")
             st.warning("成行は入力した参考価格で約定する保証がありません。実際の損失はスリッページ・価格飛び・スプレッド拡大で計算上限を超える場合があります。")
-        st.markdown("##### 🛠️ 注文条件の手動微調整")
-        sc1, sc2 = st.columns(2)
-        with sc1:
-            # WAIT is not a sell signal; use BUY as a neutral UI default but clearly label this as manual input.
-            trade_side = st.radio("売買方向（手動計算用）",["BUY (買い)","SELL (売り)"],index=0 if not status.startswith("SELL") else 1,horizontal=True)
-            entry_price = st.number_input("エントリー想定レート", min_value=0.0, value=float(latest_price), format=price_fmt, step=0.01 if is_jpy else 0.0001)
-        with sc2:
-            sl_mode = st.radio("損切(SL)の決め方",["ATRベース (推奨)","固定 pips"],horizontal=True)
-            if sl_mode == "ATRベース (推奨)":
-                atr_multiplier = st.slider("ATR倍率",0.5,3.0,1.5,0.1)
-                sl_pips = max(1.0,round(latest_atr/pip_unit*atr_multiplier,1))
-                st.info(f"現在のATRから算出した損切幅: **{sl_pips:.1f} pips**")
-            else:
-                sl_pips = st.number_input("損切幅 (pips)",min_value=1.0,value=float(ai_sl_pips),step=1.0)
-        rr_value = st.slider("リスクリワード比 (RR)",0.5,4.0,value=float(min(4,max(.5,st.session_state["rr_ratio"]))),step=.1)
-        slippage_pips = st.number_input("想定スリッページ (片道 pips)", min_value=0.0, max_value=20.0, value=1.0, step=0.5, help="成行約定のずれを見込むための仮定値です。実際のスリッページを予測・保証するものではありません。")
+        # Keep the manual calculator synchronized with a newly entered Matsui quote
+        # unless the user has deliberately overridden that price themselves.
+        _manual_existing_entry = st.session_state.get("manual_calc_entry_price")
+        _manual_last_auto_entry = st.session_state.get("manual_calc_last_auto_entry")
+        _manual_price_is_auto = (
+            _manual_existing_entry is None
+            or _manual_last_auto_entry is None
+            or abs(float(_manual_existing_entry) - float(_manual_last_auto_entry)) < (pip_unit / 10)
+        )
+        if matsui_quote is not None and _manual_price_is_auto:
+            st.session_state["manual_calc_entry_price"] = float(matsui_quote)
+            st.session_state["manual_calc_last_auto_entry"] = float(matsui_quote)
+        elif _manual_existing_entry is None:
+            st.session_state["manual_calc_last_auto_entry"] = float(latest_price)
+
+        with st.expander("🛠️ 注文条件の手動微調整（必要な場合のみ）", expanded=False):
+            st.caption("通常はAI提案の注文プランを確認してください。ここは条件を自分で変更したい場合だけ使います。")
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                # AI direction preselects the manual calculator; WAIT is never treated as a sell signal.
+                trade_side = st.radio("売買方向（計算用）",["BUY (買い)","SELL (売り)"],index=0 if not status.startswith("SELL") else 1,horizontal=True, key="manual_calc_trade_side")
+                # If the user has entered a Matsui quote above, use it as the initial calculation price.
+                _manual_entry_default = float(matsui_quote) if matsui_quote is not None else float(latest_price)
+                entry_price = st.number_input("エントリー想定レート", min_value=0.0, value=_manual_entry_default, format=price_fmt, step=0.01 if is_jpy else 0.0001, key="manual_calc_entry_price")
+            with sc2:
+                sl_mode = st.radio("損切(SL)の決め方",["ATRベース (推奨)","固定 pips"],index=0,horizontal=True, key="manual_calc_sl_mode")
+                if sl_mode == "ATRベース (推奨)":
+                    atr_multiplier = st.slider("ATR倍率",0.5,3.0,1.5,0.1, key="manual_calc_atr_multiplier")
+                    sl_pips = max(1.0,round(latest_atr/pip_unit*atr_multiplier,1))
+                    st.info(f"現在のATRから算出した損切幅: **{sl_pips:.1f} pips**")
+                else:
+                    sl_pips = st.number_input("損切幅 (pips)",min_value=1.0,value=float(ai_sl_pips),step=1.0, key="manual_calc_fixed_sl")
+            rr_value = st.slider("リスクリワード比 (RR)",0.5,4.0,value=float(min(4,max(.5,st.session_state["rr_ratio"]))),step=.1, key="manual_calc_rr")
+            slippage_pips = st.number_input("想定スリッページ (片道 pips)", min_value=0.0, max_value=20.0, value=1.0, step=0.5, key="manual_calc_slippage", help="成行約定のずれを見込むための仮定値です。実際のスリッページを予測・保証するものではありません。")
         tp_pips = round(sl_pips*rr_value,1)
         is_buy_manual = trade_side.startswith("BUY")
         sl_price = entry_price-sl_pips*pip_unit if is_buy_manual else entry_price+sl_pips*pip_unit
