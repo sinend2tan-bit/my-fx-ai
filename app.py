@@ -30,6 +30,8 @@ except Exception:
 
 st.set_page_config(page_title="AI FX分析ツール", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
+# Safety notice: this application is an analysis aid only; never sends orders to a broker.
+
 SETTINGS_FILE = "user_settings.json"
 FEEDBACK_FILE = "trade_feedback.json"
 ENTRY_TRACK_FILE = "entry_candidate_history.json"
@@ -798,6 +800,15 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         pred_test = eval_model.predict(X_test)
         accuracy = float(accuracy_score(y_test, pred_test) * 100)
         balanced_accuracy = float(balanced_accuracy_score(y_test, pred_test) * 100)
+        # Multiclass Brier score on chronological holdout; lower is better.
+        # This is a probability-quality diagnostic, not a trading-profit metric.
+        eval_prob = eval_model.predict_proba(X_test)
+        eval_classes = [int(c) for c in eval_model.classes_]
+        y_true_matrix = np.zeros((len(y_test), len(eval_classes)), dtype=float)
+        y_test_values = y_test.to_numpy(dtype=int)
+        for _ci, _class_value in enumerate(eval_classes):
+            y_true_matrix[:, _ci] = (y_test_values == _class_value).astype(float)
+        brier_score = float(np.mean(np.sum((eval_prob - y_true_matrix) ** 2, axis=1)))
         # A simple majority-class baseline helps detect a model that looks accurate
         # only because one label dominates the test set.
         baseline_model = DummyClassifier(strategy="most_frequent")
@@ -812,8 +823,12 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             "balanced_accuracy": balanced_accuracy,
             "baseline_accuracy": baseline_accuracy,
             "baseline_balanced_accuracy": baseline_balanced_accuracy,
+            "brier_score": brier_score,
             "quality_ok": model_quality_ok,
             "test_count": int(len(y_test)),
+            "train_count": int(len(X_train)),
+            "test_start": str(X_test.index[0]),
+            "test_end": str(X_test.index[-1]),
         }
         test_count = int(len(y_test))
 
@@ -1132,14 +1147,28 @@ def _render_main_area():
             return None
 
     mtf_gate_reason = None
-    if trade_style == "デイトレード（当日決済）" and not data_is_stale:
-        _s4h, _s1h = _quick_trend_sign(data_4h), _quick_trend_sign(data_1h)
-        if _s4h is None or _s1h is None:
+    # Apply a conservative multi-timeframe consistency check for every trading style.
+    # Required timeframes are descriptive EMA trend filters, not standalone signals.
+    _trend_requirements = {
+        "短期（数分〜数時間）": [("15分足", data_15m), ("1時間足", data_1h)],
+        "デイトレード（当日決済）": [("4時間足", data_4h), ("1時間足", data_1h)],
+        "中期（1〜数日）": [("日足", data_htf), ("4時間足", data_4h)],
+        "長期（数日以上）": [("日足", data_htf), ("4時間足", data_4h)],
+    }
+    _required = _trend_requirements.get(trade_style, _trend_requirements["デイトレード（当日決済）"])
+    _required_signs = [(name, _quick_trend_sign(frame)) for name, frame in _required]
+    _direction = 1 if str(status).startswith("BUY") else -1 if str(status).startswith("SELL") else 0
+    if not data_is_stale and _direction != 0:
+        if any(sign is None for _, sign in _required_signs):
             status = "WAIT（複数時間足データ不足）"
-            mtf_gate_reason = "4時間足・1時間足の方向を確認できないため、判定保留です。"
-        elif _s4h == 0 or _s1h == 0 or _s4h != _s1h:
-            status = "WAIT（複数時間足不一致）"
-            mtf_gate_reason = "4時間足・1時間足の方向が一致していないため、判定保留です。"
+            mtf_gate_reason = "必要な時間足のデータが不足しているため、AIの買い・売り判定を保留しました。"
+        elif any(sign == 0 for _, sign in _required_signs):
+            status = "WAIT（時間足の方向不明瞭）"
+            mtf_gate_reason = "必要な時間足の方向が中立・混在のため、AIの買い・売り判定を保留しました。"
+        elif any(sign != _direction for _, sign in _required_signs):
+            _against = [name for name, sign in _required_signs if sign != _direction]
+            status = "WAIT（AIと時間足が不一致）"
+            mtf_gate_reason = "AI判定と時間足の方向が一致しません（" + "・".join(_against) + "）。無理に方向を決めず、判定を保留しました。"
     std_series = clean_series(data["Close"]).rolling(20, min_periods=1).std()
     band_width_pct = float((std_series.iloc[-1] * 4.0) / (latest_price + 1e-10) * 100)
     adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data else 20.0
@@ -1157,6 +1186,8 @@ def _render_main_area():
         vol_alert_msg = f"⚡ 【ボラティリティ収縮】ボリンジャー幅が狭くなっています（{band_width_pct:.2f}%）。急変動を予測・保証するものではありません。"
     if vol_alert_msg:
         st.markdown(f'<div class="alert-box">{html.escape(vol_alert_msg)}</div>', unsafe_allow_html=True)
+        if is_volatility_expanding or adx_val_curr > 28.0:
+            st.warning("値動きが強まっている可能性があります。成行で追いかけず、Bid/Ask・スプレッド・損切り幅を確認してください。急変動の方向や経済指標の発表時刻を、この検知だけで確定することはできません。")
         webhook_url = st.session_state.get("webhook_url", "")
         if webhook_url:
             key = f"last_webhook_{ticker}_{tf_config['interval']}"
@@ -1174,7 +1205,7 @@ def _render_main_area():
     m2.markdown(badge_html, unsafe_allow_html=True)
     m3.metric("時系列テスト分類一致率", f"{win_rate:.1f}%", f"検証数: {total_signals_count}本")
     m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
-    st.caption("分類一致率は予測ラベルの一致率で、実際の勝率・利益率ではありません。スプレッドは参考値です。")
+    st.caption("価格データはYahoo Finance由来で、松井証券FXのリアルタイムBid/Askや約定価格とは異なる場合があります。分類一致率は予測ラベルの一致率で、実際の勝率・利益率ではありません。スプレッドは参考値です。")
     if mtf_gate_reason:
         st.warning(mtf_gate_reason)
     elif trade_style == "デイトレード（当日決済）" and not data_is_stale:
@@ -1238,9 +1269,15 @@ def _render_main_area():
     if _eval_metrics_display:
         _em1, _em2, _em3 = st.columns(3)
         _em1.metric("バランス一致率", f"{_eval_metrics_display.get('balanced_accuracy', 0):.1f}%")
-        _em2.metric("多数派だけの基準", f"{_eval_metrics_display.get('baseline_accuracy', 0):.1f}%")
+        _em2.metric("多数派だけの基準", f"{_eval_metrics_display.get('baseline_balanced_accuracy', 0):.1f}%")
         _em3.metric("基準モデル比", "条件を満たす" if _eval_metrics_display.get("quality_ok", False) else "優位性未確認")
-        st.caption("バランス一致率は各クラスの当たりやすさを平均した指標です。検証件数が少ない場合は数値が不安定なため、売買判断の保証には使えません。")
+        with st.expander("AI検証の詳細", expanded=False):
+            _ed1, _ed2, _ed3 = st.columns(3)
+            _ed1.metric("検証サンプル", f"{_eval_metrics_display.get('test_count', 0)}件")
+            _ed2.metric("学習サンプル", f"{_eval_metrics_display.get('train_count', 0)}件")
+            _ed3.metric("Brierスコア", f"{_eval_metrics_display.get('brier_score', float('nan')):.3f}", help="多クラス確率誤差の目安。低いほど良い傾向ですが、利益率ではありません。")
+            st.caption(f"検証期間：{_eval_metrics_display.get('test_start', '—')} ～ {_eval_metrics_display.get('test_end', '—')}")
+        st.caption("バランス一致率は各クラスの当たりやすさを平均した指標です。Brierスコアは予測確率の誤差の目安です。どちらも実際の勝率・利益や将来の精度を保証しません。")
     st.markdown("---")
 
     swing_high_4h = float(clean_series(data_4h["High"]).iloc[-300:].max()) if data_4h is not None else latest_price * 1.03
@@ -1390,7 +1427,7 @@ def _render_main_area():
         st.dataframe(scan_df, use_container_width=True, hide_index=True)
         st.download_button("📥 通貨ペア一覧をCSV保存", data=scan_df.to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"pair_scan_{tf_config['interval']}.csv", mime="text/csv", use_container_width=False)
-        st.caption("候補ありでも即注文せず、松井証券FXの現在レート、Bid/Ask、スプレッド、指値の距離、損切り幅を確認してください。検証データ不足やデータ取得失敗は候補に含めません。")
+        st.caption("候補ありでも即注文せず、松井証券FXの現在レート、Bid/Ask、スプレッド、指値の距離、損切り幅を確認してください。検証指標は分析時に算出された参考値で、通貨ペア別の十分な検証を保証しません。検証データ不足やデータ取得失敗は候補に含めません。")
     elif saved_scan.get("rows"):
         st.info(f"保存済みの一覧は {saved_scan.get('timeframe')} です。現在の {tf_label} で『全通貨ペアを一括チェック』を押すと更新できます。")
     else:
