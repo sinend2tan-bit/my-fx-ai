@@ -1,5 +1,5 @@
 # app.py
-# Pro FX Analyzer & Signal Pro — リスク表示・実取引ジャーナル改善版
+# Pro FX Analyzer & Signal Pro — デイトレード・複数時間足・予測検証改善版
 # 価格分析・注文補助専用です。証券口座接続・自動発注は行いません。
 # 予測確率・バックテスト結果は将来の利益や実際の勝率を保証しません。
 
@@ -75,6 +75,7 @@ TIMEFRAMES = {
     "15分足": {"interval": "15m", "period": "30d"},
     "1時間足": {"interval": "1h", "period": "60d"},
     "4時間足": {"interval": "4h", "period": "90d"},
+    "日足": {"interval": "1d", "period": "2y"},
 }
 DEFAULT_SPREAD_PIPS = {
     "USDJPY=X": 0.2, "EURUSD=X": 0.4, "GBPJPY=X": 1.0,
@@ -372,7 +373,7 @@ def update_forecast_history(items, df, ticker, interval, horizon=LOOKAHEAD_BARS)
                 # don't leave the forecast pending forever or score it against a wrong bar.
                 latest_ts = idx_utc[-1]
                 expected_horizon = max(1, int(item.get("horizon_bars", horizon)))
-                interval_minutes = {"5m": 5, "15m": 15, "1h": 60, "4h": 240}.get(str(interval), 60)
+                interval_minutes = {"5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}.get(str(interval), 60)
                 elapsed_minutes = max(0.0, (latest_ts - saved_ts).total_seconds() / 60.0)
                 if elapsed_minutes > interval_minutes * (expected_horizon + 3):
                     item.update({
@@ -902,7 +903,7 @@ if "settings_loaded" not in st.session_state:
     st.session_state["settings_loaded"] = True
 
 st.title("AI FX分析ツール")
-st.caption("AI分析・注文条件の計算補助専用。証券口座への接続・自動発注は行いません。まず通貨ペア・時間足・資金設定を選び、必要な画面だけ確認してください。")
+st.caption("AI分析・注文条件の計算補助専用。証券口座への接続・自動発注は行いません。デイトレード向けに日足・4時間足・1時間足・15分足を組み合わせ、保存済み予測の通貨ペア別・時間足別検証を確認できます。")
 
 # iPad / スマートフォンで selectbox の検索キーボードが出る不便さを避けるため、
 # 通貨ペア・時間足はタップで切り替えるラジオボタンにする。
@@ -938,17 +939,18 @@ st.sidebar.markdown("---")
 st.sidebar.header("🕒 取引スタイル")
 trade_style = st.sidebar.radio(
     "保有時間に合わせて分析の見方を切り替え",
-    ["短期（数分〜数時間）", "中期（1〜数日）", "長期（数日以上）"],
-    index=["短期（数分〜数時間）", "中期（1〜数日）", "長期（数日以上）"].index(
-        st.session_state.get("trade_style", "中期（1〜数日）")
-    ) if st.session_state.get("trade_style", "中期（1〜数日）") in ["短期（数分〜数時間）", "中期（1〜数日）", "長期（数日以上）"] else 1,
+    ["短期（数分〜数時間）", "デイトレード（当日決済）", "中期（1〜数日）", "長期（数日以上）"],
+    index=["短期（数分〜数時間）", "デイトレード（当日決済）", "中期（1〜数日）", "長期（数日以上）"].index(
+        st.session_state.get("trade_style", "デイトレード（当日決済）")
+    ) if st.session_state.get("trade_style", "デイトレード（当日決済）") in ["短期（数分〜数時間）", "デイトレード（当日決済）", "中期（1〜数日）", "長期（数日以上）"] else 1,
     key="trade_style",
     help="表示する推奨時間足と確認ポイントを切り替えます。AIモデル自体の学習条件は自動変更しません。",
 )
 _STYLE_GUIDANCE = {
-    "短期（数分〜数時間）": ("15分足で方向・形を確認し、5分足はエントリータイミングの補助に使います。1時間足・4時間足も逆方向の大きな流れがないか確認してください。", "15分足 → 5分足（補助） → 1時間足で逆行リスク確認"),
-    "中期（1〜数日）": ("4時間足で方向を決め、1時間足でエントリーを検討します。15分足はタイミング調整に限定し、5分足の細かな値動きに振り回されないようにします。", "4時間足 → 1時間足 → 15分足（補助）"),
-    "長期（数日以上）": ("利用できる最長の4時間足を中心に、1時間足でエントリーを検討します。日足は内部の参考分析に使いますが、画面の選択肢にはありません。長期保有では週末・経済指標・スワップを必ず確認してください。", "4時間足 → 1時間足。日足は内部参考データ"),
+    "短期（数分〜数時間）": ("15分足で方向・形を確認し、5分足はエントリータイミングの補助に使います。1時間足・4時間足も逆方向の大きな流れがないか確認してください。", "15分足 → 5分足（補助） → 1時間足・4時間足で逆行リスク確認"),
+    "デイトレード（当日決済）": ("4時間足で大きな方向、1時間足で当日の流れ、15分足で成行エントリーのタイミングを確認します。日足は重要な節目と逆方向リスクの参考にします。", "日足（背景） → 4時間足 → 1時間足 → 15分足（タイミング）"),
+    "中期（1〜数日）": ("4時間足で方向を決め、1時間足でエントリーを検討します。15分足はタイミング調整に限定し、5分足の細かな値動きに振り回されないようにします。日足も背景として確認します。", "日足（背景） → 4時間足 → 1時間足 → 15分足（補助）"),
+    "長期（数日以上）": ("日足で相場全体の方向、4時間足でエントリー候補を確認します。週末・経済指標・スワップ・保有中のギャップリスクを確認してください。", "日足 → 4時間足 → 1時間足（補助）"),
 }
 _style_text, _style_sequence = _STYLE_GUIDANCE[trade_style]
 st.sidebar.caption("推奨：" + _style_sequence)
@@ -1151,7 +1153,7 @@ def _render_main_area():
         except Exception:
             return "判定不可", None
 
-    _trend_frames = [("4時間足", data_4h), ("1時間足", data_1h), ("15分足", data_15m), ("日足（参考）", data_htf)]
+    _trend_frames = [("日足（参考）", data_htf), ("4時間足", data_4h), ("1時間足", data_1h), ("15分足", data_15m)]
     _trend_rows = []
     _trend_signs = {}
     for _tf_name, _tf_frame in _trend_frames:
@@ -1159,20 +1161,23 @@ def _render_main_area():
         _trend_rows.append({"時間足": _tf_name, "EMA20/50による方向の目安": _trend_text})
         _trend_signs[_tf_name] = _trend_sign
     with st.expander("🧭 マルチ時間足の方向確認（補助判定）", expanded=True):
-        st.caption("終値とEMA20・EMA50の位置関係による簡易判定です。将来の方向や利益を保証せず、AI推奨アクションを置き換えるものではありません。")
+        st.caption("終値とEMA20・EMA50の位置関係による簡易判定です。デイトレードでは4時間足・1時間足を方向確認、15分足をタイミング補助、日足を背景確認に使います。将来の方向や利益を保証せず、AI推奨アクションを置き換えるものではありません。")
         st.dataframe(pd.DataFrame(_trend_rows), use_container_width=True, hide_index=True)
         if trade_style == "短期（数分〜数時間）":
             _required_trends = [_trend_signs.get("15分足"), _trend_signs.get("1時間足")]
             _mode_label = "15分足・1時間足"
-        elif trade_style == "中期（1〜数日）":
+        elif trade_style == "デイトレード（当日決済）":
             _required_trends = [_trend_signs.get("4時間足"), _trend_signs.get("1時間足")]
-            _mode_label = "4時間足・1時間足"
+            _mode_label = "4時間足・1時間足（15分足はタイミング補助）"
+        elif trade_style == "中期（1〜数日）":
+            _required_trends = [_trend_signs.get("日足（参考）"), _trend_signs.get("4時間足"), _trend_signs.get("1時間足")]
+            _mode_label = "日足・4時間足・1時間足"
         else:
             _required_trends = [_trend_signs.get("日足（参考）"), _trend_signs.get("4時間足")]
-            _mode_label = "日足（参考）・4時間足"
+            _mode_label = "日足・4時間足"
         if None in _required_trends:
             st.info(f"{trade_style}：{_mode_label}の方向一致は、データ不足のため判定できません。")
-        elif _required_trends[0] == _required_trends[1] and _required_trends[0] in (1, -1):
+        elif all(x == _required_trends[0] for x in _required_trends) and _required_trends[0] in (1, -1):
             st.success(f"{trade_style}：{_mode_label}の方向は一致しています（{ '上昇' if _required_trends[0] == 1 else '下降' }）。ほかの条件とリスクも確認してください。")
         else:
             st.warning(f"{trade_style}：{_mode_label}の方向が一致していないか、中立です。無理なエントリーを避けるための注意表示です。")
@@ -2027,6 +2032,30 @@ def _render_main_area():
         fc3.metric("方向一致率", f"{(correct_forecasts / len(directional_forecasts) * 100):.1f}%" if directional_forecasts else "データ不足")
         fc4.metric("採点対象外", f"{len(expired_forecasts)} 件")
         st.caption(f"予測後{LOOKAHEAD_BARS}本の確定足終値で方向を自動採点します。WAITは方向一致率から除外。取得範囲外になった未検証記録は誤採点せず『採点対象外』へ変更します。これはYahoo Finance価格の方向性検証で、実際の取引勝率・利益・約定を示すものではありません。検証はアプリが起動し、対象データを取得したときに進みます。")
+
+        # Cross-pair/timeframe view from already stored forecast records; no extra market-data calls.
+        _all_resolved = [x for x in forecast_items if x.get("status") in ("CORRECT", "INCORRECT", "FLAT") and x.get("signal") in ("BUY", "SELL")]
+        if _all_resolved:
+            _all_df = pd.DataFrame(_all_resolved)
+            _all_df["通貨ペア"] = _all_df["ticker"].map({v: k for k, v in PAIRS.items()}).fillna(_all_df["ticker"])
+            _all_df["時間足"] = _all_df["interval"].map({"5m":"5分足", "15m":"15分足", "1h":"1時間足", "4h":"4時間足", "1d":"日足"}).fillna(_all_df["interval"])
+            _all_df["一致"] = _all_df["status"].eq("CORRECT")
+            _all_df["不一致"] = _all_df["status"].eq("INCORRECT")
+            _all_df["横ばい"] = _all_df["status"].eq("FLAT")
+            _summary = _all_df.groupby(["通貨ペア", "時間足"], dropna=False).agg(
+                検証件数=("status", "size"), 方向一致=("一致", "sum"), 方向不一致=("不一致", "sum"), 横ばい=("横ばい", "sum")
+            ).reset_index()
+            _summary["方向一致率（横ばい除外）"] = _summary.apply(
+                lambda r: f"{r['方向一致'] / (r['方向一致'] + r['方向不一致']) * 100:.1f}%"
+                if (r['方向一致'] + r['方向不一致']) else "データ不足", axis=1
+            )
+            st.markdown("##### 🌐 通貨ペア・時間足別の検証成績")
+            st.dataframe(_summary.sort_values(["通貨ペア", "時間足"]), use_container_width=True, hide_index=True)
+            st.caption("保存済みの検証記録のみを集計しています。まだ記録がない組み合わせは表示されません。検証件数が少ない組み合わせの一致率は参考値です。")
+            st.download_button("📥 全通貨ペア・時間足の検証集計CSV", data=_summary.to_csv(index=False).encode("utf-8-sig"), file_name="forecast_validation_pair_timeframe_summary.csv", mime="text/csv")
+        else:
+            st.info("通貨ペア・時間足別の集計は、各組み合わせの予測検証記録が蓄積すると表示されます。")
+
         if relevant_forecasts:
             # Confidence bands are descriptive historical summaries, not guarantees.
             _resolved_df = pd.DataFrame(resolved_forecasts)
