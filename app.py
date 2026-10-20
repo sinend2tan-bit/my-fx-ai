@@ -44,6 +44,8 @@ DEFAULT_SETTINGS = {
     "quantity_wan": 0.10,
     "auto_refresh": False,
     "auto_pair_scan": False,
+    "pair_scan_interval_minutes": 15,
+    "pair_scan_timeframe": "1時間足",
     "risk_percent": 1.0,
     "rr_ratio": 1.5,
     "trap_width": 30,
@@ -239,6 +241,14 @@ def load_settings():
         result["trap_width"] = DEFAULT_SETTINGS["trap_width"]
     result["auto_refresh"] = bool(result.get("auto_refresh", False))
     result["auto_pair_scan"] = bool(result.get("auto_pair_scan", False))
+    try:
+        result["pair_scan_interval_minutes"] = int(result.get("pair_scan_interval_minutes", 15))
+    except (TypeError, ValueError):
+        result["pair_scan_interval_minutes"] = 15
+    if result["pair_scan_interval_minutes"] not in (15, 30, 60):
+        result["pair_scan_interval_minutes"] = 15
+    if result.get("pair_scan_timeframe") not in ("1時間足", "4時間足"):
+        result["pair_scan_timeframe"] = "1時間足"
     result["trade_memo"] = str(result.get("trade_memo", ""))[:20000]
     # Never trust a webhook URL restored from a settings backup.
     result["webhook_url"] = str(result.get("webhook_url", "")) if str(result.get("webhook_url", "")).lower().startswith("https://") else ""
@@ -962,7 +972,7 @@ if "settings_loaded" not in st.session_state:
     st.session_state["settings_loaded"] = True
 
 st.title("AI FX分析ツール")
-st.caption("AI分析・注文条件の計算補助専用。証券口座への接続・自動発注は行いません。デイトレード向けに日足・4時間足・1時間足・15分足を組み合わせ、保存済み予測の通貨ペア別・時間足別検証を確認できます。データが古い場合は売買推奨を判定保留にします。")
+st.caption("AI分析・注文条件の計算補助専用。証券口座への接続・自動発注は行いません。数時間〜数日保有向けに日足・4時間足・1時間足・15分足を組み合わせ、保存済み予測の通貨ペア別・時間足別検証を確認できます。データが古い場合は売買推奨を判定保留にします。")
 
 # iPad / スマートフォンで selectbox の検索キーボードが出る不便さを避けるため、
 # 通貨ペア・時間足はタップで切り替えるラジオボタンにする。
@@ -1385,117 +1395,193 @@ def _render_main_area():
     stop_buffer_val = stop_buffer_pips * pip_unit
     buy_stop_loss, sell_stop_loss = user_lower - stop_buffer_val, user_upper + stop_buffer_val
 
-    # All-pair scan: run only on explicit request to avoid slowing every rerun.
-    st.markdown("### 🔎 全通貨ペアのトレード候補一覧")
-    st.caption("ボタンを押すと5通貨ペアを一括確認します。古いデータは判定保留。候補は参考情報で、注文可能・利益確実を意味しません。")
-    scan_col, scan_note_col = st.columns([1, 2])
-    with scan_col:
-        run_pair_scan = st.button("🔍 全通貨ペアを一括チェック", type="primary", use_container_width=True)
-    with scan_note_col:
-        st.caption(f"対象時間足: {tf_label} / データ元: Yahoo Finance（松井証券FXの実レート・約定可否とは異なる場合があります）")
+    # 定期スキャン：中期トレード向けに1h/4hを選択し、日足・4h・1hの方向を比較。
+    st.markdown("### 🔎 中期トレード候補スキャナー")
+    st.caption("5通貨ペアをまとめて確認し、数時間〜数日保有向けの候補をランキングします。候補は分析上の参考で、注文可能・利益確実を意味しません。")
+    scan_control_cols = st.columns([1, 1, 1, 1])
+    with scan_control_cols[0]:
+        scan_tf_label = st.selectbox("スキャン時間足", ["1時間足", "4時間足"], key="pair_scan_timeframe", help="中期トレードでは1時間足を基本、4時間足はゆったりした候補探しに使います。")
+    with scan_control_cols[1]:
+        scan_interval_minutes = st.selectbox("自動チェック間隔", [15, 30, 60], key="pair_scan_interval_minutes", format_func=lambda x: f"{x}分ごと")
+    with scan_control_cols[2]:
+        st.checkbox("定期スキャンを有効化", key="auto_pair_scan", on_change=save_settings, help="アプリ画面が開いている間だけ動作します。バックグラウンド常時監視ではありません。")
+    with scan_control_cols[3]:
+        run_pair_scan_button = st.button("🔍 今すぐ全通貨ペア確認", type="primary", use_container_width=True)
+    scan_configs = {
+        "1時間足": {"interval": "1h", "period": "60d"},
+        "4時間足": {"interval": "4h", "period": "90d"},
+    }
+    scan_config = scan_configs[scan_tf_label]
+    st.caption(f"スキャン対象: 5通貨ペア / {scan_tf_label}・4時間足・日足を比較 / 価格データ: Yahoo Finance（松井証券の実レートではありません）")
 
     if "pair_scan_results" not in st.session_state:
         st.session_state["pair_scan_results"] = {}
-    # Scan only on explicit user action. This avoids full-page reruns that can switch tabs,
-    # repeatedly run model evaluation, and trigger unnecessary network/model work.
-    manual_scan_requested = bool(run_pair_scan)
-    run_pair_scan = manual_scan_requested
+    now_epoch = time.time()
+    previous_scan_epoch = float(st.session_state.get("pair_scan_last_epoch", 0) or 0)
+    auto_scan_due = bool(st.session_state.get("auto_pair_scan", False)) and (
+        now_epoch - previous_scan_epoch >= int(scan_interval_minutes) * 60
+    )
+    run_pair_scan = bool(run_pair_scan_button or auto_scan_due)
     if run_pair_scan:
         scan_results = []
         original_eval_metrics = st.session_state.get("model_eval_metrics")
-        progress = st.progress(0, text="通貨ペアを確認しています…")
+        progress = st.progress(0, text="5通貨ペアを確認しています…")
         pair_items = list(PAIRS.items())
         for idx, (pair_label, pair_ticker) in enumerate(pair_items, start=1):
             try:
-                scan_data = load_and_process_data(pair_ticker, tf_config["period"], tf_config["interval"], tf_label)
-                scan_htf = load_and_process_data(pair_ticker, "2y", "1d", "日足")
-                if scan_data is None or scan_data.empty:
-                    scan_results.append({"通貨ペア": pair_label, "判定": "データ不足", "AI方向": "—", "買い確率": "—", "売り確率": "—", "価格": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": "価格データを取得できません"})
+                scan_data = load_and_process_data(pair_ticker, scan_config["period"], scan_config["interval"], scan_tf_label)
+                scan_4h = load_and_process_data(pair_ticker, "90d", "4h", "4時間足")
+                scan_1h = scan_data if scan_config["interval"] == "1h" else load_and_process_data(pair_ticker, "60d", "1h", "1時間足")
+                scan_daily = load_and_process_data(pair_ticker, "2y", "1d", "日足")
+                if scan_data is None or scan_data.empty or scan_4h is None or scan_1h is None or scan_daily is None:
+                    scan_results.append({"通貨ペア": pair_label, "順位": "—", "判定": "判定保留", "AI方向": "—", "時間足一致": "確認不可", "買い確率": "—", "売り確率": "—", "価格": "—", "損切り目安": "—", "利確目安": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": "必要な時間足データが不足しています"})
                 else:
-                    result = analyze_signal_with_backtest(scan_data, scan_htf, pair_ticker, tf_config["interval"])
+                    result = analyze_signal_with_backtest(scan_data, scan_daily, pair_ticker, scan_config["interval"])
                     sig, confidence, test_n, accuracy, market_type, probs, importances, history = result
                     metrics = st.session_state.get("model_eval_metrics", {})
                     last_price_scan = float(clean_series(scan_data["Close"]).iloc[-1])
                     scan_last_ts = pd.Timestamp(scan_data.index[-1])
                     scan_last_utc = scan_last_ts.tz_localize("UTC") if scan_last_ts.tzinfo is None else scan_last_ts.tz_convert("UTC")
                     scan_age_min = max(0.0, (pd.Timestamp.now(tz="UTC") - scan_last_utc).total_seconds() / 60.0)
-                    scan_stale_limits = {"5m": 25, "15m": 60, "1h": 210, "4h": 600, "1d": 2160}
-                    scan_is_stale = scan_age_min > scan_stale_limits.get(tf_config["interval"], 210)
+                    stale_limits = {"1h": 210, "4h": 600}
+                    scan_is_stale = scan_age_min > stale_limits.get(scan_config["interval"], 210)
                     atr_scan = float(clean_series(scan_data["ATR"]).iloc[-1]) if "ATR" in scan_data else 0.0
                     pip_scan = 0.01 if "JPY" in pair_ticker else 0.0001
                     spread_scan = DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5)
                     quality_ok = bool(metrics.get("quality_ok", False))
                     enough_movement = atr_scan / pip_scan >= spread_scan * 3 if pip_scan else False
-                    directional = sig.startswith("BUY") or sig.startswith("SELL")
+
+                    def _trend_dir(frame):
+                        try:
+                            close_v = float(clean_series(frame["Close"]).iloc[-1])
+                            ema20_v = float(clean_series(frame["EMA_20"]).iloc[-1])
+                            ema200_v = float(clean_series(frame["EMA_200"]).iloc[-1])
+                            if not np.isfinite([close_v, ema20_v, ema200_v]).all(): return "不明"
+                            if close_v > ema20_v and ema20_v > ema200_v: return "上昇"
+                            if close_v < ema20_v and ema20_v < ema200_v: return "下降"
+                            return "中立"
+                        except Exception:
+                            return "不明"
+                    trend_1h, trend_4h, trend_d = _trend_dir(scan_1h), _trend_dir(scan_4h), _trend_dir(scan_daily)
+                    ai_direction = "買い" if str(sig).startswith("BUY") else "売り" if str(sig).startswith("SELL") else "様子見"
+                    trend_values = [trend_1h, trend_4h, trend_d]
+                    matching = sum(1 for t in trend_values if t == ai_direction.replace("買い", "上昇").replace("売り", "下降")) if ai_direction != "様子見" else 0
+                    known_trends = [t for t in trend_values if t in ("上昇", "下降")]
+                    opposing = ai_direction == "買い" and "下降" in trend_values or ai_direction == "売り" and "上昇" in trend_values
+                    alignment_text = f"1h:{trend_1h} / 4h:{trend_4h} / 日足:{trend_d}"
                     if scan_is_stale:
-                        decision, reason = "判定保留", f"データが古い可能性（約{scan_age_min / 60:.1f}時間経過）"
-                    elif directional and quality_ok and enough_movement:
-                        decision, reason = "候補あり", "AI方向・検証条件・値動き幅の目安を満たす"
+                        decision, reason = "判定保留", f"データが古い可能性（約{scan_age_min/60:.1f}時間経過）"
                     elif not quality_ok:
-                        decision, reason = "見送り", "今回の時系列検証でAIの優位性を確認できない"
+                        decision, reason = "見送り", "時系列検証の品質条件を満たさない"
                     elif not enough_movement:
-                        decision, reason = "見送り", "ATRに対してスプレッド負担が大きい可能性"
+                        decision, reason = "見送り", "ATRに対して推定スプレッド負担が大きい可能性"
+                    elif ai_direction == "様子見":
+                        decision, reason = "様子見", "明確なAI方向シグナルなし"
+                    elif opposing:
+                        decision, reason = "方向不一致・見送り", "1h・4h・日足のいずれかがAI方向と逆"
+                    elif matching < 2:
+                        decision, reason = "様子見", "時間足の方向一致が十分でない"
                     else:
-                        decision, reason = "様子見", "明確な買い・売り条件なし"
+                        decision, reason = "候補あり", f"AI方向と複数時間足が一致（{matching}/3）"
+                    # ATR-based indicative levels only; never presented as executable broker prices.
+                    stop_distance = max(atr_scan * 1.5, pip_scan * spread_scan * 3)
+                    rr = float(st.session_state.get("rr_ratio", 1.5))
+                    if ai_direction == "買い":
+                        stop_price, target_price = last_price_scan - stop_distance, last_price_scan + stop_distance * rr
+                    elif ai_direction == "売り":
+                        stop_price, target_price = last_price_scan + stop_distance, last_price_scan - stop_distance * rr
+                    else:
+                        stop_price = target_price = np.nan
+                    fmt_price = lambda v: f"{v:.3f}" if "JPY" in pair_ticker else f"{v:.5f}"
                     scan_results.append({
-                        "通貨ペア": pair_label, "判定": decision,
-                        "AI方向": {"BUY (買い)":"買い", "SELL (売り)":"売り", "WAIT (様子見)":"様子見"}.get(sig, sig),
+                        "通貨ペア": pair_label, "順位": "—", "判定": decision, "AI方向": ai_direction,
+                        "時間足一致": alignment_text, "一致数": matching,
                         "買い確率": f"{probs.get('buy', 0)}%", "売り確率": f"{probs.get('sell', 0)}%",
-                        "価格": f"{last_price_scan:.3f}" if "JPY" in pair_ticker else f"{last_price_scan:.5f}",
+                        "価格": fmt_price(last_price_scan), "損切り目安": fmt_price(stop_price) if np.isfinite(stop_price) else "—",
+                        "利確目安": fmt_price(target_price) if np.isfinite(target_price) else "—",
                         "確定足時刻": safe_to_tokyo_tz(scan_data).index[-1].strftime("%Y-%m-%d %H:%M"),
-                        "データ経過時間": f"{scan_age_min / 60:.1f}時間",
-                        "スプレッド目安(pips)": spread_scan, "検証一致率": f"{metrics.get('balanced_accuracy', 0):.1f}%" if metrics else "不足",
-                        "理由": reason,
+                        "データ経過時間": f"{scan_age_min/60:.1f}時間", "ATR(pips)": round(atr_scan / pip_scan, 1),
+                        "スプレッド目安(pips)": spread_scan,
+                        "検証一致率": f"{metrics.get('balanced_accuracy', 0):.1f}%" if metrics else "不足",
+                        "検証件数": int(metrics.get("n_test", 0) or 0), "理由": reason,
                     })
             except Exception as exc:
-                scan_results.append({"通貨ペア": pair_label, "判定": "確認失敗", "AI方向": "—", "買い確率": "—", "売り確率": "—", "価格": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": f"分析エラー: {type(exc).__name__}"})
+                scan_results.append({"通貨ペア": pair_label, "順位": "—", "判定": "確認失敗", "AI方向": "—", "時間足一致": "確認不可", "買い確率": "—", "売り確率": "—", "価格": "—", "損切り目安": "—", "利確目安": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": f"分析エラー: {type(exc).__name__}"})
             progress.progress(idx / len(pair_items), text=f"確認中: {pair_label} ({idx}/{len(pair_items)})")
         progress.empty()
+        # Rank candidates first; all other states remain visible below them.
+        priority = {"候補あり": 0, "様子見": 1, "方向不一致・見送り": 2, "見送り": 3, "判定保留": 4, "確認失敗": 5}
+        scan_results.sort(key=lambda r: (priority.get(r.get("判定"), 9), -int(r.get("一致数", 0) or 0), -float(str(r.get("買い確率", "0")).replace("%", "0") or 0) if str(r.get("買い確率", "—")).replace("%", "").isdigit() else 0))
+        for rank, row in enumerate(scan_results, start=1): row["順位"] = rank
         scan_time_text = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
-        st.session_state["pair_scan_results"] = {"time": scan_time_text, "timeframe": tf_label, "rows": scan_results}
-        # Send one webhook notification per newly observed candidate/bar. A repeated rerun
-        # will not repeatedly alert for the same pair, timeframe, direction, and bar.
+        st.session_state["pair_scan_results"] = {"time": scan_time_text, "timeframe": scan_tf_label, "interval_minutes": int(scan_interval_minutes), "rows": scan_results}
+        st.session_state["pair_scan_last_epoch"] = time.time()
+        # Persist a compact scan history for later review; keep last 500 snapshots.
+        try:
+            history_path = "pair_scan_history.json"
+            old_history = []
+            if os.path.exists(history_path):
+                with open(history_path, "r", encoding="utf-8") as hf:
+                    loaded_history = json.load(hf)
+                    if isinstance(loaded_history, list): old_history = loaded_history
+            old_history.append({"time": scan_time_text, "timeframe": scan_tf_label, "rows": scan_results})
+            with open(history_path, "w", encoding="utf-8") as hf:
+                json.dump(old_history[-500:], hf, ensure_ascii=False, indent=2, default=_json_default)
+        except (OSError, ValueError, TypeError):
+            st.warning("スキャン履歴を保存できませんでした。保存先フォルダの書き込み権限を確認してください。")
         webhook_url = st.session_state.get("webhook_url", "")
         if webhook_url:
             alert_state = st.session_state.setdefault("pair_candidate_alert_keys", [])
             new_candidate_lines = []
             for row in scan_results:
-                if row.get("判定") != "候補あり":
-                    continue
+                if row.get("判定") != "候補あり": continue
                 label = row.get("通貨ペア", "不明")
                 pair_ticker = PAIRS.get(label)
-                if not pair_ticker:
-                    continue
-                candidate_key = f"{pair_ticker}|{tf_config['interval']}|{row.get('AI方向')}|{row.get('確定足時刻', scan_time_text)}"
+                if not pair_ticker: continue
+                candidate_key = f"{pair_ticker}|{scan_config['interval']}|{row.get('AI方向')}|{row.get('確定足時刻', scan_time_text)}"
                 if candidate_key not in alert_state:
                     new_candidate_lines.append(f"{label}: {row.get('AI方向')} / 価格参考 {row.get('価格')} / {row.get('理由')}")
                     alert_state.append(candidate_key)
             st.session_state["pair_candidate_alert_keys"] = alert_state[-100:]
             if new_candidate_lines:
-                alert_message = "AI FX参考候補が検出されました（自動発注なし・松井証券FXの現在レート確認が必要）\n" + "\n".join(new_candidate_lines)
-                if send_webhook_alert(webhook_url, alert_message):
-                    st.toast("新しい候補の通知を送信しました", icon="🔔")
-        if original_eval_metrics is not None:
-            st.session_state["model_eval_metrics"] = original_eval_metrics
-        else:
-            st.session_state.pop("model_eval_metrics", None)
+                alert_message = "中期FX候補スキャン（参考情報・自動発注なし）\n" + "\n".join(new_candidate_lines)
+                if send_webhook_alert(webhook_url, alert_message): st.toast("新しい候補の通知を送信しました", icon="🔔")
+        if original_eval_metrics is not None: st.session_state["model_eval_metrics"] = original_eval_metrics
+        else: st.session_state.pop("model_eval_metrics", None)
 
     saved_scan = st.session_state.get("pair_scan_results", {})
-    if saved_scan.get("rows") and saved_scan.get("timeframe") == tf_label:
+    if saved_scan.get("rows") and saved_scan.get("timeframe") == scan_tf_label:
         scan_df = pd.DataFrame(saved_scan["rows"])
         available_count = int((scan_df["判定"] == "候補あり").sum()) if "判定" in scan_df else 0
         sca, scb, scc = st.columns(3)
-        sca.metric("候補あり", f"{available_count} ペア")
+        sca.metric("トレード候補", f"{available_count} ペア")
         scb.metric("チェック対象", f"{len(scan_df)} ペア")
-        scc.metric("最終チェック", saved_scan.get("time", "—"))
+        scc.metric("最終スキャン", saved_scan.get("time", "—"))
         st.dataframe(scan_df, use_container_width=True, hide_index=True)
-        st.download_button("📥 通貨ペア一覧をCSV保存", data=scan_df.to_csv(index=False).encode("utf-8-sig"),
-                           file_name=f"pair_scan_{tf_config['interval']}.csv", mime="text/csv", use_container_width=False)
-        st.caption("候補ありでも即注文せず、松井証券FXの現在レート、Bid/Ask、スプレッド、指値の距離、損切り幅を確認してください。検証指標は分析時に算出された参考値で、通貨ペア別の十分な検証を保証しません。検証データ不足やデータ取得失敗は候補に含めません。")
+        st.download_button("📥 候補一覧をCSV保存", data=scan_df.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"midterm_pair_scan_{scan_config['interval']}.csv", mime="text/csv", use_container_width=False)
+        st.caption("損切り・利確はATRから算出した目安で、実際のBid/Ask・スプレッド・約定価格を反映していません。発注前に松井証券FXの価格で再計算してください。候補が0件なら無理に取引せず、見送りを優先してください。")
     elif saved_scan.get("rows"):
-        st.info(f"保存済みの一覧は {saved_scan.get('timeframe')} です。現在の {tf_label} で『全通貨ペアを一括チェック』を押すと更新できます。")
+        st.info(f"保存済み一覧は {saved_scan.get('timeframe')} です。上のスキャン時間足を合わせると表示できます。")
     else:
-        st.info("まだ一括チェックしていません。ボタンを押すと、5通貨ペアのAI方向・検証状況・スプレッド目安をまとめて表示します。")
+        st.info("まだスキャン結果がありません。「今すぐ全通貨ペア確認」を押すか、定期スキャンを有効にしてください。")
+    with st.expander("🕘 過去のスキャン履歴", expanded=False):
+        try:
+            with open("pair_scan_history.json", "r", encoding="utf-8") as hf:
+                scan_history_rows = json.load(hf)
+            if isinstance(scan_history_rows, list) and scan_history_rows:
+                history_view = []
+                for snapshot in scan_history_rows[-20:][::-1]:
+                    for item in snapshot.get("rows", []):
+                        history_view.append({"スキャン時刻": snapshot.get("time", "—"), "時間足": snapshot.get("timeframe", "—"), "通貨ペア": item.get("通貨ペア", "—"), "判定": item.get("判定", "—"), "AI方向": item.get("AI方向", "—"), "参考価格": item.get("価格", "—")})
+                if history_view:
+                    st.dataframe(pd.DataFrame(history_view), use_container_width=True, hide_index=True)
+                    st.caption("履歴は過去のスキャン時点の記録です。候補後の値動きや実際の取引損益を自動採点した結果ではありません。")
+            else:
+                st.info("まだ履歴がありません。スキャンを実行すると保存されます。")
+        except (OSError, ValueError, TypeError):
+            st.info("まだ履歴がありません。スキャンを実行すると保存されます。")
+    st.caption("自動スキャンはアプリ画面が開いている間だけ動作します。Yahoo Financeのデータ取得頻度・遅延は保証されません。通知は新しい候補が検出された場合のみで、自動発注は行いません。")
 
     # st.tabs() はボタン操作などの再実行後に先頭タブへ戻ることがあるため、
     # session_state に選択中の画面を保存するラジオ式ナビゲーションに変更。
@@ -2436,9 +2522,9 @@ def _render_main_area():
 # Streamlit fragments keep the sidebar/navigation stable during periodic updates.
 # On older Streamlit versions, fall back to normal manual reruns rather than failing to start.
 if hasattr(st, "fragment"):
-    _fragment = st.fragment(run_every=300 if st.session_state.get("auto_refresh", False) else None)(_render_main_area)
+    _fragment = st.fragment(run_every=300 if (st.session_state.get("auto_refresh", False) or st.session_state.get("auto_pair_scan", False)) else None)(_render_main_area)
     _fragment()
 else:
-    if st.session_state.get("auto_refresh", False):
-        st.sidebar.warning("現在のStreamlitは部分自動更新に未対応です。画面維持を優先し、自動更新は実行していません。Streamlitの更新をご検討ください。")
+    if st.session_state.get("auto_refresh", False) or st.session_state.get("auto_pair_scan", False):
+        st.sidebar.warning("現在のStreamlitは部分自動更新に未対応です。自動更新・定期スキャンは手動操作時のみ実行されます。Streamlitの更新をご検討ください。")
     _render_main_area()
