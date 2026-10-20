@@ -352,6 +352,49 @@ def save_forecast_history(items):
         st.warning(f"自動予測検証履歴を保存できませんでした: {exc}")
 
 
+def build_data_backup_bundle():
+    """Export user settings and local logs; secrets such as webhook URLs are excluded."""
+    settings = load_settings().copy()
+    settings["webhook_url"] = ""
+    return {
+        "format": "ai_fx_analyzer_backup",
+        "version": 1,
+        "created_at": datetime.now(JST).isoformat(),
+        "notice": "Webhook URL and credentials are intentionally excluded.",
+        "settings": settings,
+        "forecast_history": load_forecast_history(),
+        "entry_tracking": load_entry_tracking(),
+        "trade_journal": load_trade_journal(),
+        "feedback_history": load_feedback_data(),
+    }
+
+
+def restore_data_backup_bundle(bundle):
+    """Validate a backup bundle before restoring known local JSON data files."""
+    if not isinstance(bundle, dict) or bundle.get("format") != "ai_fx_analyzer_backup":
+        raise ValueError("このファイルはAI FX分析ツールのバックアップではありません。")
+    settings = bundle.get("settings", {})
+    if not isinstance(settings, dict):
+        raise ValueError("設定データの形式が正しくありません。")
+    safe_settings = {k: settings[k] for k in DEFAULT_SETTINGS if k in settings}
+    safe_settings["webhook_url"] = ""  # Never restore secrets from a file.
+    lists = {
+        FORECAST_TRACK_FILE: bundle.get("forecast_history", []),
+        ENTRY_TRACK_FILE: bundle.get("entry_tracking", []),
+        TRADE_JOURNAL_FILE: bundle.get("trade_journal", []),
+        FEEDBACK_FILE: bundle.get("feedback_history", []),
+    }
+    if any(not isinstance(v, list) for v in lists.values()):
+        raise ValueError("履歴データの形式が正しくありません。復元を中止しました。")
+    # Validate all content before writing any files.
+    json.dumps({"settings": safe_settings, "lists": lists}, ensure_ascii=False, default=_json_default)
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(safe_settings, f, ensure_ascii=False, indent=2, default=_json_default)
+    for filename, items in lists.items():
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(items[-3000:], f, ensure_ascii=False, indent=2, default=_json_default)
+
+
 def update_forecast_history(items, df, ticker, interval, horizon=LOOKAHEAD_BARS):
     """Resolve saved BUY/SELL/WAIT signals after N completed bars using close-to-close direction.
 
@@ -425,6 +468,7 @@ def record_forecast_and_update(df, ticker, interval, signal, probs, horizon=LOOK
                       "buy_pct": int(probs.get("buy", 0)), "sell_pct": int(probs.get("sell", 0)),
                       "wait_pct": int(probs.get("wait", 100)), "horizon_bars": int(horizon),
                       "status": "PENDING", "created_at": datetime.now(JST).isoformat(),
+                      "skip_reason": ("AI判定が様子見、または買い・売りの条件が十分にそろっていない" if raw_signal == "WAIT" else "方向シグナルあり。時間足・データ鮮度・リスク条件は別途確認"),
                       "data_source": "Yahoo Finance OHLC", "is_broker_trade": False})
         items = items[-3000:]
     items = update_forecast_history(items, df, ticker, interval, horizon)
@@ -1051,7 +1095,27 @@ with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", e
     safe_backup_settings["webhook_url"] = ""
     st.download_button("📥 設定をバックアップ (.json)", data=json.dumps(safe_backup_settings, ensure_ascii=False, indent=2).encode("utf-8"),
                        file_name="fx_analyzer_settings.json", mime="application/json", use_container_width=True)
-    uploaded_file = st.file_uploader("📤 設定を復元 (アップロード)", type=["json"])
+    _full_backup = build_data_backup_bundle()
+    st.download_button(
+        "🗃️ 設定・予測履歴・取引記録をまとめて保存",
+        data=json.dumps(_full_backup, ensure_ascii=False, indent=2, default=_json_default).encode("utf-8"),
+        file_name=f"ai_fx_full_backup_{datetime.now(JST).strftime('%Y%m%d')}.json",
+        mime="application/json", use_container_width=True,
+        help="設定、予測検証履歴、注文候補の検証履歴、実取引記録、フィードバックを保存します。Webhook URLは含めません。",
+    )
+    st.caption("端末変更・アプリ更新前に、まとめてバックアップを保存してください。Webhook URLはセキュリティのため保存対象外です。")
+    full_backup_upload = st.file_uploader("📤 まとめて保存したバックアップを復元", type=["json"], key="full_data_backup_upload")
+    if full_backup_upload is not None:
+        st.warning("復元すると、現在の設定・履歴ファイルがバックアップ内の内容に置き換わります。先に現在のデータをバックアップしてください。")
+        if st.button("⚠️ バックアップを復元する", key="restore_full_data_backup"):
+            try:
+                _bundle = json.load(full_backup_upload)
+                restore_data_backup_bundle(_bundle)
+                st.success("設定と履歴を復元しました。アプリを再読み込みしてください。Webhook URLは復元していません。")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"バックアップの復元に失敗しました: {exc}")
+    uploaded_file = st.file_uploader("📤 設定のみを復元 (アップロード)", type=["json"], key="settings_only_upload")
     if uploaded_file is not None:
         try:
             imported_data = json.load(uploaded_file)
@@ -2192,6 +2256,15 @@ def _render_main_area():
         fc3.metric("方向一致率", f"{(correct_forecasts / len(directional_forecasts) * 100):.1f}%" if directional_forecasts else "データ不足")
         fc4.metric("採点対象外", f"{len(expired_forecasts)} 件")
         st.caption(f"予測後{LOOKAHEAD_BARS}本の確定足終値で方向を自動採点します。WAITは方向一致率から除外。取得範囲外になった未検証記録は誤採点せず『採点対象外』へ変更します。これはYahoo Finance価格の方向性検証で、実際の取引勝率・利益・約定を示すものではありません。検証はアプリが起動し、対象データを取得したときに進みます。")
+        _wait_records = [x for x in relevant_forecasts if x.get("signal") == "WAIT"]
+        _reason_counts = {}
+        for _item in _wait_records:
+            _reason = _item.get("skip_reason") or "過去記録のため理由の詳細なし"
+            _reason_counts[_reason] = _reason_counts.get(_reason, 0) + 1
+        if _reason_counts:
+            with st.expander("🛑 見送り・様子見の記録", expanded=False):
+                st.caption("保存済みのAI判定から見送り傾向を確認します。旧記録は理由が保存されていない場合があります。")
+                st.dataframe(pd.DataFrame([{"記録理由": k, "件数": v} for k, v in _reason_counts.items()]), use_container_width=True, hide_index=True)
 
         # Cross-pair/timeframe view from already stored forecast records; no extra market-data calls.
         _all_resolved = [x for x in forecast_items if x.get("status") in ("CORRECT", "INCORRECT", "FLAT") and x.get("signal") in ("BUY", "SELL")]
@@ -2243,6 +2316,7 @@ def _render_main_area():
                     )
                     st.markdown("##### 🎯 予測確信度別の実績")
                     st.dataframe(_calibration, use_container_width=True, hide_index=True)
+                    st.caption("各確信度帯は件数が少ないと大きく変動します。30件未満は参考値として扱い、確信度の数値を実際の的中確率と同一視しないでください。")
                     st.caption("確信度帯はモデル出力の買い/売り確率の最大値で分類。少数件では大きくぶれるため、件数と合わせて確認してください。将来の的中を保証する指標ではありません。")
 
                     _by_signal = _directional_df.groupby("signal").agg(
