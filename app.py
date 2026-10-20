@@ -1110,6 +1110,36 @@ def _render_main_area():
     raw_model_status = status
     if data_is_stale:
         status = "WAIT（データ鮮度未確認）"
+
+    # Conservative day-trading filter: do not show BUY/SELL as the final recommendation
+    # when required higher-timeframe trend data is missing, neutral, or conflicting.
+    def _quick_trend_sign(frame):
+        try:
+            if frame is None or frame.empty or "Close" not in frame:
+                return None
+            close = clean_series(frame["Close"]).dropna()
+            if len(close) < 50:
+                return None
+            e20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
+            e50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+            last = close.iloc[-1]
+            if last > e20 > e50:
+                return 1
+            if last < e20 < e50:
+                return -1
+            return 0
+        except Exception:
+            return None
+
+    mtf_gate_reason = None
+    if trade_style == "デイトレード（当日決済）" and not data_is_stale:
+        _s4h, _s1h = _quick_trend_sign(data_4h), _quick_trend_sign(data_1h)
+        if _s4h is None or _s1h is None:
+            status = "WAIT（複数時間足データ不足）"
+            mtf_gate_reason = "4時間足・1時間足の方向を確認できないため、判定保留です。"
+        elif _s4h == 0 or _s1h == 0 or _s4h != _s1h:
+            status = "WAIT（複数時間足不一致）"
+            mtf_gate_reason = "4時間足・1時間足の方向が一致していないため、判定保留です。"
     std_series = clean_series(data["Close"]).rolling(20, min_periods=1).std()
     band_width_pct = float((std_series.iloc[-1] * 4.0) / (latest_price + 1e-10) * 100)
     adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data else 20.0
@@ -1144,7 +1174,11 @@ def _render_main_area():
     m2.markdown(badge_html, unsafe_allow_html=True)
     m3.metric("時系列テスト分類一致率", f"{win_rate:.1f}%", f"検証数: {total_signals_count}本")
     m4.metric("相場環境", m_type, f"ATR: {latest_atr/pip_unit:.1f} pips")
-    st.caption("分類一致率は過去データの時系列テストで分類ラベルが一致した割合で、実際のトレード勝率・利益率ではありません。表示スプレッドは固定の参考値で、松井証券FXのリアルタイム提示スプレッドではありません。")
+    st.caption("分類一致率は予測ラベルの一致率で、実際の勝率・利益率ではありません。スプレッドは参考値です。")
+    if mtf_gate_reason:
+        st.warning(mtf_gate_reason)
+    elif trade_style == "デイトレード（当日決済）" and not data_is_stale:
+        st.caption("デイトレードの最終推奨には4時間足・1時間足の方向一致を適用しています。詳細は下の折りたたみ欄で確認できます。")
 
     # Multi-timeframe context panel: trend alignment is a descriptive filter, not a standalone signal.
     def _trend_summary(frame):
@@ -1172,7 +1206,7 @@ def _render_main_area():
         _trend_text, _trend_sign = _trend_summary(_tf_frame)
         _trend_rows.append({"時間足": _tf_name, "EMA20/50による方向の目安": _trend_text})
         _trend_signs[_tf_name] = _trend_sign
-    with st.expander("🧭 マルチ時間足の方向確認（補助判定）", expanded=True):
+    with st.expander("🧭 マルチ時間足の方向確認（詳細）", expanded=False):
         st.caption("終値とEMA20・EMA50の位置関係による簡易判定です。デイトレードでは4時間足・1時間足を方向確認、15分足をタイミング補助、日足を背景確認に使います。将来の方向や利益を保証せず、AI推奨アクションを置き換えるものではありません。")
         st.dataframe(pd.DataFrame(_trend_rows), use_container_width=True, hide_index=True)
         if trade_style == "短期（数分〜数時間）":
@@ -1252,7 +1286,7 @@ def _render_main_area():
 
     # All-pair scan: run only on explicit request to avoid slowing every rerun.
     st.markdown("### 🔎 全通貨ペアのトレード候補一覧")
-    st.caption("選択中の時間足で登録済みの5通貨ペアをまとめて確認します。画面のタブ切替を安定させるため、チェックはボタンを押したときだけ実行します。『候補あり』はAI条件を満たした参考候補で、注文可能・利益確実という意味ではありません。")
+    st.caption("ボタンを押すと5通貨ペアを一括確認します。古いデータは判定保留。候補は参考情報で、注文可能・利益確実を意味しません。")
     scan_col, scan_note_col = st.columns([1, 2])
     with scan_col:
         run_pair_scan = st.button("🔍 全通貨ペアを一括チェック", type="primary", use_container_width=True)
@@ -1281,13 +1315,20 @@ def _render_main_area():
                     sig, confidence, test_n, accuracy, market_type, probs, importances, history = result
                     metrics = st.session_state.get("model_eval_metrics", {})
                     last_price_scan = float(clean_series(scan_data["Close"]).iloc[-1])
+                    scan_last_ts = pd.Timestamp(scan_data.index[-1])
+                    scan_last_utc = scan_last_ts.tz_localize("UTC") if scan_last_ts.tzinfo is None else scan_last_ts.tz_convert("UTC")
+                    scan_age_min = max(0.0, (pd.Timestamp.now(tz="UTC") - scan_last_utc).total_seconds() / 60.0)
+                    scan_stale_limits = {"5m": 25, "15m": 60, "1h": 210, "4h": 600, "1d": 2160}
+                    scan_is_stale = scan_age_min > scan_stale_limits.get(tf_config["interval"], 210)
                     atr_scan = float(clean_series(scan_data["ATR"]).iloc[-1]) if "ATR" in scan_data else 0.0
                     pip_scan = 0.01 if "JPY" in pair_ticker else 0.0001
                     spread_scan = DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5)
                     quality_ok = bool(metrics.get("quality_ok", False))
                     enough_movement = atr_scan / pip_scan >= spread_scan * 3 if pip_scan else False
                     directional = sig.startswith("BUY") or sig.startswith("SELL")
-                    if directional and quality_ok and enough_movement:
+                    if scan_is_stale:
+                        decision, reason = "判定保留", f"データが古い可能性（約{scan_age_min / 60:.1f}時間経過）"
+                    elif directional and quality_ok and enough_movement:
                         decision, reason = "候補あり", "AI方向・検証条件・値動き幅の目安を満たす"
                     elif not quality_ok:
                         decision, reason = "見送り", "今回の時系列検証でAIの優位性を確認できない"
@@ -1301,6 +1342,7 @@ def _render_main_area():
                         "買い確率": f"{probs.get('buy', 0)}%", "売り確率": f"{probs.get('sell', 0)}%",
                         "価格": f"{last_price_scan:.3f}" if "JPY" in pair_ticker else f"{last_price_scan:.5f}",
                         "確定足時刻": safe_to_tokyo_tz(scan_data).index[-1].strftime("%Y-%m-%d %H:%M"),
+                        "データ経過時間": f"{scan_age_min / 60:.1f}時間",
                         "スプレッド目安(pips)": spread_scan, "検証一致率": f"{metrics.get('balanced_accuracy', 0):.1f}%" if metrics else "不足",
                         "理由": reason,
                     })
@@ -2069,9 +2111,10 @@ def _render_main_area():
                 lambda r: f"{r['方向一致'] / (r['方向一致'] + r['方向不一致']) * 100:.1f}%"
                 if (r['方向一致'] + r['方向不一致']) else "データ不足", axis=1
             )
+            _summary["件数の目安"] = _summary["検証件数"].apply(lambda n: "少数・参考値" if n < 30 else ("中程度" if n < 100 else "件数あり・継続検証"))
             st.markdown("##### 🌐 通貨ペア・時間足別の検証成績")
             st.dataframe(_summary.sort_values(["通貨ペア", "時間足"]), use_container_width=True, hide_index=True)
-            st.caption("保存済みの検証記録のみを集計しています。まだ記録がない組み合わせは表示されません。検証件数が少ない組み合わせの一致率は参考値です。")
+            st.caption("保存済み記録のみを集計。30件未満は特に不安定です。件数が増えても利益・勝率を保証せず、未使用期間での検証も必要です。")
             st.download_button("📥 全通貨ペア・時間足の検証集計CSV", data=_summary.to_csv(index=False).encode("utf-8-sig"), file_name="forecast_validation_pair_timeframe_summary.csv", mime="text/csv")
         else:
             st.info("通貨ペア・時間足別の集計は、各組み合わせの予測検証記録が蓄積すると表示されます。")
