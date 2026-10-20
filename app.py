@@ -1,5 +1,5 @@
 # app.py
-# Pro FX Analyzer & Signal Pro — デイトレード・複数時間足・予測検証改善版
+# Pro FX Analyzer & Signal Pro — データ鮮度・マルチ時間足・リスク計算改善版
 # 価格分析・注文補助専用です。証券口座接続・自動発注は行いません。
 # 予測確率・バックテスト結果は将来の利益や実際の勝率を保証しません。
 
@@ -903,7 +903,7 @@ if "settings_loaded" not in st.session_state:
     st.session_state["settings_loaded"] = True
 
 st.title("AI FX分析ツール")
-st.caption("AI分析・注文条件の計算補助専用。証券口座への接続・自動発注は行いません。デイトレード向けに日足・4時間足・1時間足・15分足を組み合わせ、保存済み予測の通貨ペア別・時間足別検証を確認できます。")
+st.caption("AI分析・注文条件の計算補助専用。証券口座への接続・自動発注は行いません。デイトレード向けに日足・4時間足・1時間足・15分足を組み合わせ、保存済み予測の通貨ペア別・時間足別検証を確認できます。データが古い場合は売買推奨を判定保留にします。")
 
 # iPad / スマートフォンで selectbox の検索キーボードが出る不便さを避けるため、
 # 通貨ペア・時間足はタップで切り替えるラジオボタンにする。
@@ -1074,7 +1074,10 @@ def _render_main_area():
     last_bar_index = pd.Timestamp(data.index[-1])
     last_bar_jst = safe_to_tokyo_tz(data).index[-1].strftime("%Y-%m-%d %H:%M:%S")
     st.markdown(f'<div class="update-time">最終確定足の時刻: <b>{last_bar_jst} JST</b> (最新の未確定足は除外。取得時刻とは異なります)</div>', unsafe_allow_html=True)
-    # Warn about stale bars, but avoid claiming a data outage during normal FX market closures.
+    # Timeframe-aware freshness check. Yahoo timestamps can be delayed and are not Matsui live quotes.
+    data_is_stale = False
+    freshness_check_ok = False
+    age_minutes = None
     try:
         if last_bar_index.tzinfo is None:
             last_bar_utc = last_bar_index.tz_localize("UTC")
@@ -1082,22 +1085,31 @@ def _render_main_area():
             last_bar_utc = last_bar_index.tz_convert("UTC")
         now_utc = pd.Timestamp.now(tz="UTC")
         age_minutes = max(0.0, (now_utc - last_bar_utc).total_seconds() / 60.0)
-        stale_limits = {"5m": 25, "15m": 55, "1h": 210, "4h": 510}
+        freshness_check_ok = True
+        # Limits are deliberately conservative; FX closes and provider delays can create false alarms.
+        stale_limits = {"5m": 25, "15m": 60, "1h": 210, "4h": 600, "1d": 2160}
         stale_limit = stale_limits.get(tf_config["interval"], 210)
-        if age_minutes > stale_limit:
+        data_is_stale = age_minutes > stale_limit
+        if data_is_stale:
             st.warning(
-                f"価格データが通常より古い可能性があります（最終確定足から約{age_minutes / 60:.1f}時間）。"
-                "週末・市場休場・配信元の遅延の場合もあります。現在レートを証券会社画面で確認し、"
-                "データが更新されるまで新規注文の判断は見送ってください。"
+                f"価格データが古い可能性があります（最終確定足から約{age_minutes / 60:.1f}時間、判定基準 {stale_limit / 60:.1f}時間）。"
+                "日足は休場日やデータ配信元の時刻仕様でも古く見える場合があります。Yahoo Financeの時刻は松井証券FXのリアルタイムレートではありません。"
+                "松井証券の現在Bid/Askを確認し、データ更新を確認できるまで新規注文判断を保留してください。"
             )
+        else:
+            st.caption(f"データ鮮度の目安：最終確定足から約{age_minutes / 60:.1f}時間（配信元の遅延・時刻仕様を完全には検出できません）。")
     except Exception:
-        st.info("価格データの更新時刻を確認できませんでした。注文前に証券会社の現在レートを確認してください。")
+        data_is_stale = True
+        st.warning("価格データの時刻を検証できません。安全のため新規注文判断を保留し、証券会社の現在レートを確認してください。")
     latest_price = float(clean_series(data["Close"]).iloc[-1])
     latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data else latest_price * 0.005
     force_retrain = bool(st.session_state.pop("force_retrain_once", False))
     status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(
         data, data_htf, ticker, tf_config["interval"], force_retrain=force_retrain
     )
+    raw_model_status = status
+    if data_is_stale:
+        status = "WAIT（データ鮮度未確認）"
     std_series = clean_series(data["Close"]).rolling(20, min_periods=1).std()
     band_width_pct = float((std_series.iloc[-1] * 4.0) / (latest_price + 1e-10) * 100)
     adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data else 20.0
@@ -1181,6 +1193,13 @@ def _render_main_area():
             st.success(f"{trade_style}：{_mode_label}の方向は一致しています（{ '上昇' if _required_trends[0] == 1 else '下降' }）。ほかの条件とリスクも確認してください。")
         else:
             st.warning(f"{trade_style}：{_mode_label}の方向が一致していないか、中立です。無理なエントリーを避けるための注意表示です。")
+        if trade_style == "デイトレード（当日決済）" and _trend_signs.get("日足（参考）") in (1, -1):
+            _daily_sign = _trend_signs["日足（参考）"]
+            _core_signs = [_trend_signs.get("4時間足"), _trend_signs.get("1時間足")]
+            if all(x in (1, -1) for x in _core_signs) and any(x != _daily_sign for x in _core_signs):
+                st.info("日足の方向と短い時間足の方向が一部異なります。日足は背景情報として扱い、逆行リスクと損切り幅を確認してください。")
+        if data_is_stale:
+            st.error("データ鮮度を確認できないため、AI推奨は売買判断に使わず『判定保留』として扱ってください。")
     _eval_metrics_display = st.session_state.get("model_eval_metrics", {})
     if _eval_metrics_display:
         _em1, _em2, _em3 = st.columns(3)
@@ -1861,11 +1880,12 @@ def _render_main_area():
             else:
                 sl_pips = st.number_input("損切幅 (pips)",min_value=1.0,value=float(ai_sl_pips),step=1.0)
         rr_value = st.slider("リスクリワード比 (RR)",0.5,4.0,value=float(min(4,max(.5,st.session_state["rr_ratio"]))),step=.1)
+        slippage_pips = st.number_input("想定スリッページ (片道 pips)", min_value=0.0, max_value=20.0, value=1.0, step=0.5, help="成行約定のずれを見込むための仮定値です。実際のスリッページを予測・保証するものではありません。")
         tp_pips = round(sl_pips*rr_value,1)
         is_buy_manual = trade_side.startswith("BUY")
         sl_price = entry_price-sl_pips*pip_unit if is_buy_manual else entry_price+sl_pips*pip_unit
         tp_price = entry_price+tp_pips*pip_unit if is_buy_manual else entry_price-tp_pips*pip_unit
-        loss_per_wan = (sl_pips + spread_pips) * pip_val_per_wan
+        loss_per_wan = (sl_pips + spread_pips + slippage_pips) * pip_val_per_wan
         raw_manual_wan = max_risk_yen / loss_per_wan if loss_per_wan > 0 and np.isfinite(loss_per_wan) else 0.0
         manual_wan = float(np.floor(max(0.0, raw_manual_wan) * 100) / 100) if np.isfinite(raw_manual_wan) else 0.0
         if manual_wan < 0.01:
@@ -1876,8 +1896,8 @@ def _render_main_area():
         if not np.isfinite(entry_price) or entry_price <= 0 or not np.isfinite(sl_pips) or sl_pips <= 0:
             manual_wan = 0.0
             st.error("入力レートまたは損切幅が無効です。正の価格と損切幅を入力してください。")
-        expected_profit_yen = (tp_pips - spread_pips) * pip_val_per_wan * manual_wan
-        actual_loss_yen = (sl_pips + spread_pips) * pip_val_per_wan * manual_wan
+        expected_profit_yen = (tp_pips - spread_pips - slippage_pips) * pip_val_per_wan * manual_wan
+        actual_loss_yen = (sl_pips + spread_pips + slippage_pips) * pip_val_per_wan * manual_wan
         res_col1,res_col2,res_col3,res_col4=st.columns(4)
         res_col1.metric("調整後の手動ロット数",f"{manual_wan:.2f} 万通貨",f"許容リスク上限 {risk_pct}%")
         res_col2.metric("損切(SL) レート",price_fmt%sl_price,f"-{sl_pips:.1f} pips")
@@ -1885,7 +1905,7 @@ def _render_main_area():
         res_col4.metric("想定純損益",f"{expected_profit_yen:+,.0f}円",f"最大損失 -{actual_loss_yen:,.0f}円")
         if expected_profit_yen <= 0:
             st.warning("利確幅が想定スプレッド以下のため、コスト控除後の利益が見込めない計算です。")
-        st.caption("手動調整欄は計算補助です。入力値・スプレッド・約定価格によって実損益は変わります。")
+        st.caption(f"手動調整欄は計算補助です。損失見積りには想定スプレッド {spread_pips:.1f} pips とスリッページ {slippage_pips:.1f} pipsを加算しています。実際の約定価格・コスト・価格飛びで損益は変わります。")
 
     elif active_section == APP_SECTIONS[2]:
         st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
