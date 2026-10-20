@@ -28,7 +28,7 @@ try:
 except Exception:
     requests = None
 
-st.set_page_config(page_title="AI FX分析ツール", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="AI FX分析ツール", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
 SETTINGS_FILE = "user_settings.json"
 FEEDBACK_FILE = "trade_feedback.json"
@@ -866,8 +866,8 @@ if "settings_loaded" not in st.session_state:
             st.session_state[_k] = _v
     st.session_state["settings_loaded"] = True
 
-st.title("Pro FX Analyzer & Signal Pro")
-st.caption("AI分析・注文補助・リピート設定をまとめた参考ツールです。実際の発注は行いません。")
+st.title("AI FX分析ツール")
+st.caption("AI分析・注文条件の計算補助専用。証券口座への接続・自動発注は行いません。まず通貨ペア・時間足・資金設定を選び、必要な画面だけ確認してください。")
 
 # iPad / スマートフォンで selectbox の検索キーボードが出る不便さを避けるため、
 # 通貨ペア・時間足はタップで切り替えるラジオボタンにする。
@@ -1475,18 +1475,18 @@ def _render_main_area():
 
         # IFD-OCO helper: use a small ATR-based offset for an entry candidate rather than
         # presenting the last confirmed candle close as a live executable quote.
-        st.markdown("#### 🧾 IFD-OCO注文入力ガイド")
-        st.caption("確定足の終値は松井証券FXの現在レートではありません。以下は注文候補の計算であり、自動発注は行いません。")
+        st.markdown("#### 🧾 単発注文の入力ガイド")
+        st.caption("成行での単発トレードにも対応しました。松井証券FXの現在レートを入力して計算します。自動発注は行いません。")
         entry_style = st.radio(
             "エントリー方針",
-            ["押し目・戻り待ち（指値）", "ブレイク追随（逆指値）"],
+            ["成行（現在レートで単発）", "押し目・戻り待ち（指値）", "ブレイク追随（逆指値）"],
             horizontal=True,
-            help="押し目・戻り待ちは有利な価格への戻りを待つ方法、ブレイク追随は一定の価格を抜けた場合に入る方法です。",
+            help="成行はすぐに約定を目指しますが価格は保証されません。松井証券FXの現在レートを入力してください。指値・逆指値は価格条件を待つ方法です。",
             key="ifdoco_entry_style",
         )
         check_live_quote = st.checkbox(
             "松井証券FXの現在レートを入力して、注文種類と価格位置を確認する",
-            value=False,
+            value=entry_style.startswith("成行"),
             key="ifdoco_check_live_quote",
         )
         matsui_quote = None
@@ -1548,9 +1548,14 @@ def _render_main_area():
                 f"現在レートが未入力です。確定足終値 {price_fmt % latest_price} はリアルタイム価格ではありません。"
                 "注文候補は参考表示に限り、松井証券FXの現在レートを入力するまで転記用の価格として使わないでください。"
             )
+            if entry_style.startswith("成行"):
+                st.error("成行の計算には松井証券FXの現在レートが必要です。現在レートを入力するまで注文プランを確定扱いにしないでください。")
 
         entry_offset_atr = max(float(latest_atr) * (0.5 if entry_style.startswith("押し目") else 0.2), pip_unit)
-        if ai_is_buy:
+        if entry_style.startswith("成行"):
+            ai_entry = float(matsui_quote) if matsui_quote is not None else float(latest_price)
+            entry_order_type = "成行"
+        elif ai_is_buy:
             ai_entry = entry_reference_price - entry_offset_atr if entry_style.startswith("押し目") else entry_reference_price + entry_offset_atr
             entry_order_type = "指値" if entry_style.startswith("押し目") else "逆指値"
         else:
@@ -1563,7 +1568,9 @@ def _render_main_area():
         if matsui_quote is not None:
             distance_to_candidate = abs(float(ai_entry) - float(matsui_quote)) / pip_unit
             st.metric("現在レートから候補価格まで", f"{distance_to_candidate:.1f} pips")
-            if entry_style.startswith("押し目") and ai_is_buy:
+            if entry_style.startswith("成行"):
+                st.caption("成行は価格を指定しない注文です。表示価格は参考値で、急変時はスリッページが発生する可能性があります。")
+            elif entry_style.startswith("押し目") and ai_is_buy:
                 st.caption("買いの押し目指値は現在レートより下に置く候補です。価格がそこまで下がる保証はなく、届かなければ未約定になります。")
             elif ai_is_buy:
                 st.caption("買いのブレイク逆指値は現在レートより上に置く候補です。上昇を追う方式なので、約定価格や損失リスクを注文前に確認してください。")
@@ -1603,7 +1610,9 @@ def _render_main_area():
                     st.success("検証履歴に保存しました。今後の更新で後続確定足を確認します。")
 
         quote_position_ok = None
-        if matsui_quote is not None and ai_direction.startswith("BUY"):
+        if matsui_quote is not None and entry_order_type == "成行":
+            quote_position_ok = True
+        elif matsui_quote is not None and ai_direction.startswith("BUY"):
             quote_position_ok = (ai_entry < matsui_quote) if entry_order_type == "指値" else (ai_entry > matsui_quote)
         elif matsui_quote is not None and ai_direction.startswith("SELL"):
             quote_position_ok = (ai_entry > matsui_quote) if entry_order_type == "指値" else (ai_entry < matsui_quote)
@@ -1685,7 +1694,7 @@ def _render_main_area():
                 st.success(f"入力した松井証券FXの現在レート {price_fmt % matsui_quote} に対して、価格位置は選択した注文種類（{entry_order_type}）と整合しています。Bid/Ask差や注文条件は別途確認してください。")
             else:
                 st.warning(f"入力した現在レート {price_fmt % matsui_quote} に対して、候補価格が選択した注文種類（{entry_order_type}）に適した位置ではありません。現在レートを再確認するか、エントリー方針を変更してください。")
-            st.caption("入力したレートは参考価格で、Bid/Askの別を自動判別していません。IFD-OCOの入力名称や注文条件は松井証券FXの注文画面で確認してください。逆指値は急変時に指定価格どおりに約定するとは限りません。")
+            st.caption("入力したレートは参考価格で、Bid/Askの別を自動判別していません。成行はスリッページ、逆指値は急変時の価格飛びに注意してください。実際の注文条件は松井証券FXの注文画面で確認してください。")
 
         st.markdown("##### 📝 トレード結果フィードバック")
         st.caption("結果の記録用です。現在の足と実際の取引条件が一致するとは限らないため、この記録をそのままAIの教師ラベルには使いません。")
