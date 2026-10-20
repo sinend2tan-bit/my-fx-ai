@@ -347,7 +347,23 @@ def update_forecast_history(items, df, ticker, interval, horizon=LOOKAHEAD_BARS)
         try:
             saved_ts = pd.Timestamp(item["bar_timestamp"])
             saved_ts = saved_ts.tz_localize("UTC") if saved_ts.tzinfo is None else saved_ts.tz_convert("UTC")
-            base_pos = int(np.flatnonzero(idx_utc == saved_ts)[-1])
+            matches = np.flatnonzero(idx_utc == saved_ts)
+            if len(matches) == 0:
+                # If the saved bar has rolled out of the provider's lookback window,
+                # don't leave the forecast pending forever or score it against a wrong bar.
+                latest_ts = idx_utc[-1]
+                expected_horizon = max(1, int(item.get("horizon_bars", horizon)))
+                interval_minutes = {"5m": 5, "15m": 15, "1h": 60, "4h": 240}.get(str(interval), 60)
+                elapsed_minutes = max(0.0, (latest_ts - saved_ts).total_seconds() / 60.0)
+                if elapsed_minutes > interval_minutes * (expected_horizon + 3):
+                    item.update({
+                        "status": "EXPIRED_NO_DATA",
+                        "evaluated_at": datetime.now(JST).isoformat(),
+                        "evaluation_note": "保存元の確定足が取得データ範囲外になったため採点対象外",
+                    })
+                    changed = True
+                continue
+            base_pos = int(matches[-1])
             target_pos = base_pos + int(item.get("horizon_bars", horizon))
             if target_pos >= len(df):
                 continue
@@ -1916,14 +1932,55 @@ def _render_main_area():
         relevant_forecasts = [x for x in forecast_items if x.get("ticker") == ticker and x.get("interval") == tf_config["interval"]]
         resolved_forecasts = [x for x in relevant_forecasts if x.get("status") in ("CORRECT", "INCORRECT", "FLAT")]
         directional_forecasts = [x for x in resolved_forecasts if x.get("signal") in ("BUY", "SELL")]
+        expired_forecasts = [x for x in relevant_forecasts if x.get("status") == "EXPIRED_NO_DATA"]
         correct_forecasts = sum(x.get("status") == "CORRECT" for x in directional_forecasts)
         st.markdown("##### 🔁 自動予測記録・方向性検証")
-        fc1, fc2, fc3 = st.columns(3)
+        fc1, fc2, fc3, fc4 = st.columns(4)
         fc1.metric("記録した予測", f"{len(relevant_forecasts)} 件")
         fc2.metric("検証済み買い/売り", f"{len(directional_forecasts)} 件")
         fc3.metric("方向一致率", f"{(correct_forecasts / len(directional_forecasts) * 100):.1f}%" if directional_forecasts else "データ不足")
-        st.caption(f"予測後{LOOKAHEAD_BARS}本の確定足終値で方向を自動採点します。WAITは方向一致率から除外。これはYahoo Finance価格の方向性検証で、実際の取引勝率・利益・約定を示すものではありません。検証はアプリが起動し、対象データを取得したときに進みます。")
+        fc4.metric("採点対象外", f"{len(expired_forecasts)} 件")
+        st.caption(f"予測後{LOOKAHEAD_BARS}本の確定足終値で方向を自動採点します。WAITは方向一致率から除外。取得範囲外になった未検証記録は誤採点せず『採点対象外』へ変更します。これはYahoo Finance価格の方向性検証で、実際の取引勝率・利益・約定を示すものではありません。検証はアプリが起動し、対象データを取得したときに進みます。")
         if relevant_forecasts:
+            # Confidence bands are descriptive historical summaries, not guarantees.
+            _resolved_df = pd.DataFrame(resolved_forecasts)
+            if not _resolved_df.empty:
+                _directional_df = _resolved_df[_resolved_df["signal"].isin(["BUY", "SELL"])].copy()
+                if not _directional_df.empty:
+                    _directional_df["予測確信度"] = _directional_df.apply(
+                        lambda r: max(float(r.get("buy_pct", 0) or 0), float(r.get("sell_pct", 0) or 0)), axis=1
+                    )
+                    _directional_df["確信度帯"] = pd.cut(
+                        _directional_df["予測確信度"],
+                        bins=[-1, 49, 59, 69, 100],
+                        labels=["49%以下", "50–59%", "60–69%", "70%以上"],
+                    )
+                    _calibration = _directional_df.groupby("確信度帯", observed=False).agg(
+                        件数=("status", "size"),
+                        方向一致=("status", lambda s: int((s == "CORRECT").sum())),
+                        方向不一致=("status", lambda s: int((s == "INCORRECT").sum())),
+                        横ばい=("status", lambda s: int((s == "FLAT").sum())),
+                    ).reset_index()
+                    _calibration["方向一致率※横ばい除外"] = _calibration.apply(
+                        lambda r: f"{r['方向一致'] / (r['方向一致'] + r['方向不一致']) * 100:.1f}%"
+                        if (r["方向一致"] + r["方向不一致"]) > 0 else "データ不足", axis=1
+                    )
+                    st.markdown("##### 🎯 予測確信度別の実績")
+                    st.dataframe(_calibration, use_container_width=True, hide_index=True)
+                    st.caption("確信度帯はモデル出力の買い/売り確率の最大値で分類。少数件では大きくぶれるため、件数と合わせて確認してください。将来の的中を保証する指標ではありません。")
+
+                    _by_signal = _directional_df.groupby("signal").agg(
+                        検証件数=("status", "size"),
+                        方向一致=("status", lambda s: int((s == "CORRECT").sum())),
+                        方向不一致=("status", lambda s: int((s == "INCORRECT").sum())),
+                        横ばい=("status", lambda s: int((s == "FLAT").sum())),
+                    ).reset_index()
+                    _by_signal["方向一致率※横ばい除外"] = _by_signal.apply(
+                        lambda r: f"{r['方向一致'] / (r['方向一致'] + r['方向不一致']) * 100:.1f}%"
+                        if (r["方向一致"] + r["方向不一致"]) > 0 else "データ不足", axis=1
+                    )
+                    st.markdown("##### ↕️ 買い・売り別の検証")
+                    st.dataframe(_by_signal, use_container_width=True, hide_index=True)
             _fh = pd.DataFrame(relevant_forecasts).tail(30)
             _cols = [c for c in ["bar_timestamp", "signal", "buy_pct", "sell_pct", "wait_pct", "status", "reference_close", "evaluated_close"] if c in _fh.columns]
             st.dataframe(_fh[_cols].rename(columns={"bar_timestamp":"予測足時刻", "signal":"予測方向", "buy_pct":"買い(%)", "sell_pct":"売り(%)", "wait_pct":"様子見(%)", "status":"検証結果", "reference_close":"予測時価格", "evaluated_close":"検証時価格"}), use_container_width=True, hide_index=True)
