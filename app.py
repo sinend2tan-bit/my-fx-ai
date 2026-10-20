@@ -1140,6 +1140,16 @@ def _render_main_area():
         elif _s4h == 0 or _s1h == 0 or _s4h != _s1h:
             status = "WAIT（複数時間足不一致）"
             mtf_gate_reason = "4時間足・1時間足の方向が一致していないため、判定保留です。"
+        else:
+            # Important: alignment alone is not enough. The AI's raw signal must
+            # also agree with the aligned 4h/1h direction; otherwise show WAIT.
+            _aligned_direction = "BUY" if _s4h == 1 else "SELL"
+            if status.startswith("BUY") and _aligned_direction != "BUY":
+                status = "WAIT（AIと時間足が逆方向）"
+                mtf_gate_reason = "AIは買い方向ですが、4時間足・1時間足は下降です。方向が一致しないため判定保留です。"
+            elif status.startswith("SELL") and _aligned_direction != "SELL":
+                status = "WAIT（AIと時間足が逆方向）"
+                mtf_gate_reason = "AIは売り方向ですが、4時間足・1時間足は上昇です。方向が一致しないため判定保留です。"
     std_series = clean_series(data["Close"]).rolling(20, min_periods=1).std()
     band_width_pct = float((std_series.iloc[-1] * 4.0) / (latest_price + 1e-10) * 100)
     adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data else 20.0
@@ -1207,7 +1217,7 @@ def _render_main_area():
         _trend_rows.append({"時間足": _tf_name, "EMA20/50による方向の目安": _trend_text})
         _trend_signs[_tf_name] = _trend_sign
     with st.expander("🧭 マルチ時間足の方向確認（詳細）", expanded=False):
-        st.caption("終値とEMA20・EMA50の位置関係による簡易判定です。デイトレードでは4時間足・1時間足を方向確認、15分足をタイミング補助、日足を背景確認に使います。将来の方向や利益を保証せず、AI推奨アクションを置き換えるものではありません。")
+        st.caption("終値とEMA20・EMA50の位置関係による簡易判定です。デイトレードでは4時間足・1時間足を方向確認、15分足をタイミング補助、日足を背景確認に使います。AI推奨と4時間足・1時間足が逆方向の場合、最終推奨は様子見にします。将来の方向や利益を保証するものではありません。")
         st.dataframe(pd.DataFrame(_trend_rows), use_container_width=True, hide_index=True)
         if trade_style == "短期（数分〜数時間）":
             _required_trends = [_trend_signs.get("15分足"), _trend_signs.get("1時間足")]
