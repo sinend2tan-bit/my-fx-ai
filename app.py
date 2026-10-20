@@ -969,9 +969,25 @@ st.sidebar.info(
     "自動更新は初期設定でオフです。オンにすると対応環境ではメイン表示領域だけを5分ごとに更新します。 "
     "ニュースは15分キャッシュ、価格データは60秒キャッシュです。自動発注は行いません。"
 )
-with st.sidebar.expander("🔔 通知設定 (Webhook)", expanded=False):
-    st.text_input("Webhook URL (Discord等)", key="webhook_url", on_change=save_settings, placeholder="https://discord.com/api/webhooks/...")
-    st.caption("URLはローカル設定ファイルに保存されます。共有環境では入力しないでください。")
+with st.sidebar.expander("🔔 Discord通知設定・接続テスト", expanded=False):
+    st.text_input("Discord Webhook URL", key="webhook_url", on_change=save_settings, placeholder="https://discord.com/api/webhooks/...")
+    st.caption("Webhook URLは通知先への送信権限を持つ秘密情報です。公開・共有しないでください。")
+    if st.button("📨 Discordへテスト通知", key="discord_test_notification", use_container_width=True):
+        webhook_url_test = str(st.session_state.get("webhook_url", "")).strip()
+        if not webhook_url_test:
+            st.error("Webhook URLが未入力です。DiscordでWebhookを作成し、URLを入力してください。")
+        elif requests is None:
+            st.error("requestsライブラリが利用できません。実行環境で `pip install requests` を実行してください。")
+        elif not webhook_url_test.startswith("https://discord.com/api/webhooks/") and not webhook_url_test.startswith("https://discordapp.com/api/webhooks/"):
+            st.error("Discord Webhook URLの形式を確認してください。URL全体を入力する必要があります。")
+        else:
+            save_settings()
+            test_ok = send_webhook_alert(webhook_url_test, "✅ AI FX分析ツールからのテスト通知です。これが届けばDiscordへの送信経路は動作しています。")
+            if test_ok:
+                st.success("Discordへの送信要求が成功しました。Discordの通知先チャンネルを確認してください。")
+            else:
+                st.error("送信に失敗しました。Webhook URL、Discord側のWebhook状態、実行環境の通信制限を確認してください。")
+    st.caption("自動通知は条件成立時のみ送信されます。テスト通知はボタンを押した時点で送信します。")
 if st.sidebar.button("💾 設定を即時手動保存"):
     save_settings()
     st.toast("設定を保存しました！", icon="💾")
