@@ -1038,7 +1038,7 @@ if "settings_loaded" not in st.session_state:
     st.session_state["settings_loaded"] = True
 
 st.title("AI FX分析ツール")
-st.caption("AI分析・注文条件の計算補助専用。証券口座への接続・自動発注は行いません。数時間〜数日保有向けに日足・4時間足・1時間足・15分足を組み合わせ、保存済み予測の通貨ペア別・時間足別検証を確認できます。データが古い場合は売買推奨を判定保留にします。")
+st.caption("AI分析・注文条件の計算補助専用。証券口座への接続・自動発注は行いません。数時間〜数日保有向けに日足・4時間足・1時間足・15分足を組み合わせ、保存済み予測の通貨ペア別・時間足別検証を確認できます。表示確率はモデル出力で、利益確率・実際の勝率を保証しません。データが古い場合は売買推奨を判定保留にします。")
 
 # iPad / スマートフォンで selectbox の検索キーボードが出る不便さを避けるため、
 # 通貨ペア・時間足はタップで切り替えるラジオボタンにする。
@@ -1068,7 +1068,8 @@ price_fmt = "%.3f" if is_jpy else "%.5f"
 spread_pips = DEFAULT_SPREAD_PIPS.get(ticker, 0.5)
 
 st.sidebar.header("⚙️ 資金 & リスク設定")
-st.sidebar.number_input("口座資金 (円)", min_value=10000, step=50000, key="account_balance", on_change=save_settings)
+st.sidebar.number_input("口座資金 (円)", min_value=10000, step=10000, key="account_balance", on_change=save_settings, help="松井証券FXの現在の実際の評価額に合わせて手入力してください。口座残高・評価額を自動取得する機能はありません。")
+st.sidebar.caption("⚠️ ここは手入力の計算用金額です。実際の評価額と違う場合、許容損失額・推奨数量もずれます。")
 st.sidebar.number_input("1注文の基本数量 (万通貨)", min_value=0.01, step=0.01, key="quantity_wan", on_change=save_settings)
 st.sidebar.markdown("---")
 st.sidebar.header("🕒 取引スタイル")
@@ -2401,7 +2402,7 @@ def _render_main_area():
         is_buy_manual = trade_side.startswith("BUY")
         sl_price = entry_price-sl_pips*pip_unit if is_buy_manual else entry_price+sl_pips*pip_unit
         tp_price = entry_price+tp_pips*pip_unit if is_buy_manual else entry_price-tp_pips*pip_unit
-        loss_per_wan = (sl_pips + spread_pips + slippage_pips) * pip_val_per_wan
+        loss_per_wan = (sl_pips + spread_pips + 2.0 * slippage_pips) * pip_val_per_wan
         raw_manual_wan = max_risk_yen / loss_per_wan if loss_per_wan > 0 and np.isfinite(loss_per_wan) else 0.0
         manual_wan = float(np.floor(max(0.0, raw_manual_wan) * 100) / 100) if np.isfinite(raw_manual_wan) else 0.0
         if manual_wan < 0.01:
@@ -2412,8 +2413,8 @@ def _render_main_area():
         if not np.isfinite(entry_price) or entry_price <= 0 or not np.isfinite(sl_pips) or sl_pips <= 0:
             manual_wan = 0.0
             st.error("入力レートまたは損切幅が無効です。正の価格と損切幅を入力してください。")
-        expected_profit_yen = (tp_pips - spread_pips - slippage_pips) * pip_val_per_wan * manual_wan
-        actual_loss_yen = (sl_pips + spread_pips + slippage_pips) * pip_val_per_wan * manual_wan
+        expected_profit_yen = (tp_pips - spread_pips - 2.0 * slippage_pips) * pip_val_per_wan * manual_wan
+        actual_loss_yen = (sl_pips + spread_pips + 2.0 * slippage_pips) * pip_val_per_wan * manual_wan
         res_col1,res_col2,res_col3,res_col4=st.columns(4)
         res_col1.metric("調整後の手動ロット数",f"{manual_wan:.2f} 万通貨",f"許容リスク上限 {risk_pct}%")
         res_col2.metric("損切(SL) レート",price_fmt%sl_price,f"-{sl_pips:.1f} pips")
@@ -2421,7 +2422,7 @@ def _render_main_area():
         res_col4.metric("想定純損益",f"{expected_profit_yen:+,.0f}円",f"最大損失 -{actual_loss_yen:,.0f}円")
         if expected_profit_yen <= 0:
             st.warning("利確幅が想定スプレッド以下のため、コスト控除後の利益が見込めない計算です。")
-        st.caption(f"手動調整欄は計算補助です。損失見積りには想定スプレッド {spread_pips:.1f} pips とスリッページ {slippage_pips:.1f} pipsを加算しています。実際の約定価格・コスト・価格飛びで損益は変わります。")
+        st.caption(f"手動調整欄は計算補助です。損益見積りには想定スプレッド {spread_pips:.1f} pips と、片道スリッページ {slippage_pips:.1f} pips×往復2回を加算しています。実際の約定価格・コスト・価格飛びで損益は変わり、損失が計算値を超える場合があります。")
 
     elif active_section == APP_SECTIONS[2]:
         st.markdown("##### 📰 為替ニュース・経済イベントリスク確認")
