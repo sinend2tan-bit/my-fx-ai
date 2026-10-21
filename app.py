@@ -1466,17 +1466,42 @@ def _render_main_area():
                     ai_direction = "買い" if str(sig).startswith("BUY") else "売り" if str(sig).startswith("SELL") else "様子見"
                     trend_values = [trend_1h, trend_4h, trend_d]
                     matching = sum(1 for t in trend_values if t == ai_direction.replace("買い", "上昇").replace("売り", "下降")) if ai_direction != "様子見" else 0
-                    known_trends = [t for t in trend_values if t in ("上昇", "下降")]
                     opposing = ai_direction == "買い" and "下降" in trend_values or ai_direction == "売り" and "上昇" in trend_values
                     alignment_text = f"1h:{trend_1h} / 4h:{trend_4h} / 日足:{trend_d}"
+
+                    # 安全性を維持した「押し目監視」分類。買いシグナルではなく、監視リスト用。
+                    # 日足・4時間足が上昇、1時間足が上昇/中立で、価格が1h EMA20付近にある場合のみ。
+                    pullback_watch = False
+                    pullback_detail = "条件外"
+                    try:
+                        close_1h = float(clean_series(scan_1h["Close"]).iloc[-1])
+                        ema20_1h = float(clean_series(scan_1h["EMA_20"]).iloc[-1])
+                        atr_1h = float(clean_series(scan_1h["ATR"]).iloc[-1])
+                        if np.isfinite([close_1h, ema20_1h, atr_1h]).all() and atr_1h > 0:
+                            lower_zone = ema20_1h - 0.75 * atr_1h
+                            upper_zone = ema20_1h + 0.25 * atr_1h
+                            in_pullback_zone = lower_zone <= close_1h <= upper_zone
+                            bullish_background = trend_d == "上昇" and trend_4h == "上昇" and trend_1h in ("上昇", "中立")
+                            pullback_watch = bullish_background and in_pullback_zone and ai_direction == "様子見"
+                            if bullish_background and in_pullback_zone:
+                                pullback_detail = "1h EMA20付近"
+                            elif bullish_background:
+                                pullback_detail = "上昇基調だがEMA20付近ではない"
+                            else:
+                                pullback_detail = "日足・4h・1hの上昇条件未達"
+                    except (KeyError, IndexError, TypeError, ValueError):
+                        pullback_detail = "押し目条件を計算できません"
+
                     if scan_is_stale:
                         decision, reason = "判定保留", f"データが古い可能性（約{scan_age_min/60:.1f}時間経過）"
                     elif not quality_ok:
                         decision, reason = "見送り", "時系列検証の品質条件を満たさない"
                     elif not enough_movement:
                         decision, reason = "見送り", "ATRに対して推定スプレッド負担が大きい可能性"
+                    elif ai_direction == "様子見" and pullback_watch:
+                        decision, reason = "押し目監視", "日足・4hが上昇、1h価格がEMA20付近。買い確定ではなく反発確認待ち"
                     elif ai_direction == "様子見":
-                        decision, reason = "様子見", "明確なAI方向シグナルなし"
+                        decision, reason = "様子見", f"明確なAI方向シグナルなし（押し目条件：{pullback_detail}）"
                     elif opposing:
                         decision, reason = "方向不一致・見送り", "1h・4h・日足のいずれかがAI方向と逆"
                     elif matching < 2:
@@ -1496,6 +1521,7 @@ def _render_main_area():
                     scan_results.append({
                         "通貨ペア": pair_label, "順位": "—", "判定": decision, "AI方向": ai_direction,
                         "時間足一致": alignment_text, "一致数": matching,
+                        "押し目状態": pullback_detail,
                         "買い確率": f"{probs.get('buy', 0)}%", "売り確率": f"{probs.get('sell', 0)}%",
                         "価格": fmt_price(last_price_scan), "損切り目安": fmt_price(stop_price) if np.isfinite(stop_price) else "—",
                         "利確目安": fmt_price(target_price) if np.isfinite(target_price) else "—",
@@ -1510,7 +1536,7 @@ def _render_main_area():
             progress.progress(idx / len(pair_items), text=f"確認中: {pair_label} ({idx}/{len(pair_items)})")
         progress.empty()
         # Rank candidates first; all other states remain visible below them.
-        priority = {"候補あり": 0, "様子見": 1, "方向不一致・見送り": 2, "見送り": 3, "判定保留": 4, "確認失敗": 5}
+        priority = {"候補あり": 0, "押し目監視": 1, "様子見": 2, "方向不一致・見送り": 3, "見送り": 4, "判定保留": 5, "確認失敗": 6}
         scan_results.sort(key=lambda r: (priority.get(r.get("判定"), 9), -int(r.get("一致数", 0) or 0), -float(str(r.get("買い確率", "0")).replace("%", "0") or 0) if str(r.get("買い確率", "—")).replace("%", "").isdigit() else 0))
         for rank, row in enumerate(scan_results, start=1): row["順位"] = rank
         scan_time_text = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
