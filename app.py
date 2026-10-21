@@ -1473,25 +1473,58 @@ def _render_main_area():
                     # 安全性を維持した「押し目監視」分類。買いシグナルではなく、監視リスト用。
                     # 日足・4時間足が上昇、1時間足が上昇/中立で、価格が1h EMA20付近にある場合のみ。
                     pullback_watch = False
+                    pullback_rebound_confirmed = False
                     pullback_detail = "条件外"
+                    rebound_detail = "反発条件を未確認"
                     try:
-                        close_1h = float(clean_series(scan_1h["Close"]).iloc[-1])
+                        close_series_1h = clean_series(scan_1h["Close"])
+                        open_series_1h = clean_series(scan_1h["Open"])
+                        low_series_1h = clean_series(scan_1h["Low"])
+                        close_1h = float(close_series_1h.iloc[-1])
+                        prev_close_1h = float(close_series_1h.iloc[-2])
+                        open_1h = float(open_series_1h.iloc[-1])
+                        low_1h = float(low_series_1h.iloc[-1])
                         ema20_1h = float(clean_series(scan_1h["EMA_20"]).iloc[-1])
                         atr_1h = float(clean_series(scan_1h["ATR"]).iloc[-1])
-                        if np.isfinite([close_1h, ema20_1h, atr_1h]).all() and atr_1h > 0:
+                        rsi_series_1h = clean_series(scan_1h["RSI"]) if "RSI" in scan_1h else pd.Series(dtype=float)
+                        rsi_now = float(rsi_series_1h.iloc[-1]) if len(rsi_series_1h) >= 2 else np.nan
+                        rsi_prev = float(rsi_series_1h.iloc[-2]) if len(rsi_series_1h) >= 2 else np.nan
+                        if np.isfinite([close_1h, prev_close_1h, open_1h, low_1h, ema20_1h, atr_1h]).all() and atr_1h > 0:
                             lower_zone = ema20_1h - 0.75 * atr_1h
                             upper_zone = ema20_1h + 0.25 * atr_1h
                             in_pullback_zone = lower_zone <= close_1h <= upper_zone
+                            # The candle's low must have reached the EMA20 neighborhood; a green
+                            # candle alone is not enough to label a pullback rebound.
+                            touched_ema_zone = low_1h <= ema20_1h + 0.10 * atr_1h and low_1h >= ema20_1h - 0.90 * atr_1h
                             bullish_background = trend_d == "上昇" and trend_4h == "上昇" and trend_1h in ("上昇", "中立")
+                            green_candle = close_1h > open_1h
+                            close_recovered = close_1h > prev_close_1h
+                            rsi_rising = np.isfinite([rsi_now, rsi_prev]).all() and rsi_now > rsi_prev
+                            pullback_rebound_confirmed = bool(
+                                bullish_background and in_pullback_zone and touched_ema_zone
+                                and green_candle and close_recovered and rsi_rising
+                            )
                             pullback_watch = bullish_background and in_pullback_zone and ai_direction == "様子見"
                             if bullish_background and in_pullback_zone:
                                 pullback_detail = "1h EMA20付近"
+                                missing = []
+                                if not touched_ema_zone: missing.append("安値のEMA20接近なし")
+                                if not green_candle: missing.append("陽線未確認")
+                                if not close_recovered: missing.append("前足終値を上回らず")
+                                if not rsi_rising: missing.append("RSI上向き未確認")
+                                if pullback_rebound_confirmed:
+                                    rebound_detail = "反発兆候あり（EMA20接近・陽線・終値上昇・RSI上向き）"
+                                else:
+                                    rebound_detail = "反発確認待ち：" + "、".join(missing)
                             elif bullish_background:
                                 pullback_detail = "上昇基調だがEMA20付近ではない"
+                                rebound_detail = "価格が押し目ゾーン外"
                             else:
                                 pullback_detail = "日足・4h・1hの上昇条件未達"
+                                rebound_detail = "上位足の上昇条件未達"
                     except (KeyError, IndexError, TypeError, ValueError):
                         pullback_detail = "押し目条件を計算できません"
+                        rebound_detail = "反発条件を計算できません"
 
                     if scan_is_stale:
                         decision, reason = "判定保留", f"データが古い可能性（約{scan_age_min/60:.1f}時間経過）"
@@ -1499,8 +1532,10 @@ def _render_main_area():
                         decision, reason = "見送り", "時系列検証の品質条件を満たさない"
                     elif not enough_movement:
                         decision, reason = "見送り", "ATRに対して推定スプレッド負担が大きい可能性"
+                    elif ai_direction == "様子見" and pullback_watch and pullback_rebound_confirmed:
+                        decision, reason = "反発兆候あり", "押し目ゾーンで陽線・前足終値超え・RSI上向きを確認。ただしAI方向は様子見のため買いシグナルではなく、次回再判定待ち"
                     elif ai_direction == "様子見" and pullback_watch:
-                        decision, reason = "押し目監視", "日足・4hが上昇、1h価格がEMA20付近。買い確定ではなく反発確認待ち"
+                        decision, reason = "押し目監視", "日足・4hが上昇、1h価格がEMA20付近。反発条件は未達または未確認。買い確定ではありません"
                     elif ai_direction == "様子見":
                         decision, reason = "様子見", f"明確なAI方向シグナルなし（押し目条件：{pullback_detail}）"
                     elif opposing:
@@ -1522,7 +1557,7 @@ def _render_main_area():
                     scan_results.append({
                         "通貨ペア": pair_label, "順位": "—", "判定": decision, "AI方向": ai_direction,
                         "時間足一致": alignment_text, "一致数": matching,
-                        "押し目状態": pullback_detail,
+                        "押し目状態": pullback_detail, "反発確認": rebound_detail,
                         "買い確率": f"{probs.get('buy', 0)}%", "売り確率": f"{probs.get('sell', 0)}%",
                         "価格": fmt_price(last_price_scan), "損切り目安": fmt_price(stop_price) if np.isfinite(stop_price) else "—",
                         "利確目安": fmt_price(target_price) if np.isfinite(target_price) else "—",
@@ -1531,14 +1566,14 @@ def _render_main_area():
                         "スプレッド目安(pips)": spread_scan,
                         "検証一致率": f"{metrics.get('balanced_accuracy', 0):.1f}%" if metrics else "不足",
                         "検証件数": int(metrics.get("n_test", 0) or 0), "理由": reason,
-                        "判定詳細": f"時間足={alignment_text}。AI={ai_direction}。一致={matching}/3。データ鮮度={'要確認' if scan_is_stale else 'OK'}。検証品質={'OK' if quality_ok else '未達'}。ATR/スプレッド条件={'OK' if enough_movement else '未達'}。押し目={pullback_detail}。",
+                        "判定詳細": f"時間足={alignment_text}。AI={ai_direction}。一致={matching}/3。データ鮮度={'要確認' if scan_is_stale else 'OK'}。検証品質={'OK' if quality_ok else '未達'}。ATR/スプレッド条件={'OK' if enough_movement else '未達'}。押し目={pullback_detail}。反発={rebound_detail}。",
                     })
             except Exception as exc:
                 scan_results.append({"通貨ペア": pair_label, "順位": "—", "判定": "確認失敗", "AI方向": "—", "時間足一致": "確認不可", "買い確率": "—", "売り確率": "—", "価格": "—", "損切り目安": "—", "利確目安": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": f"分析エラー: {type(exc).__name__}"})
             progress.progress(idx / len(pair_items), text=f"確認中: {pair_label} ({idx}/{len(pair_items)})")
         progress.empty()
         # Rank candidates first; all other states remain visible below them.
-        priority = {"候補あり": 0, "押し目監視": 1, "様子見": 2, "方向不一致・見送り": 3, "見送り": 4, "判定保留": 5, "確認失敗": 6}
+        priority = {"候補あり": 0, "反発兆候あり": 1, "押し目監視": 2, "様子見": 3, "方向不一致・見送り": 4, "見送り": 5, "判定保留": 6, "確認失敗": 7}
         scan_results.sort(key=lambda r: (priority.get(r.get("判定"), 9), -int(r.get("一致数", 0) or 0), -float(str(r.get("買い確率", "0")).replace("%", "0") or 0) if str(r.get("買い確率", "—")).replace("%", "").isdigit() else 0))
         for rank, row in enumerate(scan_results, start=1): row["順位"] = rank
         scan_now = datetime.now(JST)
