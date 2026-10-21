@@ -582,15 +582,21 @@ def get_usdjpy_rate():
 
 
 def _impact_from_text(title, summary=""):
+    """見出しの語句だけで暫定分類する。実際の影響度や方向を断定しない。"""
     text = f"{title} {summary}".lower()
-    high_terms = ["fomc", "interest rate", "inflation", "cpi", "payroll", "jobs report",
-                  "central bank", "boj", "bank of japan", "fed", "intervention", "gdp"]
+    high_terms = [
+        "fomc", "interest rate", "policy rate", "inflation", "cpi", "core pce", "pce price",
+        "payroll", "nonfarm", "jobs report", "unemployment rate", "central bank", "boj",
+        "bank of japan", "federal reserve", "fed decision", "powell", "植田", "日銀", "金融政策",
+        "政策金利", "米雇用統計", "雇用統計", "消費者物価", "物価指数", "介入", "intervention",
+        "gdp", "利上げ", "利下げ", "緊急会合", "emergency meeting"
+    ]
     if any(x in text for x in high_terms):
-        return "影響度：高", "材料の重要度が高い可能性があります", "方向は本文と実際の結果を確認"
-    medium_terms = ["yen", "dollar", "treasury", "bond", "economy", "employment", "trade"]
+        return "影響度：高", "重要イベント関連の語句を検出。発表内容・時刻・市場反応を確認してください", "方向は見出しだけでは判定しない"
+    medium_terms = ["yen", "dollar", "treasury", "bond", "economy", "employment", "trade", "pmi", "retail sales", "小売", "景気", "為替"]
     if any(x in text for x in medium_terms):
-        return "影響度：中", "為替関連キーワードを検出", "方向は本文と市場反応を確認"
-    return "影響度：低", "関連度は限定的な可能性", "方向判定なし"
+        return "影響度：中", "為替・景気関連の語句を検出。本文と市場反応を確認してください", "方向は本文と市場反応を確認"
+    return "影響度：低", "見出し内の関連語句は限定的です（影響がないという意味ではありません）", "方向判定なし"
 
 
 # News is cached for 15 minutes to reduce repeated requests during ordinary UI reruns.
@@ -611,11 +617,18 @@ def fetch_news_and_impact(ticker):
             title = content.get("title") or n.get("title") or "タイトルなし"
             publisher = content.get("provider", {}).get("displayName") if isinstance(content.get("provider"), dict) else n.get("publisher", "")
             pubdate = content.get("pubDate") or n.get("providerPublishTime")
+            published_ts = None
             try:
                 if isinstance(pubdate, (int, float)):
-                    time_str = datetime.fromtimestamp(pubdate, tz=JST).strftime("%m/%d %H:%M")
+                    published_ts = float(pubdate)
+                    time_str = datetime.fromtimestamp(pubdate, tz=JST).strftime("%Y/%m/%d %H:%M JST")
                 elif pubdate:
-                    time_str = str(pubdate)[:16]
+                    parsed_date = pd.to_datetime(pubdate, utc=True, errors="coerce")
+                    if not pd.isna(parsed_date):
+                        published_ts = float(parsed_date.timestamp())
+                        time_str = parsed_date.tz_convert(JST).strftime("%Y/%m/%d %H:%M JST")
+                    else:
+                        time_str = str(pubdate)[:25]
                 else:
                     time_str = "時刻不明"
             except Exception:
@@ -624,7 +637,7 @@ def fetch_news_and_impact(ticker):
             link = canonical.get("url") or n.get("link") or "#"
             impact, reason, direction = _impact_from_text(str(title), str(content.get("summary", "")))
             items.append({"title": str(title), "publisher": str(publisher or "Yahoo Finance"),
-                          "time": time_str, "link": str(link), "impact": impact,
+                          "time": time_str, "published_ts": published_ts, "link": str(link), "impact": impact,
                           "reason": reason, "direction": direction, "source": "Yahoo Finance"})
     except Exception as exc:
         errors.append(f"Yahoo Finance: {type(exc).__name__}")
@@ -665,10 +678,20 @@ def fetch_news_and_impact(ticker):
                         if atom_link is not None:
                             link = atom_link.attrib.get("href", "#")
                     date_node = node.find("pubDate") or node.find("{http://www.w3.org/2005/Atom}updated") or node.find("{http://www.w3.org/2005/Atom}published")
-                    time_str = (date_node.text or "")[:25] if date_node is not None else "時刻不明"
+                    raw_date = (date_node.text or "").strip() if date_node is not None else ""
+                    published_ts = None
+                    try:
+                        parsed_date = pd.to_datetime(raw_date, utc=True, errors="coerce") if raw_date else pd.NaT
+                        if not pd.isna(parsed_date):
+                            published_ts = float(parsed_date.timestamp())
+                            time_str = parsed_date.tz_convert(JST).strftime("%Y/%m/%d %H:%M JST")
+                        else:
+                            time_str = raw_date[:25] if raw_date else "時刻不明"
+                    except Exception:
+                        time_str = raw_date[:25] if raw_date else "時刻不明"
                     impact, reason, direction = _impact_from_text(title)
                     items.append({"title": title, "publisher": publisher, "time": time_str,
-                                  "link": link, "impact": impact, "reason": reason,
+                                  "published_ts": published_ts, "link": link, "impact": impact, "reason": reason,
                                   "direction": direction, "source": publisher})
                 if len(items) >= 12:
                     break
@@ -682,6 +705,48 @@ def fetch_news_and_impact(ticker):
     else:
         status = "取得できるニュースがありません。ネットワーク、配信元、取得制限を確認してください"
     return {"items": items, "status": status, "errors": errors}
+
+
+def summarize_news_risk(items):
+    """取得できた見出しを簡易集計。経済指標カレンダーや将来の発表時刻ではない。"""
+    if not items:
+        return {
+            "level": "確認できず", "kind": "unknown",
+            "message": "ニュースを取得できていません。リスクが低いという意味ではないため、取引前に公式の経済指標予定を確認してください。",
+            "high_count": 0, "recent_count": 0,
+        }
+    now_ts = datetime.now(JST).timestamp()
+    high_items = [x for x in items if str(x.get("impact", "")).startswith("影響度：高")]
+    recent_high = []
+    timestamp_unknown = 0
+    for item in high_items:
+        ts = item.get("published_ts")
+        try:
+            ts = float(ts) if ts is not None else None
+        except (TypeError, ValueError):
+            ts = None
+        if ts is None:
+            timestamp_unknown += 1
+        elif 0 <= now_ts - ts <= 24 * 60 * 60:
+            recent_high.append(item)
+    if recent_high:
+        return {
+            "level": "重要ニュースあり・要確認", "kind": "high",
+            "message": f"過去24時間以内の見出しに重要イベント関連語句が {len(recent_high)} 件あります。発表済みか、結果・市場反応・今後の予定を公式情報で確認してください。",
+            "high_count": len(high_items), "recent_count": len(recent_high),
+        }
+    if high_items:
+        suffix = "掲載時刻を確認できない見出しもあります。" if timestamp_unknown else ""
+        return {
+            "level": "重要語句あり・時刻確認", "kind": "medium",
+            "message": f"重要イベント関連語句を含む見出しが {len(high_items)} 件あります。古いニュースの可能性もあるため、掲載時刻と公式発表を確認してください。{suffix}",
+            "high_count": len(high_items), "recent_count": 0,
+        }
+    return {
+        "level": "高影響語句は未検出", "kind": "low",
+        "message": "取得した見出しから重要イベント関連語句を検出しませんでした。ただしニュースの網羅性は保証されず、経済指標の発表がないことや相場が安全であることを意味しません。",
+        "high_count": 0, "recent_count": 0,
+    }
 
 
 # Price data is cached for 60 seconds. This is data freshness, not a UI auto-refresh timer.
@@ -2359,12 +2424,22 @@ def _render_main_area():
         st.caption(f"手動調整欄は計算補助です。損失見積りには想定スプレッド {spread_pips:.1f} pips とスリッページ {slippage_pips:.1f} pipsを加算しています。実際の約定価格・コスト・価格飛びで損益は変わります。")
 
     elif active_section == APP_SECTIONS[2]:
-        st.markdown("##### 📰 リアルタイム為替ニュース & キーワード分析予測")
-        st.caption("ニュース見出しのキーワード参考表示です。本文理解や実際の市場反応を保証するAI予測ではありません。")
-        if news_items:
-            st.success(f"ニュース状態：{news_status}（{len(news_items)}件）")
+        st.markdown("##### 📰 為替ニュース・経済イベントリスク確認")
+        st.caption("見出し語句による補助表示です。公式の経済指標カレンダーではなく、発表予定時刻・市場反応・売買方向を保証しません。")
+        risk_summary = summarize_news_risk(news_items)
+        if risk_summary["kind"] == "high":
+            st.error(f"🚨 ニュース注意度：{risk_summary['level']}\n\n{risk_summary['message']}")
+        elif risk_summary["kind"] == "medium":
+            st.warning(f"⚠️ ニュース注意度：{risk_summary['level']}\n\n{risk_summary['message']}")
+        elif risk_summary["kind"] == "low":
+            st.info(f"ℹ️ ニュース注意度：{risk_summary['level']}\n\n{risk_summary['message']}")
         else:
-            st.warning(f"ニュース状態：{news_status}")
+            st.warning(f"⚠️ ニュース注意度：{risk_summary['level']}\n\n{risk_summary['message']}")
+        st.caption("取引前チェック：米CPI・雇用統計・FOMC、日銀会合、要人発言、週末・祝日の流動性を公式発表元で確認してください。")
+        if news_items:
+            st.success(f"ニュース取得状態：{news_status}（{len(news_items)}件）")
+        else:
+            st.warning(f"ニュース取得状態：{news_status}")
             if news_errors:
                 st.caption("接続診断：" + " / ".join(news_errors[:3]))
         with st.expander("🔔 主要経済指標と為替への影響パターン",expanded=True):
@@ -2377,7 +2452,7 @@ def _render_main_area():
             | **日銀会合** | 政策金利・総裁会見 | 政策修正は円相場を動かす場合がある |
             """)
         st.markdown("---")
-        st.markdown(f"##### 🌐 `{selected_label}` 関連のニュース & キーワード参考判定")
+        st.markdown(f"##### 🌐 `{selected_label}` 関連ニュース（見出し参考判定）")
         if not news_items:
             st.info("関連ニュースを取得できませんでした。")
         else:
