@@ -1,14 +1,14 @@
 {
   "schema_version": 3,
-  "last_run_jst": "2026-10-22T01:27:37.133793+09:00",
+  "last_run_jst": "2026-10-22T06:41:37.504847+09:00",
   "mode": "multi_period_validation_no_discord_no_auto_orders",
   "interval": "1h",
   "summary": [
-    "米ドル/円 (USD/JPY): 様子見 / 様子見 / 買い43%・売り27% / 価格参考 158.13800 / 明確なAI方向シグナルなし",
-    "英ポンド/円 (GBP/JPY): 見送り / 様子見 / 買い40%・売り28% / 価格参考 211.67200 / 複数期間の時系列検証条件を満たさない",
-    "ユーロ/円 (EUR/JPY): 見送り / 様子見 / 買い52%・売り37% / 価格参考 177.40401 / 複数期間の時系列検証条件を満たさない",
-    "豪ドル/円 (AUD/JPY): 見送り / 様子見 / 買い34%・売り27% / 価格参考 111.09500 / 複数期間の時系列検証条件を満たさない",
-    "ユーロ/米ドル (EUR/USD): 様子見 / 様子見 / 買い37%・売り36% / 価格参考 1.12233 / 明確なAI方向シグナルなし"
+    "米ドル/円 (USD/JPY): 様子見 / 様子見 / 買い35%・売り28% / 価格参考 158.12700 / 明確なAI方向シグナルなし",
+    "英ポンド/円 (GBP/JPY): 見送り / 様子見 / 買い30%・売り38% / 価格参考 211.78200 / 複数期間の時系列検証条件を満たさない",
+    "ユーロ/円 (EUR/JPY): 見送り / 様子見 / 買い40%・売り30% / 価格参考 177.59801 / 複数期間の時系列検証条件を満たさない",
+    "豪ドル/円 (AUD/JPY): 見送り / 様子見 / 買い34%・売り27% / 価格参考 111.12600 / 複数期間の時系列検証条件を満たさない",
+    "ユーロ/米ドル (EUR/USD): 様子見 / 様子見 / 買い24%・売り21% / 価格参考 1.12372 / 明確なAI方向シグナルなし"
   ],
   "metrics": {
     "USDJPY=X": {
@@ -16,16 +16,16 @@
       "status": "ok",
       "decision": "様子見",
       "direction": "様子見",
-      "close": 158.13800048828125,
-      "bar_time_jst": "2026-10-22 00:00",
-      "data_age_minutes": 87.4,
-      "validation_balanced_accuracy_pct": 45.6,
+      "close": 158.1269989013672,
+      "bar_time_jst": "2026-10-22 05:00",
+      "data_age_minutes": 101.5,
+      "validation_balanced_accuracy_pct": 47.4,
       "baseline_balanced_accuracy_pct": 33.3,
       "quality_gate_passed": true,
-      "training_samples": 1386,
+      "training_samples": 1391,
       "validation": {
         "passed": true,
-        "mean_balanced_accuracy_pct": 45.6,
+        "mean_balanced_accuracy_pct": 47.4,
         "mean_baseline_balanced_accuracy_pct": 33.3,
         "folds_passed": 3,
         "fold_count": 3,
@@ -33,27 +33,27 @@
           {
             "fold": 1,
             "status": "ok",
-            "train_samples": 754,
+            "train_samples": 757,
             "validation_samples": 208,
-            "balanced_accuracy_pct": 42.5,
+            "balanced_accuracy_pct": 47.2,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           },
           {
             "fold": 2,
             "status": "ok",
-            "train_samples": 962,
+            "train_samples": 965,
             "validation_samples": 208,
-            "balanced_accuracy_pct": 45.9,
+            "balanced_accuracy_pct": 48.3,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           },
           {
             "fold": 3,
             "status": "ok",
-            "train_samples": 1170,
-            "validation_samples": 208,
-            "balanced_accuracy_pct": 48.4,
+            "train_samples": 1173,
+            "validation_samples": 210,
+            "balanced_accuracy_pct": 46.7,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           }
@@ -61,8 +61,8 @@
         "reason": "複数期間の検証条件を満たした"
       },
       "timeframe_trends": [
-        "中立",
-        "中立",
+        "下降",
+        "上昇",
         "上昇"
       ]
     },
@@ -71,16 +71,16 @@
       "status": "ok",
       "decision": "見送り",
       "direction": "様子見",
-      "close": 211.6719970703125,
-      "bar_time_jst": "2026-10-22 00:00",
-      "data_age_minutes": 87.5,
-      "validation_balanced_accuracy_pct": 31.9,
+      "close": 211.78199768066406,
+      "bar_time_jst": "2026-10-22 05:00",
+      "data_age_minutes": 101.5,
+      "validation_balanced_accuracy_pct": 31.2,
       "baseline_balanced_accuracy_pct": 33.3,
       "quality_gate_passed": false,
-      "training_samples": 1386,
+      "training_samples": 1391,
       "validation": {
         "passed": false,
-        "mean_balanced_accuracy_pct": 31.9,
+        "mean_balanced_accuracy_pct": 31.2,
         "mean_baseline_balanced_accuracy_pct": 33.3,
         "folds_passed": 0,
         "fold_count": 3,
@@ -88,7 +88,7 @@
           {
             "fold": 1,
             "status": "ok",
-            "train_samples": 754,
+            "train_samples": 757,
             "validation_samples": 208,
             "balanced_accuracy_pct": 33.3,
             "baseline_balanced_accuracy_pct": 33.3,
@@ -97,18 +97,18 @@
           {
             "fold": 2,
             "status": "ok",
-            "train_samples": 962,
+            "train_samples": 965,
             "validation_samples": 208,
-            "balanced_accuracy_pct": 30.9,
+            "balanced_accuracy_pct": 30.6,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           },
           {
             "fold": 3,
             "status": "ok",
-            "train_samples": 1170,
-            "validation_samples": 208,
-            "balanced_accuracy_pct": 31.5,
+            "train_samples": 1173,
+            "validation_samples": 210,
+            "balanced_accuracy_pct": 29.7,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           }
@@ -126,16 +126,16 @@
       "status": "ok",
       "decision": "見送り",
       "direction": "様子見",
-      "close": 177.4040069580078,
-      "bar_time_jst": "2026-10-22 00:00",
-      "data_age_minutes": 87.5,
-      "validation_balanced_accuracy_pct": 30.6,
+      "close": 177.59800720214844,
+      "bar_time_jst": "2026-10-22 05:00",
+      "data_age_minutes": 101.6,
+      "validation_balanced_accuracy_pct": 29.5,
       "baseline_balanced_accuracy_pct": 33.3,
       "quality_gate_passed": false,
-      "training_samples": 1391,
+      "training_samples": 1396,
       "validation": {
         "passed": false,
-        "mean_balanced_accuracy_pct": 30.6,
+        "mean_balanced_accuracy_pct": 29.5,
         "mean_baseline_balanced_accuracy_pct": 33.3,
         "folds_passed": 0,
         "fold_count": 3,
@@ -143,27 +143,27 @@
           {
             "fold": 1,
             "status": "ok",
-            "train_samples": 757,
-            "validation_samples": 208,
-            "balanced_accuracy_pct": 24.7,
+            "train_samples": 759,
+            "validation_samples": 209,
+            "balanced_accuracy_pct": 23.9,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           },
           {
             "fold": 2,
             "status": "ok",
-            "train_samples": 965,
-            "validation_samples": 208,
-            "balanced_accuracy_pct": 34.4,
+            "train_samples": 968,
+            "validation_samples": 209,
+            "balanced_accuracy_pct": 34.3,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           },
           {
             "fold": 3,
             "status": "ok",
-            "train_samples": 1173,
-            "validation_samples": 210,
-            "balanced_accuracy_pct": 32.7,
+            "train_samples": 1177,
+            "validation_samples": 211,
+            "balanced_accuracy_pct": 30.4,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           }
@@ -171,8 +171,8 @@
         "reason": "複数期間の検証品質条件を満たさない"
       },
       "timeframe_trends": [
+        "上昇",
         "中立",
-        "下降",
         "下降"
       ]
     },
@@ -181,44 +181,44 @@
       "status": "ok",
       "decision": "見送り",
       "direction": "様子見",
-      "close": 111.09500122070312,
-      "bar_time_jst": "2026-10-22 00:00",
-      "data_age_minutes": 87.6,
-      "validation_balanced_accuracy_pct": 32.8,
+      "close": 111.1259994506836,
+      "bar_time_jst": "2026-10-22 05:00",
+      "data_age_minutes": 101.6,
+      "validation_balanced_accuracy_pct": 33.0,
       "baseline_balanced_accuracy_pct": 33.3,
       "quality_gate_passed": false,
-      "training_samples": 1390,
+      "training_samples": 1395,
       "validation": {
         "passed": false,
-        "mean_balanced_accuracy_pct": 32.8,
+        "mean_balanced_accuracy_pct": 33.0,
         "mean_baseline_balanced_accuracy_pct": 33.3,
-        "folds_passed": 1,
+        "folds_passed": 0,
         "fold_count": 3,
         "fold_results": [
           {
             "fold": 1,
             "status": "ok",
-            "train_samples": 756,
-            "validation_samples": 208,
-            "balanced_accuracy_pct": 27.5,
+            "train_samples": 759,
+            "validation_samples": 209,
+            "balanced_accuracy_pct": 28.4,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           },
           {
             "fold": 2,
             "status": "ok",
-            "train_samples": 964,
-            "validation_samples": 208,
-            "balanced_accuracy_pct": 38.4,
+            "train_samples": 968,
+            "validation_samples": 209,
+            "balanced_accuracy_pct": 37.8,
             "baseline_balanced_accuracy_pct": 33.3,
-            "passed": true
+            "passed": false
           },
           {
             "fold": 3,
             "status": "ok",
-            "train_samples": 1172,
+            "train_samples": 1177,
             "validation_samples": 210,
-            "balanced_accuracy_pct": 32.6,
+            "balanced_accuracy_pct": 32.7,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           }
@@ -236,16 +236,16 @@
       "status": "ok",
       "decision": "様子見",
       "direction": "様子見",
-      "close": 1.1223344802856445,
-      "bar_time_jst": "2026-10-22 00:00",
-      "data_age_minutes": 87.6,
-      "validation_balanced_accuracy_pct": 40.6,
+      "close": 1.123721718788147,
+      "bar_time_jst": "2026-10-22 05:00",
+      "data_age_minutes": 101.6,
+      "validation_balanced_accuracy_pct": 41.7,
       "baseline_balanced_accuracy_pct": 33.3,
       "quality_gate_passed": true,
-      "training_samples": 1388,
+      "training_samples": 1393,
       "validation": {
         "passed": true,
-        "mean_balanced_accuracy_pct": 40.6,
+        "mean_balanced_accuracy_pct": 41.7,
         "mean_baseline_balanced_accuracy_pct": 33.3,
         "folds_passed": 3,
         "fold_count": 3,
@@ -253,27 +253,27 @@
           {
             "fold": 1,
             "status": "ok",
-            "train_samples": 755,
-            "validation_samples": 208,
-            "balanced_accuracy_pct": 38.0,
+            "train_samples": 758,
+            "validation_samples": 209,
+            "balanced_accuracy_pct": 41.6,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           },
           {
             "fold": 2,
             "status": "ok",
-            "train_samples": 963,
-            "validation_samples": 208,
-            "balanced_accuracy_pct": 40.9,
+            "train_samples": 967,
+            "validation_samples": 209,
+            "balanced_accuracy_pct": 41.3,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           },
           {
             "fold": 3,
             "status": "ok",
-            "train_samples": 1171,
+            "train_samples": 1176,
             "validation_samples": 209,
-            "balanced_accuracy_pct": 43.0,
+            "balanced_accuracy_pct": 42.2,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           }
@@ -281,8 +281,8 @@
         "reason": "複数期間の検証条件を満たした"
       },
       "timeframe_trends": [
-        "中立",
-        "中立",
+        "上昇",
+        "下降",
         "下降"
       ]
     }
@@ -659,6 +659,286 @@
           "timeframe_trends": [
             "中立",
             "中立",
+            "下降"
+          ]
+        }
+      }
+    },
+    {
+      "time_jst": "2026-10-22T06:41:37.504847+09:00",
+      "metrics": {
+        "USDJPY=X": {
+          "pair": "米ドル/円 (USD/JPY)",
+          "status": "ok",
+          "decision": "様子見",
+          "direction": "様子見",
+          "close": 158.1269989013672,
+          "bar_time_jst": "2026-10-22 05:00",
+          "data_age_minutes": 101.5,
+          "validation_balanced_accuracy_pct": 47.4,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": true,
+          "training_samples": 1391,
+          "validation": {
+            "passed": true,
+            "mean_balanced_accuracy_pct": 47.4,
+            "mean_baseline_balanced_accuracy_pct": 33.3,
+            "folds_passed": 3,
+            "fold_count": 3,
+            "fold_results": [
+              {
+                "fold": 1,
+                "status": "ok",
+                "train_samples": 757,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 47.2,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              },
+              {
+                "fold": 2,
+                "status": "ok",
+                "train_samples": 965,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 48.3,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              },
+              {
+                "fold": 3,
+                "status": "ok",
+                "train_samples": 1173,
+                "validation_samples": 210,
+                "balanced_accuracy_pct": 46.7,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              }
+            ],
+            "reason": "複数期間の検証条件を満たした"
+          },
+          "timeframe_trends": [
+            "下降",
+            "上昇",
+            "上昇"
+          ]
+        },
+        "GBPJPY=X": {
+          "pair": "英ポンド/円 (GBP/JPY)",
+          "status": "ok",
+          "decision": "見送り",
+          "direction": "様子見",
+          "close": 211.78199768066406,
+          "bar_time_jst": "2026-10-22 05:00",
+          "data_age_minutes": 101.5,
+          "validation_balanced_accuracy_pct": 31.2,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": false,
+          "training_samples": 1391,
+          "validation": {
+            "passed": false,
+            "mean_balanced_accuracy_pct": 31.2,
+            "mean_baseline_balanced_accuracy_pct": 33.3,
+            "folds_passed": 0,
+            "fold_count": 3,
+            "fold_results": [
+              {
+                "fold": 1,
+                "status": "ok",
+                "train_samples": 757,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 33.3,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 2,
+                "status": "ok",
+                "train_samples": 965,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 30.6,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 3,
+                "status": "ok",
+                "train_samples": 1173,
+                "validation_samples": 210,
+                "balanced_accuracy_pct": 29.7,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              }
+            ],
+            "reason": "複数期間の検証品質条件を満たさない"
+          },
+          "timeframe_trends": [
+            "上昇",
+            "上昇",
+            "中立"
+          ]
+        },
+        "EURJPY=X": {
+          "pair": "ユーロ/円 (EUR/JPY)",
+          "status": "ok",
+          "decision": "見送り",
+          "direction": "様子見",
+          "close": 177.59800720214844,
+          "bar_time_jst": "2026-10-22 05:00",
+          "data_age_minutes": 101.6,
+          "validation_balanced_accuracy_pct": 29.5,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": false,
+          "training_samples": 1396,
+          "validation": {
+            "passed": false,
+            "mean_balanced_accuracy_pct": 29.5,
+            "mean_baseline_balanced_accuracy_pct": 33.3,
+            "folds_passed": 0,
+            "fold_count": 3,
+            "fold_results": [
+              {
+                "fold": 1,
+                "status": "ok",
+                "train_samples": 759,
+                "validation_samples": 209,
+                "balanced_accuracy_pct": 23.9,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 2,
+                "status": "ok",
+                "train_samples": 968,
+                "validation_samples": 209,
+                "balanced_accuracy_pct": 34.3,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 3,
+                "status": "ok",
+                "train_samples": 1177,
+                "validation_samples": 211,
+                "balanced_accuracy_pct": 30.4,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              }
+            ],
+            "reason": "複数期間の検証品質条件を満たさない"
+          },
+          "timeframe_trends": [
+            "上昇",
+            "中立",
+            "下降"
+          ]
+        },
+        "AUDJPY=X": {
+          "pair": "豪ドル/円 (AUD/JPY)",
+          "status": "ok",
+          "decision": "見送り",
+          "direction": "様子見",
+          "close": 111.1259994506836,
+          "bar_time_jst": "2026-10-22 05:00",
+          "data_age_minutes": 101.6,
+          "validation_balanced_accuracy_pct": 33.0,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": false,
+          "training_samples": 1395,
+          "validation": {
+            "passed": false,
+            "mean_balanced_accuracy_pct": 33.0,
+            "mean_baseline_balanced_accuracy_pct": 33.3,
+            "folds_passed": 0,
+            "fold_count": 3,
+            "fold_results": [
+              {
+                "fold": 1,
+                "status": "ok",
+                "train_samples": 759,
+                "validation_samples": 209,
+                "balanced_accuracy_pct": 28.4,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 2,
+                "status": "ok",
+                "train_samples": 968,
+                "validation_samples": 209,
+                "balanced_accuracy_pct": 37.8,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 3,
+                "status": "ok",
+                "train_samples": 1177,
+                "validation_samples": 210,
+                "balanced_accuracy_pct": 32.7,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              }
+            ],
+            "reason": "複数期間の検証品質条件を満たさない"
+          },
+          "timeframe_trends": [
+            "上昇",
+            "中立",
+            "上昇"
+          ]
+        },
+        "EURUSD=X": {
+          "pair": "ユーロ/米ドル (EUR/USD)",
+          "status": "ok",
+          "decision": "様子見",
+          "direction": "様子見",
+          "close": 1.123721718788147,
+          "bar_time_jst": "2026-10-22 05:00",
+          "data_age_minutes": 101.6,
+          "validation_balanced_accuracy_pct": 41.7,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": true,
+          "training_samples": 1393,
+          "validation": {
+            "passed": true,
+            "mean_balanced_accuracy_pct": 41.7,
+            "mean_baseline_balanced_accuracy_pct": 33.3,
+            "folds_passed": 3,
+            "fold_count": 3,
+            "fold_results": [
+              {
+                "fold": 1,
+                "status": "ok",
+                "train_samples": 758,
+                "validation_samples": 209,
+                "balanced_accuracy_pct": 41.6,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              },
+              {
+                "fold": 2,
+                "status": "ok",
+                "train_samples": 967,
+                "validation_samples": 209,
+                "balanced_accuracy_pct": 41.3,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              },
+              {
+                "fold": 3,
+                "status": "ok",
+                "train_samples": 1176,
+                "validation_samples": 209,
+                "balanced_accuracy_pct": 42.2,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              }
+            ],
+            "reason": "複数期間の検証条件を満たした"
+          },
+          "timeframe_trends": [
+            "上昇",
+            "下降",
             "下降"
           ]
         }
