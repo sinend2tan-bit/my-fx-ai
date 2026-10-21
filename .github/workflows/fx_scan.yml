@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   schedule:
     # 15分間隔を目安に実行。実行時刻は遅れる場合があります。
-    - cron: "*/15 * * * *"
+    - cron: "7,22,37,52 * * * *"
 
 permissions:
   contents: write
