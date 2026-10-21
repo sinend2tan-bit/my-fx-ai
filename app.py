@@ -36,6 +36,7 @@ SETTINGS_FILE = "user_settings.json"
 FEEDBACK_FILE = "trade_feedback.json"
 ENTRY_TRACK_FILE = "entry_candidate_history.json"
 FORECAST_TRACK_FILE = "forecast_outcome_history.json"
+PAIR_SCAN_OUTCOME_FILE = "pair_scan_outcomes.json"
 TRADE_JOURNAL_FILE = "actual_trade_journal.json"
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -1530,6 +1531,7 @@ def _render_main_area():
                         "スプレッド目安(pips)": spread_scan,
                         "検証一致率": f"{metrics.get('balanced_accuracy', 0):.1f}%" if metrics else "不足",
                         "検証件数": int(metrics.get("n_test", 0) or 0), "理由": reason,
+                        "判定詳細": f"時間足={alignment_text}。AI={ai_direction}。一致={matching}/3。データ鮮度={'要確認' if scan_is_stale else 'OK'}。検証品質={'OK' if quality_ok else '未達'}。ATR/スプレッド条件={'OK' if enough_movement else '未達'}。押し目={pullback_detail}。",
                     })
             except Exception as exc:
                 scan_results.append({"通貨ペア": pair_label, "順位": "—", "判定": "確認失敗", "AI方向": "—", "時間足一致": "確認不可", "買い確率": "—", "売り確率": "—", "価格": "—", "損切り目安": "—", "利確目安": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": f"分析エラー: {type(exc).__name__}"})
@@ -1539,9 +1541,78 @@ def _render_main_area():
         priority = {"候補あり": 0, "押し目監視": 1, "様子見": 2, "方向不一致・見送り": 3, "見送り": 4, "判定保留": 5, "確認失敗": 6}
         scan_results.sort(key=lambda r: (priority.get(r.get("判定"), 9), -int(r.get("一致数", 0) or 0), -float(str(r.get("買い確率", "0")).replace("%", "0") or 0) if str(r.get("買い確率", "—")).replace("%", "").isdigit() else 0))
         for rank, row in enumerate(scan_results, start=1): row["順位"] = rank
-        scan_time_text = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+        scan_now = datetime.now(JST)
+        scan_time_text = scan_now.strftime("%Y-%m-%d %H:%M:%S JST")
         st.session_state["pair_scan_results"] = {"time": scan_time_text, "timeframe": scan_tf_label, "interval_minutes": int(scan_interval_minutes), "rows": scan_results}
         st.session_state["pair_scan_last_epoch"] = time.time()
+
+        # Candidate outcome tracking: evaluate the price after 6h and 24h on later scans.
+        # This is directional follow-up only, not actual trade P/L or a guarantee of fill prices.
+        try:
+            outcome_rows = []
+            if os.path.exists(PAIR_SCAN_OUTCOME_FILE):
+                with open(PAIR_SCAN_OUTCOME_FILE, "r", encoding="utf-8") as of:
+                    loaded_outcomes = json.load(of)
+                    if isinstance(loaded_outcomes, list): outcome_rows = loaded_outcomes
+            current_prices = {}
+            for current_row in scan_results:
+                label = current_row.get("通貨ペア")
+                ticker_for_row = PAIRS.get(label)
+                raw_price = str(current_row.get("価格", "")).replace(",", "")
+                try: current_price = float(raw_price)
+                except (TypeError, ValueError): current_price = np.nan
+                if ticker_for_row and np.isfinite(current_price) and current_price > 0:
+                    current_prices[label] = {"price": current_price, "ticker": ticker_for_row}
+
+            for event in outcome_rows:
+                if event.get("状態") != "計測中": continue
+                try: event_time = pd.Timestamp(event.get("記録時刻"))
+                except (TypeError, ValueError): continue
+                if event_time.tzinfo is None: event_time = event_time.tz_localize(JST)
+                else: event_time = event_time.tz_convert(JST)
+                elapsed_hours = (scan_now - event_time.to_pydatetime()).total_seconds() / 3600
+                live = current_prices.get(event.get("通貨ペア"))
+                if not live: continue
+                start_price = float(event.get("候補価格", 0) or 0)
+                pip_size = float(event.get("pip単位", 0) or 0)
+                if start_price <= 0 or pip_size <= 0: continue
+                for horizon in (6, 24):
+                    key = f"{horizon}時間後"
+                    if elapsed_hours >= horizon and not event.get(key):
+                        raw_move_pips = (live["price"] - start_price) / pip_size
+                        direction = event.get("AI方向")
+                        favorable_pips = raw_move_pips if direction == "買い" else -raw_move_pips
+                        if favorable_pips > 0.1: outcome_label = "方向一致"
+                        elif favorable_pips < -0.1: outcome_label = "逆方向"
+                        else: outcome_label = "ほぼ横ばい"
+                        event[key] = {"評価時刻": scan_time_text, "評価価格": live["price"], "方向一致pips": round(favorable_pips, 1), "結果": outcome_label}
+                if event.get("6時間後") and event.get("24時間後"):
+                    event["状態"] = "評価完了"
+
+            existing_keys = {str(e.get("イベントID")) for e in outcome_rows}
+            for row in scan_results:
+                if row.get("判定") != "候補あり": continue
+                label = row.get("通貨ペア", "")
+                direction = row.get("AI方向", "")
+                if direction not in ("買い", "売り") or label not in current_prices: continue
+                candle_time = str(row.get("確定足時刻", scan_time_text))
+                event_id = f"{label}|{scan_tf_label}|{direction}|{candle_time}"
+                if event_id in existing_keys: continue
+                ticker_for_row = current_prices[label]["ticker"]
+                pip_size = 0.01 if "JPY" in ticker_for_row else 0.0001
+                outcome_rows.append({
+                    "イベントID": event_id, "記録時刻": scan_now.isoformat(), "通貨ペア": label,
+                    "時間足": scan_tf_label, "判定": row.get("判定"), "AI方向": direction,
+                    "候補価格": current_prices[label]["price"], "pip単位": pip_size,
+                    "時間足一致": row.get("時間足一致", "—"), "理由": row.get("理由", "—"),
+                    "状態": "計測中", "6時間後": None, "24時間後": None,
+                })
+                existing_keys.add(event_id)
+            with open(PAIR_SCAN_OUTCOME_FILE, "w", encoding="utf-8") as of:
+                json.dump(outcome_rows[-2000:], of, ensure_ascii=False, indent=2, default=_json_default)
+        except (OSError, ValueError, TypeError, KeyError) as outcome_exc:
+            st.warning(f"候補後の自動採点を保存できませんでした（{type(outcome_exc).__name__}）。")
+
         # Persist a compact scan history for later review; keep last 500 snapshots.
         try:
             history_path = "pair_scan_history.json"
@@ -1607,6 +1678,35 @@ def _render_main_area():
                 st.info("まだ履歴がありません。スキャンを実行すると保存されます。")
         except (OSError, ValueError, TypeError):
             st.info("まだ履歴がありません。スキャンを実行すると保存されます。")
+    with st.expander("📊 候補後の自動採点（6時間後・24時間後）", expanded=False):
+        st.caption("『候補あり』になった時点の価格と、その後のスキャン価格を比較します。実際の約定損益、最大逆行幅、スプレッド・スワップは含みません。アプリが起動していない間は評価が遅れる場合があります。")
+        try:
+            with open(PAIR_SCAN_OUTCOME_FILE, "r", encoding="utf-8") as of:
+                outcome_view_rows = json.load(of)
+            if isinstance(outcome_view_rows, list) and outcome_view_rows:
+                display_rows = []
+                for event in outcome_view_rows[-100:][::-1]:
+                    row_view = {"記録時刻": event.get("記録時刻", "—"), "通貨ペア": event.get("通貨ペア", "—"), "時間足": event.get("時間足", "—"), "AI方向": event.get("AI方向", "—"), "候補価格": event.get("候補価格", "—"), "状態": event.get("状態", "—")}
+                    for horizon in (6, 24):
+                        outcome = event.get(f"{horizon}時間後") or {}
+                        row_view[f"{horizon}時間後結果"] = outcome.get("結果", "計測待ち")
+                        row_view[f"{horizon}時間後方向一致pips"] = outcome.get("方向一致pips", "—")
+                    display_rows.append(row_view)
+                outcome_df = pd.DataFrame(display_rows)
+                st.dataframe(outcome_df, use_container_width=True, hide_index=True)
+                completed_6h = [e for e in outcome_view_rows if isinstance(e.get("6時間後"), dict)]
+                completed_24h = [e for e in outcome_view_rows if isinstance(e.get("24時間後"), dict)]
+                if completed_6h:
+                    hit6 = sum(1 for e in completed_6h if e["6時間後"].get("結果") == "方向一致") / len(completed_6h) * 100
+                    st.metric("6時間後の方向一致率（参考）", f"{hit6:.1f}%", help="評価済み候補のうち、候補方向に価格が動いていた割合。将来の勝率を示すものではありません。")
+                if completed_24h:
+                    hit24 = sum(1 for e in completed_24h if e["24時間後"].get("結果") == "方向一致") / len(completed_24h) * 100
+                    st.metric("24時間後の方向一致率（参考）", f"{hit24:.1f}%", help="評価済み候補のうち、候補方向に価格が動いていた割合。将来の勝率を示すものではありません。")
+                st.download_button("📥 候補後採点をCSV保存", data=outcome_df.to_csv(index=False).encode("utf-8-sig"), file_name="pair_scan_outcomes.csv", mime="text/csv")
+            else:
+                st.info("採点データはまだありません。『候補あり』が出ると記録が始まり、6時間後・24時間後のスキャンで採点します。")
+        except (OSError, ValueError, TypeError):
+            st.info("採点データはまだありません。スキャンを実行すると記録されます。")
     st.caption("自動スキャンはアプリ画面が開いている間だけ動作します。Yahoo Financeのデータ取得頻度・遅延は保証されません。通知は新しい候補が検出された場合のみで、自動発注は行いません。")
 
     # st.tabs() はボタン操作などの再実行後に先頭タブへ戻ることがあるため、
