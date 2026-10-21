@@ -1,29 +1,22 @@
 
-name: FX background scanner
+name: FX Cloud Scan
 
 on:
   workflow_dispatch:
   schedule:
-    # 15分間隔を目安に実行。実行時刻は遅れる場合があります。
-    - cron: "7,22,37,52 * * * *"
+    - cron: "17 */6 * * *"
 
 permissions:
   contents: write
 
-concurrency:
-  group: fx-background-scan
-  cancel-in-progress: false
-
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: main
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,21 +26,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install yfinance pandas numpy scikit-learn requests
+          pip install yfinance pandas numpy scikit-learn
 
-      - name: Run FX scanner
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          FX_SCAN_INTERVAL: "1h"
+      - name: Run FX scan and validation
         run: python scanner.py
 
-      - name: Save alert de-duplication state
+      - name: Save scan history
         run: |
-          if [ -n "$(git status --porcelain -- scan_state.json)" ]; then
+          if [ -n "$(git status --porcelain scan_state.json)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add scan_state.json
-            git commit -m "Update FX scanner state [skip ci]"
+            git commit -m "Update FX scan validation history" || true
             git push
           fi
-
