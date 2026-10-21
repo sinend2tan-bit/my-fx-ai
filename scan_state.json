@@ -1,11 +1,203 @@
 {
-  "seen": [],
-  "last_run": "2026-10-21T21:54:37.123786+09:00",
-  "report": [
-    "米ドル/円 (USD/JPY): 様子見 / 様子見 / 買い51%・売り39% / 価格参考 157.87700 / 明確なAI方向シグナルなし",
-    "英ポンド/円 (GBP/JPY): 見送り / 様子見 / 買い40%・売り36% / 価格参考 211.49200 / 時系列検証の品質条件を満たさない",
-    "ユーロ/円 (EUR/JPY): 様子見 / 様子見 / 買い45%・売り51% / 価格参考 177.28600 / 明確なAI方向シグナルなし",
-    "豪ドル/円 (AUD/JPY): 様子見 / 様子見 / 買い30%・売り29% / 価格参考 111.00700 / 明確なAI方向シグナルなし",
-    "ユーロ/米ドル (EUR/USD): 様子見 / 様子見 / 買い41%・売り42% / 価格参考 1.12322 / 明確なAI方向シグナルなし"
+  "schema_version": 2,
+  "last_run_jst": "2026-10-22T00:57:59.454429+09:00",
+  "mode": "analysis_and_validation_no_discord_no_auto_orders",
+  "interval": "1h",
+  "summary": [
+    "米ドル/円 (USD/JPY): 様子見 / 様子見 / 買い45%・売り30% / 価格参考 158.10500 / 明確なAI方向シグナルなし",
+    "英ポンド/円 (GBP/JPY): 見送り / 様子見 / 買い45%・売り26% / 価格参考 211.63901 / 時系列検証の品質条件を満たさない",
+    "ユーロ/円 (EUR/JPY): 様子見 / 様子見 / 買い50%・売り35% / 価格参考 177.45799 / 明確なAI方向シグナルなし",
+    "豪ドル/円 (AUD/JPY): 様子見 / 様子見 / 買い40%・売り28% / 価格参考 111.11400 / 明確なAI方向シグナルなし",
+    "ユーロ/米ドル (EUR/USD): 様子見 / 様子見 / 買い45%・売り40% / 価格参考 1.12271 / 明確なAI方向シグナルなし"
+  ],
+  "metrics": {
+    "USDJPY=X": {
+      "pair": "米ドル/円 (USD/JPY)",
+      "status": "ok",
+      "decision": "様子見",
+      "direction": "様子見",
+      "close": 158.10499572753906,
+      "bar_time_jst": "2026-10-21 23:00",
+      "data_age_minutes": 117.8,
+      "validation_balanced_accuracy_pct": 47.5,
+      "baseline_balanced_accuracy_pct": 33.3,
+      "quality_gate_passed": true,
+      "training_samples": 1385,
+      "timeframe_trends": [
+        "下降",
+        "中立",
+        "上昇"
+      ]
+    },
+    "GBPJPY=X": {
+      "pair": "英ポンド/円 (GBP/JPY)",
+      "status": "ok",
+      "decision": "見送り",
+      "direction": "様子見",
+      "close": 211.63900756835938,
+      "bar_time_jst": "2026-10-21 23:00",
+      "data_age_minutes": 117.9,
+      "validation_balanced_accuracy_pct": 35.8,
+      "baseline_balanced_accuracy_pct": 33.3,
+      "quality_gate_passed": false,
+      "training_samples": 1385,
+      "timeframe_trends": [
+        "上昇",
+        "上昇",
+        "中立"
+      ]
+    },
+    "EURJPY=X": {
+      "pair": "ユーロ/円 (EUR/JPY)",
+      "status": "ok",
+      "decision": "様子見",
+      "direction": "様子見",
+      "close": 177.45799255371094,
+      "bar_time_jst": "2026-10-21 23:00",
+      "data_age_minutes": 117.9,
+      "validation_balanced_accuracy_pct": 41.9,
+      "baseline_balanced_accuracy_pct": 33.3,
+      "quality_gate_passed": true,
+      "training_samples": 1390,
+      "timeframe_trends": [
+        "中立",
+        "下降",
+        "下降"
+      ]
+    },
+    "AUDJPY=X": {
+      "pair": "豪ドル/円 (AUD/JPY)",
+      "status": "ok",
+      "decision": "様子見",
+      "direction": "様子見",
+      "close": 111.11399841308594,
+      "bar_time_jst": "2026-10-21 23:00",
+      "data_age_minutes": 118.0,
+      "validation_balanced_accuracy_pct": 64.7,
+      "baseline_balanced_accuracy_pct": 33.3,
+      "quality_gate_passed": true,
+      "training_samples": 1389,
+      "timeframe_trends": [
+        "上昇",
+        "中立",
+        "上昇"
+      ]
+    },
+    "EURUSD=X": {
+      "pair": "ユーロ/米ドル (EUR/USD)",
+      "status": "ok",
+      "decision": "様子見",
+      "direction": "様子見",
+      "close": 1.12271249294281,
+      "bar_time_jst": "2026-10-21 23:00",
+      "data_age_minutes": 118.0,
+      "validation_balanced_accuracy_pct": 46.1,
+      "baseline_balanced_accuracy_pct": 33.3,
+      "quality_gate_passed": true,
+      "training_samples": 1387,
+      "timeframe_trends": [
+        "中立",
+        "中立",
+        "下降"
+      ]
+    }
+  },
+  "note": "このレポートは検証記録です。学習済みモデルを永続保存・app.pyへ配布する機能はまだありません。予測確率・検証指標は将来の利益を保証しません。",
+  "history": [
+    {
+      "time_jst": "2026-10-22T00:57:59.454429+09:00",
+      "metrics": {
+        "USDJPY=X": {
+          "pair": "米ドル/円 (USD/JPY)",
+          "status": "ok",
+          "decision": "様子見",
+          "direction": "様子見",
+          "close": 158.10499572753906,
+          "bar_time_jst": "2026-10-21 23:00",
+          "data_age_minutes": 117.8,
+          "validation_balanced_accuracy_pct": 47.5,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": true,
+          "training_samples": 1385,
+          "timeframe_trends": [
+            "下降",
+            "中立",
+            "上昇"
+          ]
+        },
+        "GBPJPY=X": {
+          "pair": "英ポンド/円 (GBP/JPY)",
+          "status": "ok",
+          "decision": "見送り",
+          "direction": "様子見",
+          "close": 211.63900756835938,
+          "bar_time_jst": "2026-10-21 23:00",
+          "data_age_minutes": 117.9,
+          "validation_balanced_accuracy_pct": 35.8,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": false,
+          "training_samples": 1385,
+          "timeframe_trends": [
+            "上昇",
+            "上昇",
+            "中立"
+          ]
+        },
+        "EURJPY=X": {
+          "pair": "ユーロ/円 (EUR/JPY)",
+          "status": "ok",
+          "decision": "様子見",
+          "direction": "様子見",
+          "close": 177.45799255371094,
+          "bar_time_jst": "2026-10-21 23:00",
+          "data_age_minutes": 117.9,
+          "validation_balanced_accuracy_pct": 41.9,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": true,
+          "training_samples": 1390,
+          "timeframe_trends": [
+            "中立",
+            "下降",
+            "下降"
+          ]
+        },
+        "AUDJPY=X": {
+          "pair": "豪ドル/円 (AUD/JPY)",
+          "status": "ok",
+          "decision": "様子見",
+          "direction": "様子見",
+          "close": 111.11399841308594,
+          "bar_time_jst": "2026-10-21 23:00",
+          "data_age_minutes": 118.0,
+          "validation_balanced_accuracy_pct": 64.7,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": true,
+          "training_samples": 1389,
+          "timeframe_trends": [
+            "上昇",
+            "中立",
+            "上昇"
+          ]
+        },
+        "EURUSD=X": {
+          "pair": "ユーロ/米ドル (EUR/USD)",
+          "status": "ok",
+          "decision": "様子見",
+          "direction": "様子見",
+          "close": 1.12271249294281,
+          "bar_time_jst": "2026-10-21 23:00",
+          "data_age_minutes": 118.0,
+          "validation_balanced_accuracy_pct": 46.1,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": true,
+          "training_samples": 1387,
+          "timeframe_trends": [
+            "中立",
+            "中立",
+            "下降"
+          ]
+        }
+      }
+    }
   ]
 }
