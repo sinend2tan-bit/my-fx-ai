@@ -1007,6 +1007,27 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         close = float(data["Close"].iloc[-1])
         rsi = float(data["RSI"].iloc[-1]) if "RSI" in data else 50.0
         adx = float(data["ADX"].iloc[-1]) if "ADX" in data else 20.0
+                # 売買判定とは別に、方向候補を表示するための参考情報
+        candidate = None
+        candidate_reason = "買い・売りの確率差が小さい"
+
+        if buy_p >= 0.40 and buy_p > sell_p + 0.08 and rsi < 80:
+            candidate = "買い候補"
+            candidate_reason = "買い確率が売り確率を8ポイント超上回る"
+        elif sell_p >= 0.40 and sell_p > buy_p + 0.08 and rsi > 20:
+            candidate = "売り候補"
+            candidate_reason = "売り確率が買い確率を8ポイント超上回る"
+
+        st.session_state["directional_candidate"] = {
+            "ticker": ticker,
+            "interval": interval,
+            "candidate": candidate,
+            "reason": candidate_reason,
+            "buy": probs["buy"],
+            "sell": probs["sell"],
+            "quality_ok": bool(model_quality_ok),
+            "test_count": int(test_count),
+        }
         if not model_quality_ok:
             status = "WAIT (様子見)"
         elif buy_p >= 0.53 and buy_p > sell_p and rsi < 78:
@@ -1349,6 +1370,29 @@ def _render_main_area():
     st.caption("価格データはYahoo Finance由来で、松井証券FXのリアルタイムBid/Askや約定価格とは異なる場合があります。分類一致率は予測ラベルの一致率で、実際の勝率・利益率ではありません。スプレッドは参考値です。")
     if mtf_gate_reason:
         st.warning(mtf_gate_reason)
+    # BUY/SELLの正式判定とは分けて、方向候補を表示
+    _candidate_info = st.session_state.get("directional_candidate", {})
+
+    if (
+        _candidate_info.get("ticker") == ticker
+        and _candidate_info.get("interval") == tf_config["interval"]
+        and _candidate_info.get("candidate")
+    ):
+        _candidate_label = _candidate_info["candidate"]
+        _quality_label = (
+            "検証基準クリア"
+            if _candidate_info.get("quality_ok")
+            else "検証基準未達"
+        )
+
+        st.info(
+            f"方向候補：{_candidate_label} "
+            f"（買い確率 {_candidate_info.get('buy', 0)}%・"
+            f"売り確率 {_candidate_info.get('sell', 0)}%）"
+            f"／{_quality_label}。"
+            "参考候補であり、売買推奨や利益予測ではありません。"
+            "データ鮮度・時間足・スプレッド・損切り条件を確認してください。"
+        )   
     elif trade_style == "デイトレード（当日決済）" and not data_is_stale:
         st.caption("デイトレードの最終推奨には4時間足・1時間足の方向一致を適用しています。詳細は下の折りたたみ欄で確認できます。")
 
