@@ -1,65 +1,78 @@
 {
-  "schema_version": 3,
-  "last_run_jst": "2026-10-22T13:41:19.377742+09:00",
+  "schema_version": 4,
+  "last_run_jst": "2026-10-22T20:49:37.756301+09:00",
   "mode": "multi_period_validation_no_discord_no_auto_orders",
   "interval": "1h",
   "summary": [
-    "米ドル/円 (USD/JPY): 方向不一致・見送り / 買い / 買い64%・売り28% / 価格参考 157.69600 / 時間足の一部が逆方向",
-    "英ポンド/円 (GBP/JPY): 見送り / 様子見 / 買い38%・売り25% / 価格参考 211.25999 / 複数期間の時系列検証条件を満たさない",
-    "ユーロ/円 (EUR/JPY): 見送り / 様子見 / 買い50%・売り40% / 価格参考 177.26900 / 複数期間の時系列検証条件を満たさない",
-    "豪ドル/円 (AUD/JPY): 見送り / 様子見 / 買い45%・売り34% / 価格参考 110.56300 / 複数期間の時系列検証条件を満たさない",
-    "ユーロ/米ドル (EUR/USD): 様子見 / 様子見 / 買い35%・売り33% / 価格参考 1.12448 / 明確なAI方向シグナルなし"
+    "米ドル/円 (USD/JPY): 様子見 / 様子見 / 買い46%・売り37% / 価格参考 156.87900 / 明確なAI方向シグナルなし",
+    "英ポンド/円 (GBP/JPY): 見送り / 様子見 / 買い27%・売り33% / 価格参考 209.86400 / 複数期間の時系列検証条件を満たさない",
+    "ユーロ/円 (EUR/JPY): 見送り / 様子見 / 買い30%・売り45% / 価格参考 175.91901 / 複数期間の時系列検証条件を満たさない",
+    "豪ドル/円 (AUD/JPY): 見送り / 様子見 / 買い30%・売り49% / 価格参考 109.95800 / 複数期間の時系列検証条件を満たさない",
+    "ユーロ/米ドル (EUR/USD): 様子見 / 様子見 / 買い32%・売り19% / 価格参考 1.12171 / 明確なAI方向シグナルなし"
   ],
   "metrics": {
     "USDJPY=X": {
       "pair": "米ドル/円 (USD/JPY)",
       "status": "ok",
-      "decision": "方向不一致・見送り",
-      "direction": "買い",
-      "close": 157.6959991455078,
-      "bar_time_jst": "2026-10-22 12:00",
-      "data_age_minutes": 101.2,
-      "validation_balanced_accuracy_pct": 46.0,
+      "decision": "様子見",
+      "direction": "様子見",
+      "close": 156.87899780273438,
+      "bar_time_jst": "2026-10-22 19:00",
+      "data_age_minutes": 109.4,
+      "validation_balanced_accuracy_pct": 46.6,
       "baseline_balanced_accuracy_pct": 33.3,
       "quality_gate_passed": true,
-      "training_samples": 1374,
+      "training_samples": 1381,
       "validation": {
         "passed": true,
-        "mean_balanced_accuracy_pct": 46.0,
+        "mean_balanced_accuracy_pct": 46.6,
         "mean_baseline_balanced_accuracy_pct": 33.3,
         "folds_passed": 3,
         "fold_count": 3,
+        "class_recall_pct": {
+          "sell": 38.0,
+          "neutral": 42.3,
+          "buy": 58.5
+        },
         "fold_results": [
           {
             "fold": 1,
             "status": "ok",
-            "train_samples": 747,
-            "validation_samples": 206,
-            "balanced_accuracy_pct": 41.9,
+            "train_samples": 751,
+            "validation_samples": 207,
+            "balanced_accuracy_pct": 40.6,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           },
           {
             "fold": 2,
             "status": "ok",
-            "train_samples": 953,
-            "validation_samples": 206,
-            "balanced_accuracy_pct": 52.1,
+            "train_samples": 958,
+            "validation_samples": 207,
+            "balanced_accuracy_pct": 52.9,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           },
           {
             "fold": 3,
             "status": "ok",
-            "train_samples": 1159,
-            "validation_samples": 207,
-            "balanced_accuracy_pct": 44.1,
+            "train_samples": 1165,
+            "validation_samples": 208,
+            "balanced_accuracy_pct": 46.3,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           }
         ],
         "reason": "複数期間の検証条件を満たした"
       },
+      "class_recall_pct": {
+        "sell": 38.0,
+        "neutral": 42.3,
+        "buy": 58.5
+      },
+      "fast_move_detected": false,
+      "fast_move_atr_ratio": 0.54,
+      "wait_reason": "明確なAI方向シグナルなし",
       "timeframe_trends": [
         "下降",
         "中立",
@@ -71,53 +84,66 @@
       "status": "ok",
       "decision": "見送り",
       "direction": "様子見",
-      "close": 211.25999450683594,
-      "bar_time_jst": "2026-10-22 12:00",
-      "data_age_minutes": 101.2,
-      "validation_balanced_accuracy_pct": 31.4,
+      "close": 209.86399841308594,
+      "bar_time_jst": "2026-10-22 19:00",
+      "data_age_minutes": 109.5,
+      "validation_balanced_accuracy_pct": 32.3,
       "baseline_balanced_accuracy_pct": 33.3,
       "quality_gate_passed": false,
-      "training_samples": 1374,
+      "training_samples": 1381,
       "validation": {
         "passed": false,
-        "mean_balanced_accuracy_pct": 31.4,
+        "mean_balanced_accuracy_pct": 32.3,
         "mean_baseline_balanced_accuracy_pct": 33.3,
         "folds_passed": 0,
         "fold_count": 3,
+        "class_recall_pct": {
+          "sell": 53.1,
+          "neutral": 4.5,
+          "buy": 33.3
+        },
         "fold_results": [
           {
             "fold": 1,
             "status": "ok",
-            "train_samples": 747,
-            "validation_samples": 206,
-            "balanced_accuracy_pct": 30.3,
+            "train_samples": 751,
+            "validation_samples": 207,
+            "balanced_accuracy_pct": 30.5,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           },
           {
             "fold": 2,
             "status": "ok",
-            "train_samples": 953,
-            "validation_samples": 206,
-            "balanced_accuracy_pct": 33.2,
+            "train_samples": 958,
+            "validation_samples": 207,
+            "balanced_accuracy_pct": 36.1,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           },
           {
             "fold": 3,
             "status": "ok",
-            "train_samples": 1159,
-            "validation_samples": 207,
-            "balanced_accuracy_pct": 30.8,
+            "train_samples": 1165,
+            "validation_samples": 208,
+            "balanced_accuracy_pct": 30.3,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           }
         ],
         "reason": "複数期間の検証品質条件を満たさない"
       },
+      "class_recall_pct": {
+        "sell": 53.1,
+        "neutral": 4.5,
+        "buy": 33.3
+      },
+      "fast_move_detected": false,
+      "fast_move_atr_ratio": 1.81,
+      "wait_reason": "複数期間の時系列検証条件を満たさない",
       "timeframe_trends": [
         "中立",
-        "上昇",
+        "中立",
         "中立"
       ]
     },
@@ -126,52 +152,65 @@
       "status": "ok",
       "decision": "見送り",
       "direction": "様子見",
-      "close": 177.2689971923828,
-      "bar_time_jst": "2026-10-22 12:00",
-      "data_age_minutes": 101.3,
-      "validation_balanced_accuracy_pct": 31.7,
+      "close": 175.91900634765625,
+      "bar_time_jst": "2026-10-22 19:00",
+      "data_age_minutes": 109.5,
+      "validation_balanced_accuracy_pct": 33.2,
       "baseline_balanced_accuracy_pct": 33.3,
       "quality_gate_passed": false,
-      "training_samples": 1379,
+      "training_samples": 1386,
       "validation": {
         "passed": false,
-        "mean_balanced_accuracy_pct": 31.7,
+        "mean_balanced_accuracy_pct": 33.2,
         "mean_baseline_balanced_accuracy_pct": 33.3,
-        "folds_passed": 0,
+        "folds_passed": 1,
         "fold_count": 3,
+        "class_recall_pct": {
+          "sell": 35.6,
+          "neutral": 3.6,
+          "buy": 62.0
+        },
         "fold_results": [
           {
             "fold": 1,
             "status": "ok",
-            "train_samples": 750,
-            "validation_samples": 207,
-            "balanced_accuracy_pct": 26.1,
+            "train_samples": 754,
+            "validation_samples": 208,
+            "balanced_accuracy_pct": 22.9,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           },
           {
             "fold": 2,
             "status": "ok",
-            "train_samples": 957,
-            "validation_samples": 207,
-            "balanced_accuracy_pct": 35.7,
+            "train_samples": 962,
+            "validation_samples": 208,
+            "balanced_accuracy_pct": 43.0,
             "baseline_balanced_accuracy_pct": 33.3,
-            "passed": false
+            "passed": true
           },
           {
             "fold": 3,
             "status": "ok",
-            "train_samples": 1164,
-            "validation_samples": 207,
-            "balanced_accuracy_pct": 33.4,
+            "train_samples": 1170,
+            "validation_samples": 208,
+            "balanced_accuracy_pct": 33.7,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           }
         ],
         "reason": "複数期間の検証品質条件を満たさない"
       },
+      "class_recall_pct": {
+        "sell": 35.6,
+        "neutral": 3.6,
+        "buy": 62.0
+      },
+      "fast_move_detected": false,
+      "fast_move_atr_ratio": 1.68,
+      "wait_reason": "複数期間の時系列検証条件を満たさない",
       "timeframe_trends": [
-        "中立",
+        "下降",
         "下降",
         "下降"
       ]
@@ -181,53 +220,66 @@
       "status": "ok",
       "decision": "見送り",
       "direction": "様子見",
-      "close": 110.56300354003906,
-      "bar_time_jst": "2026-10-22 12:00",
-      "data_age_minutes": 101.3,
-      "validation_balanced_accuracy_pct": 32.3,
+      "close": 109.95800018310547,
+      "bar_time_jst": "2026-10-22 19:00",
+      "data_age_minutes": 109.6,
+      "validation_balanced_accuracy_pct": 33.2,
       "baseline_balanced_accuracy_pct": 33.3,
       "quality_gate_passed": false,
-      "training_samples": 1378,
+      "training_samples": 1385,
       "validation": {
         "passed": false,
-        "mean_balanced_accuracy_pct": 32.3,
+        "mean_balanced_accuracy_pct": 33.2,
         "mean_baseline_balanced_accuracy_pct": 33.3,
         "folds_passed": 0,
         "fold_count": 3,
+        "class_recall_pct": {
+          "sell": 35.6,
+          "neutral": 20.0,
+          "buy": 50.0
+        },
         "fold_results": [
           {
             "fold": 1,
             "status": "ok",
-            "train_samples": 749,
-            "validation_samples": 207,
-            "balanced_accuracy_pct": 27.6,
+            "train_samples": 753,
+            "validation_samples": 208,
+            "balanced_accuracy_pct": 29.1,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           },
           {
             "fold": 2,
             "status": "ok",
-            "train_samples": 956,
-            "validation_samples": 207,
-            "balanced_accuracy_pct": 33.5,
+            "train_samples": 961,
+            "validation_samples": 208,
+            "balanced_accuracy_pct": 35.4,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           },
           {
             "fold": 3,
             "status": "ok",
-            "train_samples": 1163,
-            "validation_samples": 207,
-            "balanced_accuracy_pct": 35.7,
+            "train_samples": 1169,
+            "validation_samples": 208,
+            "balanced_accuracy_pct": 35.2,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": false
           }
         ],
         "reason": "複数期間の検証品質条件を満たさない"
       },
+      "class_recall_pct": {
+        "sell": 35.6,
+        "neutral": 20.0,
+        "buy": 50.0
+      },
+      "fast_move_detected": false,
+      "fast_move_atr_ratio": 0.65,
+      "wait_reason": "複数期間の時系列検証条件を満たさない",
       "timeframe_trends": [
         "中立",
-        "中立",
+        "下降",
         "上昇"
       ]
     },
@@ -236,58 +288,71 @@
       "status": "ok",
       "decision": "様子見",
       "direction": "様子見",
-      "close": 1.12447988986969,
-      "bar_time_jst": "2026-10-22 12:00",
-      "data_age_minutes": 101.3,
-      "validation_balanced_accuracy_pct": 42.1,
+      "close": 1.1217050552368164,
+      "bar_time_jst": "2026-10-22 19:00",
+      "data_age_minutes": 109.6,
+      "validation_balanced_accuracy_pct": 40.7,
       "baseline_balanced_accuracy_pct": 33.3,
       "quality_gate_passed": true,
-      "training_samples": 1376,
+      "training_samples": 1383,
       "validation": {
         "passed": true,
-        "mean_balanced_accuracy_pct": 42.1,
+        "mean_balanced_accuracy_pct": 40.7,
         "mean_baseline_balanced_accuracy_pct": 33.3,
         "folds_passed": 3,
         "fold_count": 3,
+        "class_recall_pct": {
+          "sell": 47.2,
+          "neutral": 65.0,
+          "buy": 19.0
+        },
         "fold_results": [
           {
             "fold": 1,
             "status": "ok",
-            "train_samples": 748,
-            "validation_samples": 206,
-            "balanced_accuracy_pct": 39.6,
+            "train_samples": 752,
+            "validation_samples": 207,
+            "balanced_accuracy_pct": 38.6,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           },
           {
             "fold": 2,
             "status": "ok",
-            "train_samples": 954,
-            "validation_samples": 206,
-            "balanced_accuracy_pct": 39.8,
+            "train_samples": 959,
+            "validation_samples": 207,
+            "balanced_accuracy_pct": 39.7,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           },
           {
             "fold": 3,
             "status": "ok",
-            "train_samples": 1160,
-            "validation_samples": 208,
-            "balanced_accuracy_pct": 47.0,
+            "train_samples": 1166,
+            "validation_samples": 209,
+            "balanced_accuracy_pct": 43.7,
             "baseline_balanced_accuracy_pct": 33.3,
             "passed": true
           }
         ],
         "reason": "複数期間の検証条件を満たした"
       },
+      "class_recall_pct": {
+        "sell": 47.2,
+        "neutral": 65.0,
+        "buy": 19.0
+      },
+      "fast_move_detected": false,
+      "fast_move_atr_ratio": 2.16,
+      "wait_reason": "明確なAI方向シグナルなし",
       "timeframe_trends": [
-        "上昇",
         "中立",
+        "下降",
         "下降"
       ]
     }
   },
-  "note": "複数期間の時系列検証レポートです。学習済みモデルを永続保存・app.pyへ配布する機能はありません。検証指標や予測確率は将来の利益を保証しません。実取引前に取引コスト込みのバックテストが必要です。",
+  "note": "複数期間の時系列検証レポートです。予測確率・検証指標は将来の利益を保証しません。急変動検出は直近3本の終値変化とATRを使う簡易判定です。実取引前にスプレッド等の取引コストを含む検証が必要です。",
   "history": [
     {
       "time_jst": "2026-10-22T00:57:59.454429+09:00",
@@ -1219,6 +1284,351 @@
           "timeframe_trends": [
             "上昇",
             "中立",
+            "下降"
+          ]
+        }
+      }
+    },
+    {
+      "time_jst": "2026-10-22T20:49:37.756301+09:00",
+      "metrics": {
+        "USDJPY=X": {
+          "pair": "米ドル/円 (USD/JPY)",
+          "status": "ok",
+          "decision": "様子見",
+          "direction": "様子見",
+          "close": 156.87899780273438,
+          "bar_time_jst": "2026-10-22 19:00",
+          "data_age_minutes": 109.4,
+          "validation_balanced_accuracy_pct": 46.6,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": true,
+          "training_samples": 1381,
+          "validation": {
+            "passed": true,
+            "mean_balanced_accuracy_pct": 46.6,
+            "mean_baseline_balanced_accuracy_pct": 33.3,
+            "folds_passed": 3,
+            "fold_count": 3,
+            "class_recall_pct": {
+              "sell": 38.0,
+              "neutral": 42.3,
+              "buy": 58.5
+            },
+            "fold_results": [
+              {
+                "fold": 1,
+                "status": "ok",
+                "train_samples": 751,
+                "validation_samples": 207,
+                "balanced_accuracy_pct": 40.6,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              },
+              {
+                "fold": 2,
+                "status": "ok",
+                "train_samples": 958,
+                "validation_samples": 207,
+                "balanced_accuracy_pct": 52.9,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              },
+              {
+                "fold": 3,
+                "status": "ok",
+                "train_samples": 1165,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 46.3,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              }
+            ],
+            "reason": "複数期間の検証条件を満たした"
+          },
+          "class_recall_pct": {
+            "sell": 38.0,
+            "neutral": 42.3,
+            "buy": 58.5
+          },
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": 0.54,
+          "wait_reason": "明確なAI方向シグナルなし",
+          "timeframe_trends": [
+            "下降",
+            "中立",
+            "上昇"
+          ]
+        },
+        "GBPJPY=X": {
+          "pair": "英ポンド/円 (GBP/JPY)",
+          "status": "ok",
+          "decision": "見送り",
+          "direction": "様子見",
+          "close": 209.86399841308594,
+          "bar_time_jst": "2026-10-22 19:00",
+          "data_age_minutes": 109.5,
+          "validation_balanced_accuracy_pct": 32.3,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": false,
+          "training_samples": 1381,
+          "validation": {
+            "passed": false,
+            "mean_balanced_accuracy_pct": 32.3,
+            "mean_baseline_balanced_accuracy_pct": 33.3,
+            "folds_passed": 0,
+            "fold_count": 3,
+            "class_recall_pct": {
+              "sell": 53.1,
+              "neutral": 4.5,
+              "buy": 33.3
+            },
+            "fold_results": [
+              {
+                "fold": 1,
+                "status": "ok",
+                "train_samples": 751,
+                "validation_samples": 207,
+                "balanced_accuracy_pct": 30.5,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 2,
+                "status": "ok",
+                "train_samples": 958,
+                "validation_samples": 207,
+                "balanced_accuracy_pct": 36.1,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 3,
+                "status": "ok",
+                "train_samples": 1165,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 30.3,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              }
+            ],
+            "reason": "複数期間の検証品質条件を満たさない"
+          },
+          "class_recall_pct": {
+            "sell": 53.1,
+            "neutral": 4.5,
+            "buy": 33.3
+          },
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": 1.81,
+          "wait_reason": "複数期間の時系列検証条件を満たさない",
+          "timeframe_trends": [
+            "中立",
+            "中立",
+            "中立"
+          ]
+        },
+        "EURJPY=X": {
+          "pair": "ユーロ/円 (EUR/JPY)",
+          "status": "ok",
+          "decision": "見送り",
+          "direction": "様子見",
+          "close": 175.91900634765625,
+          "bar_time_jst": "2026-10-22 19:00",
+          "data_age_minutes": 109.5,
+          "validation_balanced_accuracy_pct": 33.2,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": false,
+          "training_samples": 1386,
+          "validation": {
+            "passed": false,
+            "mean_balanced_accuracy_pct": 33.2,
+            "mean_baseline_balanced_accuracy_pct": 33.3,
+            "folds_passed": 1,
+            "fold_count": 3,
+            "class_recall_pct": {
+              "sell": 35.6,
+              "neutral": 3.6,
+              "buy": 62.0
+            },
+            "fold_results": [
+              {
+                "fold": 1,
+                "status": "ok",
+                "train_samples": 754,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 22.9,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 2,
+                "status": "ok",
+                "train_samples": 962,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 43.0,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              },
+              {
+                "fold": 3,
+                "status": "ok",
+                "train_samples": 1170,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 33.7,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              }
+            ],
+            "reason": "複数期間の検証品質条件を満たさない"
+          },
+          "class_recall_pct": {
+            "sell": 35.6,
+            "neutral": 3.6,
+            "buy": 62.0
+          },
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": 1.68,
+          "wait_reason": "複数期間の時系列検証条件を満たさない",
+          "timeframe_trends": [
+            "下降",
+            "下降",
+            "下降"
+          ]
+        },
+        "AUDJPY=X": {
+          "pair": "豪ドル/円 (AUD/JPY)",
+          "status": "ok",
+          "decision": "見送り",
+          "direction": "様子見",
+          "close": 109.95800018310547,
+          "bar_time_jst": "2026-10-22 19:00",
+          "data_age_minutes": 109.6,
+          "validation_balanced_accuracy_pct": 33.2,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": false,
+          "training_samples": 1385,
+          "validation": {
+            "passed": false,
+            "mean_balanced_accuracy_pct": 33.2,
+            "mean_baseline_balanced_accuracy_pct": 33.3,
+            "folds_passed": 0,
+            "fold_count": 3,
+            "class_recall_pct": {
+              "sell": 35.6,
+              "neutral": 20.0,
+              "buy": 50.0
+            },
+            "fold_results": [
+              {
+                "fold": 1,
+                "status": "ok",
+                "train_samples": 753,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 29.1,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 2,
+                "status": "ok",
+                "train_samples": 961,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 35.4,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              },
+              {
+                "fold": 3,
+                "status": "ok",
+                "train_samples": 1169,
+                "validation_samples": 208,
+                "balanced_accuracy_pct": 35.2,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": false
+              }
+            ],
+            "reason": "複数期間の検証品質条件を満たさない"
+          },
+          "class_recall_pct": {
+            "sell": 35.6,
+            "neutral": 20.0,
+            "buy": 50.0
+          },
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": 0.65,
+          "wait_reason": "複数期間の時系列検証条件を満たさない",
+          "timeframe_trends": [
+            "中立",
+            "下降",
+            "上昇"
+          ]
+        },
+        "EURUSD=X": {
+          "pair": "ユーロ/米ドル (EUR/USD)",
+          "status": "ok",
+          "decision": "様子見",
+          "direction": "様子見",
+          "close": 1.1217050552368164,
+          "bar_time_jst": "2026-10-22 19:00",
+          "data_age_minutes": 109.6,
+          "validation_balanced_accuracy_pct": 40.7,
+          "baseline_balanced_accuracy_pct": 33.3,
+          "quality_gate_passed": true,
+          "training_samples": 1383,
+          "validation": {
+            "passed": true,
+            "mean_balanced_accuracy_pct": 40.7,
+            "mean_baseline_balanced_accuracy_pct": 33.3,
+            "folds_passed": 3,
+            "fold_count": 3,
+            "class_recall_pct": {
+              "sell": 47.2,
+              "neutral": 65.0,
+              "buy": 19.0
+            },
+            "fold_results": [
+              {
+                "fold": 1,
+                "status": "ok",
+                "train_samples": 752,
+                "validation_samples": 207,
+                "balanced_accuracy_pct": 38.6,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              },
+              {
+                "fold": 2,
+                "status": "ok",
+                "train_samples": 959,
+                "validation_samples": 207,
+                "balanced_accuracy_pct": 39.7,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              },
+              {
+                "fold": 3,
+                "status": "ok",
+                "train_samples": 1166,
+                "validation_samples": 209,
+                "balanced_accuracy_pct": 43.7,
+                "baseline_balanced_accuracy_pct": 33.3,
+                "passed": true
+              }
+            ],
+            "reason": "複数期間の検証条件を満たした"
+          },
+          "class_recall_pct": {
+            "sell": 47.2,
+            "neutral": 65.0,
+            "buy": 19.0
+          },
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": 2.16,
+          "wait_reason": "明確なAI方向シグナルなし",
+          "timeframe_trends": [
+            "中立",
+            "下降",
             "下降"
           ]
         }
