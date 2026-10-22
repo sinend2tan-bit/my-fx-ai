@@ -1,6 +1,6 @@
 {
   "schema_version": 5,
-  "last_run_jst": "2026-10-23T00:01:03.722341+09:00",
+  "last_run_jst": "2026-10-23T00:58:10.208422+09:00",
   "mode": "multi_period_validation_with_news_risk_gate_no_auto_orders",
   "interval": "1h",
   "news_policy": {
@@ -14,17 +14,17 @@
     "empty": 5
   },
   "summary": [
-    "米ドル/円 (USD/JPY): 急変動・判定保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 40.7, 'neutral': 21.1, 'buy': 45.7}",
-    "英ポンド/円 (GBP/JPY): 急変動・判定保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 42.5, 'neutral': 13.0, 'buy': 46.6}",
-    "ユーロ/円 (EUR/JPY): 急変動・判定保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 34.4, 'neutral': 25.8, 'buy': 55.8}",
-    "豪ドル/円 (AUD/JPY): データ鮮度不明・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 44.1, 'neutral': 18.1, 'buy': 38.6}",
-    "ユーロ/米ドル (EUR/USD): データ鮮度不明・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 22.0, 'neutral': 43.1, 'buy': 37.1}"
+    "米ドル/円 (USD/JPY): 急変動・判定保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 41.4, 'neutral': 20.2, 'buy': 44.2}",
+    "英ポンド/円 (GBP/JPY): 急変動・判定保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 43.8, 'neutral': 14.5, 'buy': 44.0}",
+    "ユーロ/円 (EUR/JPY): 急変動・判定保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 33.2, 'neutral': 24.7, 'buy': 56.1}",
+    "豪ドル/円 (AUD/JPY): データ鮮度不明・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 46.2, 'neutral': 19.1, 'buy': 37.7}",
+    "ユーロ/米ドル (EUR/USD): データ鮮度不明・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 22.3, 'neutral': 41.3, 'buy': 37.5}"
   ],
   "pairs": [
     {
       "name": "米ドル/円 (USD/JPY)",
       "ticker": "USDJPY=X",
-      "updated_at_jst": "2026-10-23T00:01:04.521315+09:00",
+      "updated_at_jst": "2026-10-23T00:58:10.676203+09:00",
       "decision": "急変動・判定保留",
       "direction": "様子見",
       "reason": "直近の値動きがATRの3.35倍に達しました。値動きが落ち着くまで新規候補を保留します。",
@@ -37,23 +37,23 @@
       ],
       "fast_move_detected": true,
       "fast_move_atr_ratio": 3.35,
-      "data_age_minutes": 541.1,
+      "data_age_minutes": 598.2,
       "validation": {
         "passed": false,
         "reason": "複数期間の時系列検証条件を満たさない",
-        "balanced_accuracy": 0.3585,
+        "balanced_accuracy": 0.3525,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 40.7,
-          "neutral": 21.1,
-          "buy": 45.7
+          "sell": 41.4,
+          "neutral": 20.2,
+          "buy": 44.2
         },
         "folds": 3
       },
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-23T00:01:03.723012+09:00",
+      "news_checked_at_jst": "2026-10-23T00:58:10.209525+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -66,7 +66,7 @@
     {
       "name": "英ポンド/円 (GBP/JPY)",
       "ticker": "GBPJPY=X",
-      "updated_at_jst": "2026-10-23T00:01:06.592218+09:00",
+      "updated_at_jst": "2026-10-23T00:58:12.997210+09:00",
       "decision": "急変動・判定保留",
       "direction": "様子見",
       "reason": "直近の値動きがATRの2.78倍に達しました。値動きが落ち着くまで新規候補を保留します。",
@@ -79,23 +79,23 @@
       ],
       "fast_move_detected": true,
       "fast_move_atr_ratio": 2.78,
-      "data_age_minutes": 541.1,
+      "data_age_minutes": 598.2,
       "validation": {
         "passed": false,
         "reason": "複数期間の時系列検証条件を満たさない",
-        "balanced_accuracy": 0.3401,
+        "balanced_accuracy": 0.341,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 42.5,
-          "neutral": 13.0,
-          "buy": 46.6
+          "sell": 43.8,
+          "neutral": 14.5,
+          "buy": 44.0
         },
         "folds": 3
       },
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-23T00:01:06.212859+09:00",
+      "news_checked_at_jst": "2026-10-23T00:58:12.792243+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -108,7 +108,7 @@
     {
       "name": "ユーロ/円 (EUR/JPY)",
       "ticker": "EURJPY=X",
-      "updated_at_jst": "2026-10-23T00:01:08.361434+09:00",
+      "updated_at_jst": "2026-10-23T00:58:15.185787+09:00",
       "decision": "急変動・判定保留",
       "direction": "様子見",
       "reason": "直近の値動きがATRの3.33倍に達しました。値動きが落ち着くまで新規候補を保留します。",
@@ -121,23 +121,23 @@
       ],
       "fast_move_detected": true,
       "fast_move_atr_ratio": 3.33,
-      "data_age_minutes": 541.2,
+      "data_age_minutes": 598.3,
       "validation": {
         "passed": false,
         "reason": "複数期間の時系列検証条件を満たさない",
-        "balanced_accuracy": 0.3868,
+        "balanced_accuracy": 0.3799,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 34.4,
-          "neutral": 25.8,
-          "buy": 55.8
+          "sell": 33.2,
+          "neutral": 24.7,
+          "buy": 56.1
         },
         "folds": 3
       },
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-23T00:01:08.055013+09:00",
+      "news_checked_at_jst": "2026-10-23T00:58:15.008081+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -150,7 +150,7 @@
     {
       "name": "豪ドル/円 (AUD/JPY)",
       "ticker": "AUDJPY=X",
-      "updated_at_jst": "2026-10-23T00:01:10.305845+09:00",
+      "updated_at_jst": "2026-10-23T00:58:17.617774+09:00",
       "decision": "データ鮮度不明・保留",
       "direction": "様子見",
       "reason": "最新価格の時刻を確認できないか、データが古いため保留します。",
@@ -163,23 +163,23 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": 2.14,
-      "data_age_minutes": 541.2,
+      "data_age_minutes": 598.3,
       "validation": {
         "passed": false,
         "reason": "複数期間の時系列検証条件を満たさない",
-        "balanced_accuracy": 0.3361,
+        "balanced_accuracy": 0.3432,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 44.1,
-          "neutral": 18.1,
-          "buy": 38.6
+          "sell": 46.2,
+          "neutral": 19.1,
+          "buy": 37.7
         },
         "folds": 3
       },
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-23T00:01:09.861851+09:00",
+      "news_checked_at_jst": "2026-10-23T00:58:17.396291+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -192,7 +192,7 @@
     {
       "name": "ユーロ/米ドル (EUR/USD)",
       "ticker": "EURUSD=X",
-      "updated_at_jst": "2026-10-23T00:01:12.037163+09:00",
+      "updated_at_jst": "2026-10-23T00:58:19.798508+09:00",
       "decision": "データ鮮度不明・保留",
       "direction": "様子見",
       "reason": "最新価格の時刻を確認できないか、データが古いため保留します。",
@@ -205,23 +205,23 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": 0.0,
-      "data_age_minutes": 541.2,
+      "data_age_minutes": 598.3,
       "validation": {
         "passed": false,
         "reason": "複数期間の時系列検証条件を満たさない",
-        "balanced_accuracy": 0.3409,
+        "balanced_accuracy": 0.3368,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 22.0,
-          "neutral": 43.1,
-          "buy": 37.1
+          "sell": 22.3,
+          "neutral": 41.3,
+          "buy": 37.5
         },
         "folds": 3
       },
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-23T00:01:11.681519+09:00",
+      "news_checked_at_jst": "2026-10-23T00:58:19.602258+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -1891,6 +1891,228 @@
           "sell_pct": null,
           "neutral_pct": null,
           "news_checked_at_jst": "2026-10-23T00:01:11.681519+09:00",
+          "news_status": "empty",
+          "news_article_count": 0,
+          "news_recent_count": 0,
+          "news_risk_detected": false,
+          "news_risk_reason": "ニュース記事を取得できませんでした。重要ニュースがないとは判断できません。",
+          "news_risk_headlines": [],
+          "news_headlines": [],
+          "news_source": "Yahoo Finance"
+        }
+      ]
+    },
+    {
+      "run_at_jst": "2026-10-23T00:58:10.208422+09:00",
+      "summary": [
+        "米ドル/円 (USD/JPY): 急変動・判定保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 41.4, 'neutral': 20.2, 'buy': 44.2}",
+        "英ポンド/円 (GBP/JPY): 急変動・判定保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 43.8, 'neutral': 14.5, 'buy': 44.0}",
+        "ユーロ/円 (EUR/JPY): 急変動・判定保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 33.2, 'neutral': 24.7, 'buy': 56.1}",
+        "豪ドル/円 (AUD/JPY): データ鮮度不明・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 46.2, 'neutral': 19.1, 'buy': 37.7}",
+        "ユーロ/米ドル (EUR/USD): データ鮮度不明・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 22.3, 'neutral': 41.3, 'buy': 37.5}"
+      ],
+      "pairs": [
+        {
+          "name": "米ドル/円 (USD/JPY)",
+          "ticker": "USDJPY=X",
+          "updated_at_jst": "2026-10-23T00:58:10.676203+09:00",
+          "decision": "急変動・判定保留",
+          "direction": "様子見",
+          "reason": "直近の値動きがATRの3.35倍に達しました。値動きが落ち着くまで新規候補を保留します。",
+          "price": 157.06700134277344,
+          "spread_pips": 0.2,
+          "timeframe_trends": [
+            "下降",
+            "中立",
+            "中立"
+          ],
+          "fast_move_detected": true,
+          "fast_move_atr_ratio": 3.35,
+          "data_age_minutes": 598.2,
+          "validation": {
+            "passed": false,
+            "reason": "複数期間の時系列検証条件を満たさない",
+            "balanced_accuracy": 0.3525,
+            "baseline_balanced_accuracy": 0.3333,
+            "class_recall_pct": {
+              "sell": 41.4,
+              "neutral": 20.2,
+              "buy": 44.2
+            },
+            "folds": 3
+          },
+          "buy_pct": null,
+          "sell_pct": null,
+          "neutral_pct": null,
+          "news_checked_at_jst": "2026-10-23T00:58:10.209525+09:00",
+          "news_status": "empty",
+          "news_article_count": 0,
+          "news_recent_count": 0,
+          "news_risk_detected": false,
+          "news_risk_reason": "ニュース記事を取得できませんでした。重要ニュースがないとは判断できません。",
+          "news_risk_headlines": [],
+          "news_headlines": [],
+          "news_source": "Yahoo Finance"
+        },
+        {
+          "name": "英ポンド/円 (GBP/JPY)",
+          "ticker": "GBPJPY=X",
+          "updated_at_jst": "2026-10-23T00:58:12.997210+09:00",
+          "decision": "急変動・判定保留",
+          "direction": "様子見",
+          "reason": "直近の値動きがATRの2.78倍に達しました。値動きが落ち着くまで新規候補を保留します。",
+          "price": 210.57200622558594,
+          "spread_pips": 1.0,
+          "timeframe_trends": [
+            "中立",
+            "上昇",
+            "下降"
+          ],
+          "fast_move_detected": true,
+          "fast_move_atr_ratio": 2.78,
+          "data_age_minutes": 598.2,
+          "validation": {
+            "passed": false,
+            "reason": "複数期間の時系列検証条件を満たさない",
+            "balanced_accuracy": 0.341,
+            "baseline_balanced_accuracy": 0.3333,
+            "class_recall_pct": {
+              "sell": 43.8,
+              "neutral": 14.5,
+              "buy": 44.0
+            },
+            "folds": 3
+          },
+          "buy_pct": null,
+          "sell_pct": null,
+          "neutral_pct": null,
+          "news_checked_at_jst": "2026-10-23T00:58:12.792243+09:00",
+          "news_status": "empty",
+          "news_article_count": 0,
+          "news_recent_count": 0,
+          "news_risk_detected": false,
+          "news_risk_reason": "ニュース記事を取得できませんでした。重要ニュースがないとは判断できません。",
+          "news_risk_headlines": [],
+          "news_headlines": [],
+          "news_source": "Yahoo Finance"
+        },
+        {
+          "name": "ユーロ/円 (EUR/JPY)",
+          "ticker": "EURJPY=X",
+          "updated_at_jst": "2026-10-23T00:58:15.185787+09:00",
+          "decision": "急変動・判定保留",
+          "direction": "様子見",
+          "reason": "直近の値動きがATRの3.33倍に達しました。値動きが落ち着くまで新規候補を保留します。",
+          "price": 176.61300659179688,
+          "spread_pips": 0.5,
+          "timeframe_trends": [
+            "下降",
+            "中立",
+            "下降"
+          ],
+          "fast_move_detected": true,
+          "fast_move_atr_ratio": 3.33,
+          "data_age_minutes": 598.3,
+          "validation": {
+            "passed": false,
+            "reason": "複数期間の時系列検証条件を満たさない",
+            "balanced_accuracy": 0.3799,
+            "baseline_balanced_accuracy": 0.3333,
+            "class_recall_pct": {
+              "sell": 33.2,
+              "neutral": 24.7,
+              "buy": 56.1
+            },
+            "folds": 3
+          },
+          "buy_pct": null,
+          "sell_pct": null,
+          "neutral_pct": null,
+          "news_checked_at_jst": "2026-10-23T00:58:15.008081+09:00",
+          "news_status": "empty",
+          "news_article_count": 0,
+          "news_recent_count": 0,
+          "news_risk_detected": false,
+          "news_risk_reason": "ニュース記事を取得できませんでした。重要ニュースがないとは判断できません。",
+          "news_risk_headlines": [],
+          "news_headlines": [],
+          "news_source": "Yahoo Finance"
+        },
+        {
+          "name": "豪ドル/円 (AUD/JPY)",
+          "ticker": "AUDJPY=X",
+          "updated_at_jst": "2026-10-23T00:58:17.617774+09:00",
+          "decision": "データ鮮度不明・保留",
+          "direction": "様子見",
+          "reason": "最新価格の時刻を確認できないか、データが古いため保留します。",
+          "price": 110.22599792480469,
+          "spread_pips": 0.6,
+          "timeframe_trends": [
+            "中立",
+            "上昇",
+            "下降"
+          ],
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": 2.14,
+          "data_age_minutes": 598.3,
+          "validation": {
+            "passed": false,
+            "reason": "複数期間の時系列検証条件を満たさない",
+            "balanced_accuracy": 0.3432,
+            "baseline_balanced_accuracy": 0.3333,
+            "class_recall_pct": {
+              "sell": 46.2,
+              "neutral": 19.1,
+              "buy": 37.7
+            },
+            "folds": 3
+          },
+          "buy_pct": null,
+          "sell_pct": null,
+          "neutral_pct": null,
+          "news_checked_at_jst": "2026-10-23T00:58:17.396291+09:00",
+          "news_status": "empty",
+          "news_article_count": 0,
+          "news_recent_count": 0,
+          "news_risk_detected": false,
+          "news_risk_reason": "ニュース記事を取得できませんでした。重要ニュースがないとは判断できません。",
+          "news_risk_headlines": [],
+          "news_headlines": [],
+          "news_source": "Yahoo Finance"
+        },
+        {
+          "name": "ユーロ/米ドル (EUR/USD)",
+          "ticker": "EURUSD=X",
+          "updated_at_jst": "2026-10-23T00:58:19.798508+09:00",
+          "decision": "データ鮮度不明・保留",
+          "direction": "様子見",
+          "reason": "最新価格の時刻を確認できないか、データが古いため保留します。",
+          "price": 1.1247328519821167,
+          "spread_pips": 0.4,
+          "timeframe_trends": [
+            "上昇",
+            "中立",
+            "下降"
+          ],
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": 0.0,
+          "data_age_minutes": 598.3,
+          "validation": {
+            "passed": false,
+            "reason": "複数期間の時系列検証条件を満たさない",
+            "balanced_accuracy": 0.3368,
+            "baseline_balanced_accuracy": 0.3333,
+            "class_recall_pct": {
+              "sell": 22.3,
+              "neutral": 41.3,
+              "buy": 37.5
+            },
+            "folds": 3
+          },
+          "buy_pct": null,
+          "sell_pct": null,
+          "neutral_pct": null,
+          "news_checked_at_jst": "2026-10-23T00:58:19.602258+09:00",
           "news_status": "empty",
           "news_article_count": 0,
           "news_recent_count": 0,
