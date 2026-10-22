@@ -463,8 +463,15 @@ def add_indicators(df):
     df["Dev_EMA20"] = close / ema20 - 1
     df["Dev_EMA200"] = close / ema200 - 1
 
-    volume_mean = volume.rolling(20).mean()
-    df["Vol_Ratio"] = volume / volume_mean.replace(0, np.nan)
+    # FXデータでは出来高が常に0の場合があるため、その場合は中立値を使用
+    volume_mean = volume.rolling(20, min_periods=1).mean()
+
+    if volume.isna().all() or (volume.fillna(0) == 0).all():
+        df["Vol_Ratio"] = 1.0
+    else:
+        df["Vol_Ratio"] = (
+            volume / volume_mean.replace(0, np.nan)
+        ).replace([np.inf, -np.inf], np.nan).fillna(1.0)
 
     df["RSI"] = calculate_rsi(close)
     df["RSI_Diff"] = df["RSI"].diff(3)
