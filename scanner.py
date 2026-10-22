@@ -815,6 +815,16 @@ def walk_forward_validation(df):
         else "複数期間の時系列検証条件を満たさない"
     )
 
+    print(
+        f"[VALIDATION DETAIL] "
+        f"score={score:.4f}, "
+        f"baseline={baseline_score:.4f}, "
+        f"buy_recall={recall_pct['buy']:.1f}%, "
+        f"sell_recall={recall_pct['sell']:.1f}%, "
+        f"folds={used_folds}, "
+        f"passed={passed}"
+    )
+
     return {
         "passed": bool(passed),
         "reason": reason,
