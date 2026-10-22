@@ -1035,6 +1035,21 @@ def analyze_pair(name, config):
             "sell_pct": model_result["sell_pct"],
             "neutral_pct": model_result["neutral_pct"],
         })
+        
+        # 診断ログ：判定保留や信頼度がNoneになる原因を確認
+        print(
+            f"[DIAGNOSTIC] {name}: "
+            f"hourly_rows={len(hourly)}, "
+            f"data_age_minutes={result.get('data_age_minutes')}, "
+            f"fast_move={fast_move}, "
+            f"fast_move_atr_ratio={fast_ratio}, "
+            f"validation_passed={validation.get('passed')}, "
+            f"validation_reason={validation.get('reason')}, "
+            f"model_reason={model_result.get('reason')}, "
+            f"buy_pct={model_result.get('buy_pct')}, "
+            f"sell_pct={model_result.get('sell_pct')}"
+        )
+
 
         # 判定保留条件は、売買候補の判定より先に確認する。
         if fast_move:
