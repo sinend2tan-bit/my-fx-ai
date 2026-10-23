@@ -17,9 +17,9 @@ import yfinance as yf
 
 JST = ZoneInfo("Asia/Tokyo")
 
-PERIOD = "60d"
+PERIOD = "2y"
 INTERVAL = "1h"
-MIN_BARS = 160
+MIN_BARS = 500
 
 LOOKAHEAD_BARS = 8
 TRAIN_RATIO = 0.70
