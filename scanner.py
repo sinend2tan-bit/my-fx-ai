@@ -969,20 +969,45 @@ def timeframe_trend(df):
     return "中立"
 
 
+
 def data_age_minutes(df):
     if df is None or df.empty:
+        print("[DATA AGE DEBUG] df is empty")
         return None
 
     try:
         last_index = pd.Timestamp(df.index[-1])
+        now = pd.Timestamp.now(tz="Asia/Tokyo")
+
+        print(
+            f"[DATA AGE DEBUG] "
+            f"raw_index={last_index.isoformat()}, "
+            f"tz={last_index.tzinfo}, "
+            f"now={now.isoformat()}"
+        )
+
         if last_index.tzinfo is None:
+            print(
+                "[DATA AGE DEBUG] "
+                "Timezone missing; treating as UTC for diagnosis"
+            )
             last_index = last_index.tz_localize("UTC")
 
         last_time = last_index.tz_convert("Asia/Tokyo")
-        now = pd.Timestamp.now(tz="Asia/Tokyo")
-        return round(max(0.0, (now - last_time).total_seconds() / 60), 1)
-    except Exception:
+        age = (now - last_time).total_seconds() / 60
+
+        print(
+            f"[DATA AGE DEBUG] "
+            f"tokyo_index={last_time.isoformat()}, "
+            f"age_minutes={age:.1f}"
+        )
+
+        return round(max(0.0, age), 1)
+
+    except Exception as exc:
+        print(f"[DATA AGE ERROR] {type(exc).__name__}: {exc}")
         return None
+
 
 
 # =========================================================
