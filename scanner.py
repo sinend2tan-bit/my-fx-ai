@@ -679,6 +679,12 @@ def bars(ticker, interval="1h", period="60d"):
         return None
 
     df["Target"] = df["Target"].astype(int)
+
+    print(
+        f"[TARGET DISTRIBUTION] {ticker} {interval}: "
+        f"{df['Target'].value_counts().sort_index().to_dict()}"
+    )
+
     return df
 
 
