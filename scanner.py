@@ -559,10 +559,12 @@ def flatten_yf_columns(df):
     return df
 
 
+
 def bars(ticker, interval="1h", period="60d"):
     """
-    Yahoo FinanceからOHLCデータを取得する。
-    4時間足は1時間足から作成する。
+    最新の確定足と学習用データを分離して返す。
+    学習用データは従来どおり末尾8本を除外する。
+    最新足情報は DataFrame.attrs に保持する。
     """
     download_interval = "1h" if interval == "4h" else interval
 
@@ -585,9 +587,8 @@ def bars(ticker, interval="1h", period="60d"):
         return None
 
     raw = flatten_yf_columns(raw)
-    print(f"[DATA TIME] {ticker} {interval}: now={pd.Timestamp.now(tz='Asia/Tokyo').isoformat()}")
-    print(f"[DATA TIME] {ticker} {interval}: raw_last={pd.Timestamp(raw.index[-1]).isoformat()}")
     required = ["Open", "High", "Low", "Close"]
+
     if any(col not in raw.columns for col in required):
         print(f"[DATA ERROR] 必要な列がありません: {ticker} {interval}")
         return None
@@ -598,17 +599,13 @@ def bars(ticker, interval="1h", period="60d"):
     raw = raw[["Open", "High", "Low", "Close", "Volume"]].copy()
     raw = raw.apply(pd.to_numeric, errors="coerce")
     raw = raw.dropna(subset=required)
-    print(f"[DATA TIME AFTER DROPNA] {ticker} {interval}: last={raw.index[-1].isoformat()}")
     raw = raw[~raw.index.duplicated(keep="last")].sort_index()
 
-    if len(raw) < 220:
-        print(
-            f"[DATA SHORT] {ticker} {interval}: "
-            f"{len(raw)} bars (220本未満)"
-        )
+    if len(raw) < 221:
+        print(f"[DATA SHORT] {ticker} {interval}: {len(raw)} bars")
         return None
 
-    # 進行中の足を除外する
+    # 最新の取得足は進行中の可能性があるため除外する。
     raw = raw.iloc[:-1].copy()
 
     if interval == "4h":
@@ -623,20 +620,34 @@ def bars(ticker, interval="1h", period="60d"):
     if len(raw) < 220:
         return None
 
-    df = add_indicators(raw)
+    # ここで作る指標データは、最新の確定足を含む。
+    feature_df = add_indicators(raw)
+    feature_df = feature_df.dropna(
+        subset=FEATURE_COLUMNS + ["ATR", "Close"]
+    )
 
-    # 将来の値動きから教師ラベルを作る。
-    # 上方向のATR幅に先に到達すれば buy、
-    # 下方向のATR幅に先に到達すれば sell、
-    # どちらにも達しなければ neutral。
-    close_values = df["Close"].to_numpy(dtype=float)
-    high_values = df["High"].to_numpy(dtype=float)
-    low_values = df["Low"].to_numpy(dtype=float)
-    atr_values = df["ATR"].to_numpy(dtype=float)
+    if feature_df.empty:
+        print(f"[FEATURE EMPTY] {ticker} {interval}")
+        return None
 
-    targets = np.full(len(df), np.nan)
+    # 学習・予測に使う最新の特徴量と時刻を保持する。
+    latest_data = feature_df.iloc[[-1]].copy()
+    latest_index = latest_data.index[-1]
 
-    for i in range(len(df) - LOOKAHEAD_BARS):
+    print(
+        f"[LATEST CONFIRMED BAR] {ticker} {interval}: "
+        f"time={latest_index.isoformat()}, "
+        f"close={latest_data['Close'].iloc[-1]}"
+    )
+
+    close_values = feature_df["Close"].to_numpy(dtype=float)
+    high_values = feature_df["High"].to_numpy(dtype=float)
+    low_values = feature_df["Low"].to_numpy(dtype=float)
+    atr_values = feature_df["ATR"].to_numpy(dtype=float)
+
+    targets = np.full(len(feature_df), np.nan)
+
+    for i in range(len(feature_df) - LOOKAHEAD_BARS):
         price = close_values[i]
         atr_value = atr_values[i]
 
@@ -650,48 +661,57 @@ def bars(ticker, interval="1h", period="60d"):
 
         upper = price + atr_value
         lower = price - atr_value
+        label = 0
 
-        label = 0  # neutral
         for j in range(i + 1, i + LOOKAHEAD_BARS + 1):
             hit_up = high_values[j] >= upper
             hit_down = low_values[j] <= lower
 
-            # 同一足で上下の両方に触れた場合は方向不明として扱う
             if hit_up and hit_down:
                 label = 0
                 break
             if hit_up:
-                label = 1  # buy
+                label = 1
                 break
             if hit_down:
-                label = -1  # sell
+                label = -1
                 break
 
         targets[i] = label
 
-    df["Target"] = targets
+    training_df = feature_df.copy()
+    training_df["Target"] = targets
+    training_df = training_df.dropna(
+        subset=FEATURE_COLUMNS + ["Target", "ATR", "Close"]
+    )
 
-    # 教師ラベルのない末尾部分は学習・評価に使用しない。
-    df = df.dropna(subset=FEATURE_COLUMNS + ["Target", "ATR", "Close"])
-
-    print(f"[DATA AFTER CLEAN] {ticker} {interval}: rows={len(df)}")
-    print(f"[DATA AFTER CLEAN] {ticker} {interval}: last={df.index[-1].isoformat()}")
-    print(f"[DATA AFTER CLEAN] {ticker} {interval}: close={df['Close'].iloc[-1]}")
-
-    if len(df) < MIN_TRAIN_ROWS:
+    if len(training_df) < MIN_TRAIN_ROWS:
         print(
-            f"[DATA SHORT AFTER CLEAN] {ticker} {interval}: {len(df)} rows"
+            f"[DATA SHORT AFTER CLEAN] {ticker} {interval}: "
+            f"{len(training_df)} rows"
         )
         return None
 
-    df["Target"] = df["Target"].astype(int)
+    training_df["Target"] = training_df["Target"].astype(int)
+
+    # 学習用データと最新足の情報を分離して保持する。
+    training_df.attrs["latest_data"] = latest_data
+    training_df.attrs["latest_index"] = latest_index
 
     print(
+        f"[TRAINING DATA] {ticker} {interval}: "
+        f"rows={len(training_df)}, "
+        f"last_labeled={training_df.index[-1].isoformat()}, "
+        f"latest_confirmed={latest_index.isoformat()}, "
+        f"close={latest_data['Close'].iloc[-1]}"
+    )
+    print(
         f"[TARGET DISTRIBUTION] {ticker} {interval}: "
-        f"{df['Target'].value_counts().sort_index().to_dict()}"
+        f"{training_df['Target'].value_counts().sort_index().to_dict()}"
     )
 
-    return df
+    return training_df
+
 
 
 # =========================================================
@@ -868,6 +888,7 @@ def fast_move_detected(df):
     return ratio >= FAST_MOVE_ATR_MULTIPLE, round(float(ratio), 2)
 
 
+
 def analyze(df, validation):
     if df is None or len(df) < MIN_TRAIN_ROWS:
         return {
@@ -885,6 +906,16 @@ def analyze(df, validation):
             "sell_pct": None,
             "neutral_pct": None,
             "reason": validation.get("reason", "検証条件未達"),
+        }
+
+    latest_data = df.attrs.get("latest_data")
+    if latest_data is None or latest_data.empty:
+        return {
+            "direction": "様子見",
+            "buy_pct": None,
+            "sell_pct": None,
+            "neutral_pct": None,
+            "reason": "最新の確定足を確認できません",
         }
 
     X = df[FEATURE_COLUMNS]
@@ -915,7 +946,7 @@ def analyze(df, validation):
     try:
         model.fit(X, y, sample_weight=weights)
 
-        latest_x = X.iloc[[-1]]
+        latest_x = latest_data[FEATURE_COLUMNS]
         probabilities = model.predict_proba(latest_x)[0]
         class_to_probability = dict(zip(model.classes_, probabilities))
 
@@ -935,7 +966,10 @@ def analyze(df, validation):
             "buy_pct": round(buy_pct, 1),
             "sell_pct": round(sell_pct, 1),
             "neutral_pct": round(neutral_pct, 1),
-            "reason": "モデル推定値。将来の利益を保証するものではありません。",
+            "reason": (
+                "最新の確定足を使ったモデル推定値です。"
+                "将来の利益を保証するものではありません。"
+            ),
         }
 
     except Exception as exc:
@@ -946,6 +980,7 @@ def analyze(df, validation):
             "neutral_pct": None,
             "reason": "モデル分析エラー: " + str(exc)[:200],
         }
+
 
 
 # =========================================================
@@ -975,43 +1010,46 @@ def timeframe_trend(df):
 
 
 
+
 def data_age_minutes(df):
     if df is None or df.empty:
         print("[DATA AGE DEBUG] df is empty")
         return None
 
     try:
-        last_index = pd.Timestamp(df.index[-1])
+        latest_index = df.attrs.get("latest_index")
+
+        # 最新足情報がなければ、古い学習用データで代用しない。
+        if latest_index is None:
+            print("[DATA AGE ERROR] latest_index is missing")
+            return None
+
+        last_time = pd.Timestamp(latest_index)
+
+        if last_time.tzinfo is None:
+            print("[DATA AGE ERROR] latest_index has no timezone")
+            return None
+
+        last_time = last_time.tz_convert("Asia/Tokyo")
         now = pd.Timestamp.now(tz="Asia/Tokyo")
-
-        print(
-            f"[DATA AGE DEBUG] "
-            f"raw_index={last_index.isoformat()}, "
-            f"tz={last_index.tzinfo}, "
-            f"now={now.isoformat()}"
-        )
-
-        if last_index.tzinfo is None:
-            print(
-                "[DATA AGE DEBUG] "
-                "Timezone missing; treating as UTC for diagnosis"
-            )
-            last_index = last_index.tz_localize("UTC")
-
-        last_time = last_index.tz_convert("Asia/Tokyo")
         age = (now - last_time).total_seconds() / 60
 
         print(
-            f"[DATA AGE DEBUG] "
-            f"tokyo_index={last_time.isoformat()}, "
-            f"age_minutes={age:.1f}"
+            f"[DATA AGE DEBUG] latest_confirmed={last_time.isoformat()}, "
+            f"now={now.isoformat()}, age_minutes={age:.1f}"
         )
+
+        # 未来時刻のデータは異常として扱う。
+        if age < -10:
+            print("[DATA AGE ERROR] latest bar is unexpectedly in the future")
+            return None
 
         return round(max(0.0, age), 1)
 
     except Exception as exc:
         print(f"[DATA AGE ERROR] {type(exc).__name__}: {exc}")
         return None
+
 
 
 
@@ -1060,15 +1098,26 @@ def analyze_pair(name, config):
         ]
         result["timeframe_trends"] = trends
 
+        
         if hourly is None:
             result["reason"] = "1時間足データ不足または取得失敗"
             result["decision"] = "データ不足・保留"
             return result
 
-        result["price"] = safe_float(hourly["Close"].iloc[-1])
+        latest_data = hourly.attrs.get("latest_data")
+        if latest_data is None or latest_data.empty:
+            result["reason"] = "最新の確定足を確認できません"
+            result["decision"] = "データ鮮度不明・保留"
+            return result
+
+        result["price"] = safe_float(latest_data["Close"].iloc[-1])
         result["data_age_minutes"] = data_age_minutes(hourly)
 
-        fast_move, fast_ratio = fast_move_detected(hourly)
+        # 急変動判定も最新足を使う。
+        # 直近3本の値動きと最新ATRを比較する。
+        fast_move, fast_ratio = fast_move_detected(
+            hourly.attrs.get("latest_history")
+        )
         result["fast_move_detected"] = bool(fast_move)
         result["fast_move_atr_ratio"] = fast_ratio
 
@@ -1082,6 +1131,7 @@ def analyze_pair(name, config):
             "sell_pct": model_result["sell_pct"],
             "neutral_pct": model_result["neutral_pct"],
         })
+
         
         # 診断ログ：判定保留や信頼度がNoneになる原因を確認
         print(
