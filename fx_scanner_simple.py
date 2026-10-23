@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 # =========================================================
-# FX Simple Scanner - 慎重判定・複数期間・方向別検証版
+# FX Simple Scanner
+# 慎重判定・複数期間・方向別検証版
 # 分析専用 / 口座接続なし / 自動発注なし
 # =========================================================
 JST = ZoneInfo("Asia/Tokyo")
@@ -16,19 +17,18 @@ INTERVAL = "1h"
 MIN_BARS = 500
 LOOKAHEAD_BARS = 8
 TRAIN_RATIO = 0.70
-# 全体の最低検証件数
 MIN_TEST_SAMPLES = 30
 MIN_TRAIN_SAMPLES = 30
-# 現在のシグナル方向に求める最低条件
 MIN_DIRECTION_SAMPLES = 30
 MIN_DIRECTION_HIT_RATE = 0.50
 MIN_DIRECTION_AVG_NET_PIPS = 0.0
-# 全体テストの最低条件
 MIN_AVG_NET_PIPS = 0.0
-# 後半のテスト期間を3分割して安定性を確認
 TEST_WINDOWS = 3
 MIN_WINDOW_SAMPLES = 10
 MIN_POSITIVE_WINDOWS = 3
+# スリッページ想定値（1取引あたりの往復合計、pips）
+# 実際の値を保証するものではありません。
+SLIPPAGE_PIPS = 0.2
 STATE_FILE = "scan_state_simple.json"
 HISTORY_FILE = "scan_history_simple.json"
 PAIRS = {
@@ -40,27 +40,40 @@ PAIRS = {
 }
 def now_jst():
     return datetime.now(JST).isoformat(timespec="seconds")
+def timestamp_jst(value):
+    """日時を日本時間のISO形式に統一する。"""
+    try:
+        ts = pd.Timestamp(value)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        return ts.tz_convert("Asia/Tokyo").isoformat()
+    except Exception:
+        return str(value)
 def json_default(value):
-    if isinstance(value, (np.integer,)):
+    if isinstance(value, np.integer):
         return int(value)
-    if isinstance(value, (np.floating,)):
+    if isinstance(value, np.floating):
         return float(value)
-    if isinstance(value, (np.bool_,)):
+    if isinstance(value, np.bool_):
         return bool(value)
     if isinstance(value, (pd.Timestamp, datetime)):
-        return value.isoformat()
+        return timestamp_jst(value)
     if isinstance(value, np.ndarray):
         return value.tolist()
     return str(value)
 def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
+    """JSONを一時ファイル経由で保存する。"""
+    temp_path = path + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
         json.dump(
             data,
             f,
             ensure_ascii=False,
             indent=2,
             default=json_default,
+            allow_nan=False,
         )
+    os.replace(temp_path, path)
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return []
@@ -96,6 +109,19 @@ def download_prices(ticker):
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna(subset=required)
     df = df[~df.index.duplicated(keep="last")].sort_index()
+    # OHLC価格の整合性を確認
+    valid = (
+        (df["Open"] > 0)
+        & (df["High"] > 0)
+        & (df["Low"] > 0)
+        & (df["Close"] > 0)
+        & (df["High"] >= df["Low"])
+        & (df["High"] >= df["Open"])
+        & (df["High"] >= df["Close"])
+        & (df["Low"] <= df["Open"])
+        & (df["Low"] <= df["Close"])
+    )
+    df = df.loc[valid].copy()
     # 最後の足は未確定の可能性があるため除外
     if len(df) > 1:
         df = df.iloc[:-1].copy()
@@ -118,7 +144,9 @@ def add_indicators(df):
         span=50,
         adjust=False,
     ).mean()
-    df["EMA20_SLOPE"] = df["EMA20"] - df["EMA20"].shift(5)
+    df["EMA20_SLOPE"] = (
+        df["EMA20"] - df["EMA20"].shift(5)
+    )
     delta = close.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -197,13 +225,27 @@ def make_signal(row):
     if score <= -2 and row["RSI"] > 25:
         return "SELL", score, reasons
     return "WAIT", score, reasons
-def backtest(df, pip_size, spread, start_i, end_i):
+def backtest(
+    df,
+    pip_size,
+    spread,
+    start_i,
+    end_i,
+):
+    """
+    start_i以上、end_i未満の範囲でシグナルを検証する。
+    エントリーと決済は検証範囲内で完結させる。
+    """
     trades = []
-    i = max(start_i, 55)
+    start_i = max(int(start_i), 55)
+    end_i = min(int(end_i), len(df))
+    # 決済足 i + LOOKAHEAD_BARS が
+    # end_i - 1 以下になるようにする。
     last_signal_i = min(
-        end_i - LOOKAHEAD_BARS,
+        end_i - LOOKAHEAD_BARS - 1,
         len(df) - LOOKAHEAD_BARS - 1,
     )
+    i = start_i
     while i <= last_signal_i:
         signal, score, _ = make_signal(df.iloc[i])
         if signal in ("BUY", "SELL"):
@@ -215,6 +257,7 @@ def backtest(df, pip_size, spread, start_i, end_i):
                 not math.isfinite(entry_price)
                 or not math.isfinite(exit_price)
                 or entry_price <= 0
+                or exit_price <= 0
             ):
                 i += LOOKAHEAD_BARS
                 continue
@@ -224,15 +267,21 @@ def backtest(df, pip_size, spread, start_i, end_i):
                 * direction
                 / pip_size
             )
-            net_pips = gross_pips - spread
+            total_cost_pips = spread + SLIPPAGE_PIPS
+            net_pips = gross_pips - total_cost_pips
+            if not math.isfinite(net_pips):
+                i += LOOKAHEAD_BARS
+                continue
             trades.append({
-                "signal_time": str(df.index[i]),
-                "entry_time": str(df.index[entry_i]),
-                "exit_time": str(df.index[exit_i]),
+                "signal_time": timestamp_jst(df.index[i]),
+                "entry_time": timestamp_jst(df.index[entry_i]),
+                "exit_time": timestamp_jst(df.index[exit_i]),
                 "signal": signal,
                 "score": int(score),
-                "gross_pips": float(gross_pips),
-                "net_pips": float(net_pips),
+                "gross_pips": round(float(gross_pips), 4),
+                "spread_pips": float(spread),
+                "slippage_pips": float(SLIPPAGE_PIPS),
+                "net_pips": round(float(net_pips), 4),
                 "win": bool(net_pips > 0),
             })
         # 取引の保有期間が重複しないように進める
@@ -256,18 +305,23 @@ def summarize_trades(trades):
         [t["net_pips"] for t in trades],
         dtype=float,
     )
+    net = net[np.isfinite(net)]
+    if len(net) == 0:
+        return {
+            "samples": 0,
+            "hit_rate_pct": None,
+            "wins": 0,
+            "losses": 0,
+            "avg_win_pips": None,
+            "avg_loss_pips": None,
+            "profit_loss_ratio": None,
+            "avg_net_pips": None,
+            "total_net_pips": 0.0,
+        }
     winners = net[net > 0]
     losers = net[net < 0]
-    avg_win = (
-        float(winners.mean())
-        if len(winners)
-        else None
-    )
-    avg_loss = (
-        float(abs(losers.mean()))
-        if len(losers)
-        else None
-    )
+    avg_win = float(winners.mean()) if len(winners) else None
+    avg_loss = float(abs(losers.mean())) if len(losers) else None
     pl_ratio = (
         avg_win / avg_loss
         if (
@@ -278,7 +332,7 @@ def summarize_trades(trades):
         else None
     )
     return {
-        "samples": count,
+        "samples": int(len(net)),
         "hit_rate_pct": round(
             float((net > 0).mean() * 100),
             2,
@@ -286,19 +340,13 @@ def summarize_trades(trades):
         "wins": int((net > 0).sum()),
         "losses": int((net < 0).sum()),
         "avg_win_pips": (
-            round(avg_win, 2)
-            if avg_win is not None
-            else None
+            round(avg_win, 2) if avg_win is not None else None
         ),
         "avg_loss_pips": (
-            round(avg_loss, 2)
-            if avg_loss is not None
-            else None
+            round(avg_loss, 2) if avg_loss is not None else None
         ),
         "profit_loss_ratio": (
-            round(pl_ratio, 2)
-            if pl_ratio is not None
-            else None
+            round(pl_ratio, 2) if pl_ratio is not None else None
         ),
         "avg_net_pips": round(float(net.mean()), 2),
         "total_net_pips": round(float(net.sum()), 2),
@@ -306,10 +354,7 @@ def summarize_trades(trades):
 def summarize_by_direction(trades):
     return {
         direction: summarize_trades(
-            [
-                t for t in trades
-                if t["signal"] == direction
-            ]
+            [t for t in trades if t["signal"] == direction]
         )
         for direction in ("BUY", "SELL")
     }
@@ -325,9 +370,7 @@ def evaluate_pair(name, config):
         }
     df = add_indicators(df)
     pip_size = (
-        0.01
-        if "JPY" in config["ticker"]
-        else 0.0001
+        0.01 if "JPY" in config["ticker"] else 0.0001
     )
     split_i = int(len(df) * TRAIN_RATIO)
     train_end = max(56, split_i - LOOKAHEAD_BARS)
@@ -347,9 +390,8 @@ def evaluate_pair(name, config):
     )
     train_stats = summarize_trades(train_trades)
     test_stats = summarize_trades(test_trades)
-    # 後半のテスト期間をBUY・SELL別に集計
     direction_stats = summarize_by_direction(test_trades)
-    # テスト期間を3つに分割
+    # 後半のテスト期間を3つに分割
     window_stats = []
     boundaries = np.linspace(
         split_i,
@@ -369,11 +411,12 @@ def evaluate_pair(name, config):
         )
         window_stats.append({
             "window": n + 1,
-            "from": str(df.index[start_i]),
-            "to": str(df.index[max(start_i, end_i - 1)]),
+            "from": timestamp_jst(df.index[start_i]),
+            "to": timestamp_jst(
+                df.index[max(start_i, end_i - 1)]
+            ),
             "stats": summarize_trades(window_trades),
         })
-    # 件数が最低基準を満たした期間だけを安定性評価に使用
     usable_windows = [
         w["stats"]
         for w in window_stats
@@ -387,18 +430,15 @@ def evaluate_pair(name, config):
             and stats["avg_net_pips"] > 0
         )
     )
-    # 現在の価格で算出したサイン
     current_signal, current_score, reasons = make_signal(
         df.iloc[-1]
     )
-    # まず、全体テストの基本条件を確認
     overall_ok = (
         train_stats["samples"] >= MIN_TRAIN_SAMPLES
         and test_stats["samples"] >= MIN_TEST_SAMPLES
         and test_stats["avg_net_pips"] is not None
         and test_stats["avg_net_pips"] > MIN_AVG_NET_PIPS
     )
-    # 現在のサインと同じ方向の過去成績を確認
     current_direction_stats = None
     direction_ok = False
     if current_signal in ("BUY", "SELL"):
@@ -413,12 +453,10 @@ def evaluate_pair(name, config):
             and current_direction_stats["avg_net_pips"]
             > MIN_DIRECTION_AVG_NET_PIPS
         )
-    # 3期間すべてのサンプル数と平均損益を確認
     stability_ok = (
         len(usable_windows) == TEST_WINDOWS
         and positive_windows >= MIN_POSITIVE_WINDOWS
     )
-    # 判定が保留になる理由を個別に記録
     failed_checks = []
     if train_stats["samples"] < MIN_TRAIN_SAMPLES:
         failed_checks.append("前半の検証サンプル数が不足")
@@ -443,7 +481,6 @@ def evaluate_pair(name, config):
         failed_checks.append(
             "3期間すべての平均損益がプラスではない"
         )
-    # すべての条件を満たした場合のみBUY/SELLを通す
     quality_ok = (
         overall_ok
         and direction_ok
@@ -455,7 +492,7 @@ def evaluate_pair(name, config):
         decision_reason = (
             "全体成績・現在の売買方向別成績・"
             "3期間の安定性が設定基準を満たしました。"
-            "ただし、将来の利益を保証するものではありません。"
+            "将来の利益を保証するものではありません。"
         )
     else:
         decision = "判定保留"
@@ -465,25 +502,35 @@ def evaluate_pair(name, config):
     return {
         "pair": name,
         "bars": len(df),
-        "latest_bar_time": str(df.index[-1]),
+        "latest_bar_time": timestamp_jst(df.index[-1]),
         "signal": current_signal,
         "direction_score": int(current_score),
         "decision": decision,
         "decision_reason": decision_reason,
         "reasons": reasons,
         "train_period": {
-            "from": str(df.index[0]),
-            "to": str(df.index[max(0, split_i - 1)]),
+            "from": timestamp_jst(df.index[0]),
+            "to": timestamp_jst(
+                df.index[max(0, split_i - 1)]
+            ),
         },
         "test_period": {
-            "from": str(df.index[split_i]),
-            "to": str(df.index[-1]),
+            "from": timestamp_jst(df.index[split_i]),
+            "to": timestamp_jst(df.index[-1]),
         },
         "train": train_stats,
         "test": test_stats,
         "test_by_direction": direction_stats,
         "current_direction_test": current_direction_stats,
         "test_windows": window_stats,
+        "cost_assumptions": {
+            "spread_pips": float(config["spread"]),
+            "slippage_pips_per_trade": float(SLIPPAGE_PIPS),
+            "note": (
+                "固定値による仮定です。実際のスプレッド、"
+                "スリッページ、スワップ、約定差とは異なります。"
+            ),
+        },
         "window_stability": {
             "usable_windows": len(usable_windows),
             "positive_windows": positive_windows,
@@ -491,8 +538,7 @@ def evaluate_pair(name, config):
             "minimum_samples_per_window": MIN_WINDOW_SAMPLES,
             "passed": stability_ok,
             "note": (
-                "各期間の件数が少ない場合は判定を保留します。"
-                "過去の期間別成績は独立した将来予測ではありません。"
+                "期間別成績は独立した将来予測ではありません。"
             ),
         },
         "quality_checks": {
@@ -505,8 +551,9 @@ def evaluate_pair(name, config):
         "notes": [
             "強度スコアは勝率や確率ではありません。",
             "次の足の始値でエントリーする想定です。",
-            "スプレッドは設定した固定値を差し引いた参考値です。",
-            "スリッページ、スワップ、実際の約定差は未反映です。",
+            "決済はシグナル足から所定本数後の終値を使います。",
+            "固定スプレッドとスリッページ想定値を差し引いています。",
+            "スワップ、実際の約定差、指値・逆指値の約定条件は未反映です。",
             "過去の検証成績は将来の利益を保証しません。",
             "判定が通っても、実際の取引を推奨するものではありません。",
         ],
@@ -583,13 +630,20 @@ def main():
         for note in result["notes"]:
             print(f"- {note}")
     payload = {
-        "schema_version": 6,
+        "schema_version": 7,
         "last_run_jst": now_jst(),
-        "mode": "strict_multi_window_direction_validation_no_auto_orders",
+        "mode": (
+            "strict_multi_window_direction_validation"
+            "_with_cost_assumptions_no_auto_orders"
+        ),
         "interval": INTERVAL,
         "lookahead_bars": LOOKAHEAD_BARS,
         "train_ratio": TRAIN_RATIO,
         "test_windows": TEST_WINDOWS,
+        "cost_assumptions": {
+            "spread_source": "PAIRS設定の固定値",
+            "slippage_pips_per_trade": SLIPPAGE_PIPS,
+        },
         "criteria": {
             "min_train_samples": MIN_TRAIN_SAMPLES,
             "min_test_samples": MIN_TEST_SAMPLES,
