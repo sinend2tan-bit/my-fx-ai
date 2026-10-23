@@ -673,6 +673,10 @@ def bars(ticker, interval="1h", period="60d"):
     # 教師ラベルのない末尾部分は学習・評価に使用しない。
     df = df.dropna(subset=FEATURE_COLUMNS + ["Target", "ATR", "Close"])
 
+    print(f"[DATA AFTER CLEAN] {ticker} {interval}: rows={len(df)}")
+    print(f"[DATA AFTER CLEAN] {ticker} {interval}: last={df.index[-1].isoformat()}")
+    print(f"[DATA AFTER CLEAN] {ticker} {interval}: close={df['Close'].iloc[-1]}")
+
     if len(df) < MIN_TRAIN_ROWS:
         print(
             f"[DATA SHORT AFTER CLEAN] {ticker} {interval}: {len(df)} rows"
