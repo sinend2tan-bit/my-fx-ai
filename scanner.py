@@ -990,24 +990,35 @@ def analyze(df, validation):
 # =========================================================
 
 def timeframe_trend(df):
-    if df is None or len(df) < 30:
+    if df is None or df.empty:
         return "データ不足"
 
-    close = df["Close"]
+    # 最新足を含む指標データを優先する
+    latest_features = df.attrs.get("latest_features")
+    if latest_features is not None and not latest_features.empty:
+        source = latest_features
+    else:
+        source = df
+
+    close = source["Close"]
+    if len(close) < 50:
+        return "データ不足"
+
     ema20 = close.ewm(span=20, adjust=False).mean()
     ema50 = close.ewm(span=50, adjust=False).mean()
 
-    if len(close) < 3:
-        return "中立"
+    last_close = safe_float(close.iloc[-1])
+    last_ema20 = safe_float(ema20.iloc[-1])
+    last_ema50 = safe_float(ema50.iloc[-1])
 
-    last_close = float(close.iloc[-1])
-    last_ema20 = float(ema20.iloc[-1])
-    last_ema50 = float(ema50.iloc[-1])
+    if None in (last_close, last_ema20, last_ema50):
+        return "データ不足"
 
     if last_close > last_ema20 > last_ema50:
         return "上昇"
     if last_close < last_ema20 < last_ema50:
         return "下降"
+
     return "中立"
 
 
