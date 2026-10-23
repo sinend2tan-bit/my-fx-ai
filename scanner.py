@@ -692,11 +692,13 @@ def bars(ticker, interval="1h", period="60d"):
         )
         return None
 
-    training_df["Target"] = training_df["Target"].astype(int)
+   training_df["Target"] = training_df["Target"].astype(int)
 
-    # 学習用データと最新足の情報を分離して保持する。
-    training_df.attrs["latest_data"] = latest_data
-    training_df.attrs["latest_index"] = latest_index
+   # 学習用データと最新足の情報を分離して保持する。
+   training_df.attrs["latest_data"] = latest_data
+   training_df.attrs["latest_index"] = latest_index
+   training_df.attrs["latest_history"] = feature_df.tail(3).copy()
+   training_df.attrs["latest_features"] = feature_df.copy()
 
     print(
         f"[TRAINING DATA] {ticker} {interval}: "
