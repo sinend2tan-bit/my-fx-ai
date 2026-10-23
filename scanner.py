@@ -631,9 +631,8 @@ def bars(ticker, interval="1h", period="60d"):
         return None
 
     # 学習・予測に使う最新の特徴量と時刻を保持する。
-    latest_data = feature_df.iloc[[-1]].copy()
-    training_df.attrs["latest_history"] = feature_df.tail(3).copy()
-    latest_index = latest_data.index[-1]
+   latest_data = feature_df.iloc[[-1]].copy()
+   latest_index = latest_data.index[-1]
 
     print(
         f"[LATEST CONFIRMED BAR] {ticker} {interval}: "
