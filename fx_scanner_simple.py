@@ -9,6 +9,7 @@ import yfinance as yf
 # =========================================================
 # FX Simple Scanner
 # 慎重判定・複数期間・方向別検証版
+# 前半の平均損益がプラスであることも必須条件にする
 # 分析専用 / 口座接続なし / 自動発注なし
 # =========================================================
 JST = ZoneInfo("Asia/Tokyo")
@@ -21,13 +22,16 @@ MIN_TEST_SAMPLES = 30
 MIN_TRAIN_SAMPLES = 30
 MIN_DIRECTION_SAMPLES = 30
 MIN_DIRECTION_HIT_RATE = 0.50
-MIN_DIRECTION_AVG_NET_PIPS = 0.0
+# 前半・後半とも、平均損益がこの値を上回ること
+# 0.0の場合、平均損益が0以下なら不合格
+MIN_TRAIN_AVG_NET_PIPS = 0.0
 MIN_AVG_NET_PIPS = 0.0
+MIN_DIRECTION_AVG_NET_PIPS = 0.0
 TEST_WINDOWS = 3
 MIN_WINDOW_SAMPLES = 10
 MIN_POSITIVE_WINDOWS = 3
-# 1取引あたりの往復スリッページ想定値（pips）
-# 実際の値を保証するものではありません。
+# 1取引あたりのスリッページ想定値（pips）
+# 実際の値を保証するものではありません
 SLIPPAGE_PIPS = 0.2
 STATE_FILE = "scan_state_simple.json"
 HISTORY_FILE = "scan_history_simple.json"
@@ -50,6 +54,7 @@ def timestamp_jst(value):
     except Exception:
         return str(value)
 def json_default(value):
+    """NumPy・Pandasの値をJSONに保存できる形式にする。"""
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, np.floating):
@@ -65,7 +70,7 @@ def json_default(value):
         return value.tolist()
     return str(value)
 def save_json(path, data):
-    """JSONを一時ファイル経由で安全に保存する。"""
+    """一時ファイル経由でJSONを保存する。"""
     temp_path = path + ".tmp"
     with open(temp_path, "w", encoding="utf-8") as f:
         json.dump(
@@ -78,6 +83,7 @@ def save_json(path, data):
         )
     os.replace(temp_path, path)
 def load_history():
+    """過去の実行履歴を読み込む。"""
     if not os.path.exists(HISTORY_FILE):
         return []
     try:
@@ -232,20 +238,17 @@ def make_signal(row):
     return "WAIT", score, reasons
 def backtest(df, pip_size, spread, start_i, end_i):
     """
-    start_i以上、end_i未満の検証範囲でバックテストする。
+    指定範囲でバックテストする。
     ・シグナル足の次の足の始値でエントリー
     ・シグナル足からLOOKAHEAD_BARS後の終値で決済
-    ・検証範囲内で決済できる取引だけを採用
-    ・取引の保有期間が重複しないようにする
-    ・シグナルがない場合は1本ずつ確認する
+    ・検証範囲内で決済できる取引だけ採用
+    ・保有期間が重複しないようにする
     """
     trades = []
     start_i = max(int(start_i), 55)
     end_i = min(int(end_i), len(df))
     if end_i <= start_i:
         return trades
-    # exit_i = i + LOOKAHEAD_BARS が
-    # end_i - 1 以下になるようにする。
     last_signal_i = min(
         end_i - LOOKAHEAD_BARS - 1,
         len(df) - LOOKAHEAD_BARS - 1,
@@ -253,14 +256,11 @@ def backtest(df, pip_size, spread, start_i, end_i):
     i = start_i
     while i <= last_signal_i:
         signal, score, _ = make_signal(df.iloc[i])
-        # 重要な修正：
-        # シグナルがなければ1本先を確認する。
         if signal not in ("BUY", "SELL"):
             i += 1
             continue
         entry_i = i + 1
         exit_i = i + LOOKAHEAD_BARS
-        # 念のため検証範囲を再確認
         if entry_i >= end_i or exit_i >= end_i:
             i += 1
             continue
@@ -302,11 +302,11 @@ def backtest(df, pip_size, spread, start_i, end_i):
             "win": bool(net_pips > 0),
         })
         # 決済足の終値で決済する想定。
-        # 次のシグナル確認は決済足から再開する。
-        # これにより保有期間の重複を避ける。
+        # 次の確認は決済足から再開する。
         i = exit_i
     return trades
 def summarize_trades(trades):
+    """取引成績を集計する。"""
     count = len(trades)
     if count == 0:
         return {
@@ -371,6 +371,7 @@ def summarize_trades(trades):
         "total_net_pips": round(float(net.sum()), 2),
     }
 def summarize_by_direction(trades):
+    """BUYとSELLを分けて集計する。"""
     return {
         direction: summarize_trades(
             [t for t in trades if t["signal"] == direction]
@@ -378,6 +379,7 @@ def summarize_by_direction(trades):
         for direction in ("BUY", "SELL")
     }
 def evaluate_pair(name, config):
+    """1通貨ペアを分析・検証する。"""
     df, error = download_prices(config["ticker"])
     if error:
         return {
@@ -400,8 +402,7 @@ def evaluate_pair(name, config):
             "decision": "判定保留",
             "decision_reason": "期間分割ができないため",
         }
-    # 前半の検証。テスト期間とラベルが重なりにくいように
-    # LOOKAHEAD_BARS分だけ前半の終端を手前にする。
+    # 前半の終端を手前にずらし、境界をまたぐ決済を避ける
     train_end = max(56, split_i - LOOKAHEAD_BARS)
     train_trades = backtest(
         df,
@@ -462,12 +463,19 @@ def evaluate_pair(name, config):
     current_signal, current_score, reasons = make_signal(
         df.iloc[-1]
     )
-    overall_ok = (
+    # 前半の検証条件
+    train_ok = (
         train_stats["samples"] >= MIN_TRAIN_SAMPLES
-        and test_stats["samples"] >= MIN_TEST_SAMPLES
+        and train_stats["avg_net_pips"] is not None
+        and train_stats["avg_net_pips"] > MIN_TRAIN_AVG_NET_PIPS
+    )
+    # 後半全体の検証条件
+    overall_ok = (
+        test_stats["samples"] >= MIN_TEST_SAMPLES
         and test_stats["avg_net_pips"] is not None
         and test_stats["avg_net_pips"] > MIN_AVG_NET_PIPS
     )
+    # 現在のサイン方向と同じ方向の過去成績を確認
     current_direction_stats = None
     direction_ok = False
     if current_signal in ("BUY", "SELL"):
@@ -482,6 +490,7 @@ def evaluate_pair(name, config):
             and current_direction_stats["avg_net_pips"]
             > MIN_DIRECTION_AVG_NET_PIPS
         )
+    # 3期間すべてで最低サンプル数とプラス損益を要求
     stability_ok = (
         len(usable_windows) == TEST_WINDOWS
         and positive_windows >= MIN_POSITIVE_WINDOWS
@@ -489,12 +498,17 @@ def evaluate_pair(name, config):
     failed_checks = []
     if train_stats["samples"] < MIN_TRAIN_SAMPLES:
         failed_checks.append("前半の検証サンプル数が不足")
+    if train_stats["avg_net_pips"] is None:
+        failed_checks.append("前半の平均損益を計算できない")
+    elif train_stats["avg_net_pips"] <= MIN_TRAIN_AVG_NET_PIPS:
+        failed_checks.append(
+            "前半の平均損益が基準未達（0 pips以下）"
+        )
     if test_stats["samples"] < MIN_TEST_SAMPLES:
         failed_checks.append("後半のテストサンプル数が不足")
-    if (
-        test_stats["avg_net_pips"] is None
-        or test_stats["avg_net_pips"] <= MIN_AVG_NET_PIPS
-    ):
+    if test_stats["avg_net_pips"] is None:
+        failed_checks.append("後半全体の平均損益を計算できない")
+    elif test_stats["avg_net_pips"] <= MIN_AVG_NET_PIPS:
         failed_checks.append("後半全体の平均損益が基準未達")
     if current_signal == "WAIT":
         failed_checks.append("現在のテクニカルサインが様子見")
@@ -510,8 +524,10 @@ def evaluate_pair(name, config):
         failed_checks.append(
             "3期間すべての平均損益がプラスではない"
         )
+    # 前半・後半・方向別・期間別のすべてを満たすこと
     quality_ok = (
-        overall_ok
+        train_ok
+        and overall_ok
         and direction_ok
         and stability_ok
         and current_signal in ("BUY", "SELL")
@@ -519,7 +535,7 @@ def evaluate_pair(name, config):
     if quality_ok:
         decision = current_signal
         decision_reason = (
-            "全体成績・現在の売買方向別成績・"
+            "前半・後半の平均損益、現在の売買方向別成績、"
             "3期間の安定性が設定基準を満たしました。"
             "将来の利益を保証するものではありません。"
         )
@@ -571,6 +587,7 @@ def evaluate_pair(name, config):
             ),
         },
         "quality_checks": {
+            "train_passed": train_ok,
             "overall_test_passed": overall_ok,
             "current_direction_passed": direction_ok,
             "window_stability_passed": stability_ok,
@@ -583,12 +600,15 @@ def evaluate_pair(name, config):
             "決済はシグナル足から所定本数後の終値を使います。",
             "固定スプレッドとスリッページ想定値を差し引いています。",
             "スワップ、実際の約定差、指値・逆指値の約定条件は未反映です。",
+            "前半の平均損益が0 pips以下の場合は判定保留です。",
+            "後半の平均損益もプラスである必要があります。",
             "過去の検証成績は将来の利益を保証しません。",
             "判定が通っても、実際の取引を推奨するものではありません。",
             "シグナルがない場合は1本ずつ確認し、取引期間の重複を避けます。",
         ],
     }
 def print_stats(label, stats):
+    """成績を表示する。"""
     print(f"\n{label}")
     print(f"サンプル数: {stats['samples']}")
     print(f"勝率: {stats['hit_rate_pct']}%")
@@ -600,7 +620,7 @@ def print_stats(label, stats):
     print(f"合計損益: {stats['total_net_pips']} pips")
 def main():
     print("=" * 64)
-    print("FX Simple Scanner - 慎重判定・複数期間・方向別検証版")
+    print("FX Simple Scanner - 前半成績も必須とする慎重判定版")
     print(f"実行時刻: {now_jst()}")
     print("分析専用 / 自動発注なし / 口座接続なし")
     print("=" * 64)
@@ -625,6 +645,7 @@ def main():
             print(f"理由: {result['error']}")
             continue
         print(f"使用データ本数: {result['bars']}")
+        print(f"最新足の時刻: {result['latest_bar_time']}")
         print(f"現在のサイン: {result['signal']}")
         print(f"方向スコア: {result['direction_score']}")
         print(f"検証判定: {result['decision']}")
@@ -649,9 +670,11 @@ def main():
         )
         checks = result["quality_checks"]
         print("\n判定条件の確認")
-        print(f"全体テスト: {checks['overall_test_passed']}")
+        print(f"前半の成績: {checks['train_passed']}")
+        print(f"後半全体の成績: {checks['overall_test_passed']}")
         print(f"方向別成績: {checks['current_direction_passed']}")
         print(f"期間の安定性: {checks['window_stability_passed']}")
+        print(f"総合判定: {checks['all_passed']}")
         if checks["failed_checks"]:
             print("未達条件:")
             for item in checks["failed_checks"]:
@@ -660,11 +683,11 @@ def main():
         for note in result["notes"]:
             print(f"- {note}")
     payload = {
-        "schema_version": 8,
+        "schema_version": 9,
         "last_run_jst": now_jst(),
         "mode": (
-            "strict_multi_window_direction_validation"
-            "_with_cost_assumptions_no_auto_orders_v2"
+            "strict_train_test_direction_window_validation"
+            "_with_cost_assumptions_no_auto_orders_v3"
         ),
         "interval": INTERVAL,
         "lookahead_bars": LOOKAHEAD_BARS,
@@ -676,10 +699,18 @@ def main():
         },
         "criteria": {
             "min_train_samples": MIN_TRAIN_SAMPLES,
+            "min_train_avg_net_pips_exclusive": (
+                MIN_TRAIN_AVG_NET_PIPS
+            ),
             "min_test_samples": MIN_TEST_SAMPLES,
+            "min_avg_net_pips_exclusive": MIN_AVG_NET_PIPS,
             "min_direction_samples": MIN_DIRECTION_SAMPLES,
-            "min_direction_hit_rate_pct": MIN_DIRECTION_HIT_RATE * 100,
-            "min_direction_avg_net_pips": MIN_DIRECTION_AVG_NET_PIPS,
+            "min_direction_hit_rate_pct": (
+                MIN_DIRECTION_HIT_RATE * 100
+            ),
+            "min_direction_avg_net_pips_exclusive": (
+                MIN_DIRECTION_AVG_NET_PIPS
+            ),
             "min_window_samples": MIN_WINDOW_SAMPLES,
             "min_positive_windows": MIN_POSITIVE_WINDOWS,
         },
