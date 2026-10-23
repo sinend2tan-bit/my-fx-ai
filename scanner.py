@@ -620,7 +620,7 @@ def bars(ticker, interval="1h", period="60d"):
     if len(raw) < 220:
         return None
 
-    # ここで作る指標データは、最新の確定足を含む。
+     # ここで作る指標データは、最新の確定足を含む。
     feature_df = add_indicators(raw)
     feature_df = feature_df.dropna(
         subset=FEATURE_COLUMNS + ["ATR", "Close"]
@@ -631,8 +631,8 @@ def bars(ticker, interval="1h", period="60d"):
         return None
 
     # 学習・予測に使う最新の特徴量と時刻を保持する。
-   latest_data = feature_df.iloc[[-1]].copy()
-   latest_index = latest_data.index[-1]
+    latest_data = feature_df.iloc[[-1]].copy()
+    latest_index = latest_data.index[-1]
 
     print(
         f"[LATEST CONFIRMED BAR] {ticker} {interval}: "
