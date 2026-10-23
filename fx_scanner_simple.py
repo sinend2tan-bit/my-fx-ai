@@ -26,7 +26,7 @@ MIN_AVG_NET_PIPS = 0.0
 TEST_WINDOWS = 3
 MIN_WINDOW_SAMPLES = 10
 MIN_POSITIVE_WINDOWS = 3
-# スリッページ想定値（1取引あたりの往復合計、pips）
+# 1取引あたりの往復スリッページ想定値（pips）
 # 実際の値を保証するものではありません。
 SLIPPAGE_PIPS = 0.2
 STATE_FILE = "scan_state_simple.json"
@@ -53,7 +53,10 @@ def json_default(value):
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, np.floating):
-        return float(value)
+        result = float(value)
+        if not math.isfinite(result):
+            return None
+        return result
     if isinstance(value, np.bool_):
         return bool(value)
     if isinstance(value, (pd.Timestamp, datetime)):
@@ -62,7 +65,7 @@ def json_default(value):
         return value.tolist()
     return str(value)
 def save_json(path, data):
-    """JSONを一時ファイル経由で保存する。"""
+    """JSONを一時ファイル経由で安全に保存する。"""
     temp_path = path + ".tmp"
     with open(temp_path, "w", encoding="utf-8") as f:
         json.dump(
@@ -84,6 +87,7 @@ def load_history():
     except (OSError, json.JSONDecodeError):
         return []
 def download_prices(ticker):
+    """価格を取得し、OHLCの整合性を確認する。"""
     try:
         df = yf.download(
             ticker,
@@ -109,7 +113,6 @@ def download_prices(ticker):
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna(subset=required)
     df = df[~df.index.duplicated(keep="last")].sort_index()
-    # OHLC価格の整合性を確認
     valid = (
         (df["Open"] > 0)
         & (df["High"] > 0)
@@ -132,6 +135,7 @@ def download_prices(ticker):
         )
     return df, None
 def add_indicators(df):
+    """テクニカル指標を計算する。"""
     df = df.copy()
     close = df["Close"]
     high = df["High"]
@@ -186,6 +190,7 @@ def add_indicators(df):
     ).mean()
     return df.replace([np.inf, -np.inf], np.nan)
 def make_signal(row):
+    """EMAとRSIを使い、BUY・SELL・WAITを判定する。"""
     values = [
         row.get("Close"),
         row.get("EMA20"),
@@ -225,21 +230,21 @@ def make_signal(row):
     if score <= -2 and row["RSI"] > 25:
         return "SELL", score, reasons
     return "WAIT", score, reasons
-def backtest(
-    df,
-    pip_size,
-    spread,
-    start_i,
-    end_i,
-):
+def backtest(df, pip_size, spread, start_i, end_i):
     """
-    start_i以上、end_i未満の範囲でシグナルを検証する。
-    エントリーと決済は検証範囲内で完結させる。
+    start_i以上、end_i未満の検証範囲でバックテストする。
+    ・シグナル足の次の足の始値でエントリー
+    ・シグナル足からLOOKAHEAD_BARS後の終値で決済
+    ・検証範囲内で決済できる取引だけを採用
+    ・取引の保有期間が重複しないようにする
+    ・シグナルがない場合は1本ずつ確認する
     """
     trades = []
     start_i = max(int(start_i), 55)
     end_i = min(int(end_i), len(df))
-    # 決済足 i + LOOKAHEAD_BARS が
+    if end_i <= start_i:
+        return trades
+    # exit_i = i + LOOKAHEAD_BARS が
     # end_i - 1 以下になるようにする。
     last_signal_i = min(
         end_i - LOOKAHEAD_BARS - 1,
@@ -248,44 +253,58 @@ def backtest(
     i = start_i
     while i <= last_signal_i:
         signal, score, _ = make_signal(df.iloc[i])
-        if signal in ("BUY", "SELL"):
-            entry_i = i + 1
-            exit_i = i + LOOKAHEAD_BARS
+        # 重要な修正：
+        # シグナルがなければ1本先を確認する。
+        if signal not in ("BUY", "SELL"):
+            i += 1
+            continue
+        entry_i = i + 1
+        exit_i = i + LOOKAHEAD_BARS
+        # 念のため検証範囲を再確認
+        if entry_i >= end_i or exit_i >= end_i:
+            i += 1
+            continue
+        try:
             entry_price = float(df["Open"].iloc[entry_i])
             exit_price = float(df["Close"].iloc[exit_i])
-            if (
-                not math.isfinite(entry_price)
-                or not math.isfinite(exit_price)
-                or entry_price <= 0
-                or exit_price <= 0
-            ):
-                i += LOOKAHEAD_BARS
-                continue
-            direction = 1 if signal == "BUY" else -1
-            gross_pips = (
-                (exit_price - entry_price)
-                * direction
-                / pip_size
-            )
-            total_cost_pips = spread + SLIPPAGE_PIPS
-            net_pips = gross_pips - total_cost_pips
-            if not math.isfinite(net_pips):
-                i += LOOKAHEAD_BARS
-                continue
-            trades.append({
-                "signal_time": timestamp_jst(df.index[i]),
-                "entry_time": timestamp_jst(df.index[entry_i]),
-                "exit_time": timestamp_jst(df.index[exit_i]),
-                "signal": signal,
-                "score": int(score),
-                "gross_pips": round(float(gross_pips), 4),
-                "spread_pips": float(spread),
-                "slippage_pips": float(SLIPPAGE_PIPS),
-                "net_pips": round(float(net_pips), 4),
-                "win": bool(net_pips > 0),
-            })
-        # 取引の保有期間が重複しないように進める
-        i += LOOKAHEAD_BARS
+        except (ValueError, TypeError, IndexError):
+            i += 1
+            continue
+        if (
+            not math.isfinite(entry_price)
+            or not math.isfinite(exit_price)
+            or entry_price <= 0
+            or exit_price <= 0
+        ):
+            i += 1
+            continue
+        direction = 1 if signal == "BUY" else -1
+        gross_pips = (
+            (exit_price - entry_price)
+            * direction
+            / pip_size
+        )
+        total_cost_pips = float(spread) + SLIPPAGE_PIPS
+        net_pips = gross_pips - total_cost_pips
+        if not math.isfinite(net_pips):
+            i += 1
+            continue
+        trades.append({
+            "signal_time": timestamp_jst(df.index[i]),
+            "entry_time": timestamp_jst(df.index[entry_i]),
+            "exit_time": timestamp_jst(df.index[exit_i]),
+            "signal": signal,
+            "score": int(score),
+            "gross_pips": round(float(gross_pips), 4),
+            "spread_pips": float(spread),
+            "slippage_pips": float(SLIPPAGE_PIPS),
+            "net_pips": round(float(net_pips), 4),
+            "win": bool(net_pips > 0),
+        })
+        # 決済足の終値で決済する想定。
+        # 次のシグナル確認は決済足から再開する。
+        # これにより保有期間の重複を避ける。
+        i = exit_i
     return trades
 def summarize_trades(trades):
     count = len(trades)
@@ -373,6 +392,16 @@ def evaluate_pair(name, config):
         0.01 if "JPY" in config["ticker"] else 0.0001
     )
     split_i = int(len(df) * TRAIN_RATIO)
+    if split_i <= 55 or split_i >= len(df):
+        return {
+            "pair": name,
+            "error": "訓練期間とテスト期間を分けるためのデータが不足",
+            "signal": "WAIT",
+            "decision": "判定保留",
+            "decision_reason": "期間分割ができないため",
+        }
+    # 前半の検証。テスト期間とラベルが重なりにくいように
+    # LOOKAHEAD_BARS分だけ前半の終端を手前にする。
     train_end = max(56, split_i - LOOKAHEAD_BARS)
     train_trades = backtest(
         df,
@@ -556,6 +585,7 @@ def evaluate_pair(name, config):
             "スワップ、実際の約定差、指値・逆指値の約定条件は未反映です。",
             "過去の検証成績は将来の利益を保証しません。",
             "判定が通っても、実際の取引を推奨するものではありません。",
+            "シグナルがない場合は1本ずつ確認し、取引期間の重複を避けます。",
         ],
     }
 def print_stats(label, stats):
@@ -630,11 +660,11 @@ def main():
         for note in result["notes"]:
             print(f"- {note}")
     payload = {
-        "schema_version": 7,
+        "schema_version": 8,
         "last_run_jst": now_jst(),
         "mode": (
             "strict_multi_window_direction_validation"
-            "_with_cost_assumptions_no_auto_orders"
+            "_with_cost_assumptions_no_auto_orders_v2"
         ),
         "interval": INTERVAL,
         "lookahead_bars": LOOKAHEAD_BARS,
