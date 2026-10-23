@@ -585,7 +585,8 @@ def bars(ticker, interval="1h", period="60d"):
         return None
 
     raw = flatten_yf_columns(raw)
-
+    print(f"[DATA TIME] {ticker} {interval}: now={pd.Timestamp.now(tz='Asia/Tokyo').isoformat()}")
+    print(f"[DATA TIME] {ticker} {interval}: raw_last={pd.Timestamp(raw.index[-1]).isoformat()}")
     required = ["Open", "High", "Low", "Close"]
     if any(col not in raw.columns for col in required):
         print(f"[DATA ERROR] 必要な列がありません: {ticker} {interval}")
