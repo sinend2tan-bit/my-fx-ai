@@ -1184,7 +1184,12 @@ def analyze_pair(name, config):
             return result
 
         # スプレッドがATRに対して大きすぎる場合は候補を保留。
-        atr_value = safe_float(hourly["ATR"].iloc[-1])
+        latest_data = hourly.attrs.get("latest_data")
+        atr_value = (
+            safe_float(latest_data["ATR"].iloc[-1])
+            if latest_data is not None and not latest_data.empty
+            else None
+)
         if atr_value is None or atr_value <= 0:
             result["decision"] = "ATR不明・保留"
             result["reason"] = "変動幅を確認できないため保留します。"
