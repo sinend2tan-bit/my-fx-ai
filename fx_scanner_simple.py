@@ -1,135 +1,162 @@
 
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-FX簡易スキャナー＋過去データ検証
-
-・分析専用。松井証券FXへの接続・注文・自動発注は行いません。
-・Yahoo Financeの参考価格を使用します。
-・スコアは勝率ではありません。
-・過去検証は将来の利益を保証しません。
-"""
-
-from __future__ import annotations
-
 import json
 import math
+import os
+import warnings
 from datetime import datetime
-from pathlib import Path
-from typing import Any
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
+import yfinance as yf
 
-try:
-    import yfinance as yf
-except ImportError:
-    yf = None
+# =========================================================
+# FX Simple Scanner
+# 分析・検証専用。口座接続・自動発注は行わない
+# =========================================================
 
 JST = ZoneInfo("Asia/Tokyo")
-STATE_FILE = Path("scan_state_simple.json")
-HISTORY_FILE = Path("scan_history_simple.json")
-
-PAIRS = {
-    "USD/JPY": "USDJPY=X",
-    "EUR/JPY": "EURJPY=X",
-    "GBP/JPY": "GBPJPY=X",
-    "AUD/JPY": "AUDJPY=X",
-    "EUR/USD": "EURUSD=X",
-}
 
 PERIOD = "60d"
 INTERVAL = "1h"
-MIN_BARS = 80
+MIN_BARS = 160
 
-# 過去シグナル発生から何本後の価格を評価するか
 LOOKAHEAD_BARS = 8
+TRAIN_RATIO = 0.70
 
-SPREAD_PIPS = {
-    "USD/JPY": 0.2,
-    "EUR/JPY": 0.5,
-    "GBP/JPY": 1.0,
-    "AUD/JPY": 0.6,
-    "EUR/USD": 0.4,
+# 検証品質の基準。満たさない場合は「判定保留」
+MIN_TEST_SAMPLES = 30
+MIN_TRAIN_SAMPLES = 30
+MIN_DIRECTION_HIT_RATE = 0.50
+MIN_AVG_NET_PIPS = 0.0
+
+STATE_FILE = "scan_state_simple.json"
+HISTORY_FILE = "scan_history_simple.json"
+
+PAIRS = {
+    "USD/JPY": {"ticker": "USDJPY=X", "spread": 0.2},
+    "EUR/JPY": {"ticker": "EURJPY=X", "spread": 0.5},
+    "GBP/JPY": {"ticker": "GBPJPY=X", "spread": 1.0},
+    "AUD/JPY": {"ticker": "AUDJPY=X", "spread": 0.6},
+    "EUR/USD": {"ticker": "EURUSD=X", "spread": 0.4},
 }
 
 
-def now_jst() -> str:
+def now_jst():
     return datetime.now(JST).isoformat(timespec="seconds")
 
 
-def safe_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-        return number if math.isfinite(number) else None
-    except (TypeError, ValueError):
-        return None
+def json_default(value):
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return value.isoformat()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    return str(value)
 
 
-def download_bars(ticker: str) -> pd.DataFrame:
-    if yf is None:
-        raise RuntimeError("yfinance がインストールされていません。")
-
-    frame = yf.download(
-        ticker,
-        period=PERIOD,
-        interval=INTERVAL,
-        auto_adjust=False,
-        progress=False,
-        threads=False,
-        timeout=20,
-    )
-
-    if frame is None or frame.empty:
-        raise RuntimeError("価格データを取得できませんでした。")
-
-    if isinstance(frame.columns, pd.MultiIndex):
-        frame.columns = frame.columns.get_level_values(0)
-
-    needed = ["Open", "High", "Low", "Close"]
-    missing = [col for col in needed if col not in frame.columns]
-    if missing:
-        raise RuntimeError(f"必要な価格列がありません: {missing}")
-
-    frame = frame[needed].copy()
-    for col in needed:
-        frame[col] = pd.to_numeric(frame[col], errors="coerce")
-
-    frame = frame.dropna().sort_index()
-
-    # 形成中の可能性がある最新足を除外
-    if len(frame) > 1:
-        frame = frame.iloc[:-1]
-
-    if len(frame) < MIN_BARS:
-        raise RuntimeError(
-            f"データ不足です（{len(frame)}本）。最低{MIN_BARS}本必要です。"
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(
+            data,
+            f,
+            ensure_ascii=False,
+            indent=2,
+            default=json_default,
         )
 
-    return frame
+
+def load_history():
+    if not os.path.exists(HISTORY_FILE):
+        return []
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
 
 
-def add_indicators(frame: pd.DataFrame) -> pd.DataFrame:
-    df = frame.copy()
+def download_prices(ticker):
+    try:
+        df = yf.download(
+            ticker,
+            period=PERIOD,
+            interval=INTERVAL,
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+            timeout=20,
+        )
+    except Exception as exc:
+        return None, f"価格データ取得エラー: {exc}"
+
+    if df is None or df.empty:
+        return None, "価格データが取得できませんでした"
+
+    # yfinanceのバージョン差によるMultiIndexに対応
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    required = ["Open", "High", "Low", "Close"]
+    if any(col not in df.columns for col in required):
+        return None, "必要な価格列がありません"
+
+    df = df[required].copy()
+    for col in required:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.dropna(subset=required)
+    df = df[~df.index.duplicated(keep="last")].sort_index()
+
+    # 最後の足は未確定の可能性があるため除外
+    if len(df) > 1:
+        df = df.iloc[:-1].copy()
+
+    if len(df) < MIN_BARS:
+        return None, (
+            f"データ不足: {len(df)}本。"
+            f"最低{MIN_BARS}本必要です"
+        )
+
+    return df, None
+
+
+def add_indicators(df):
+    df = df.copy()
+
     close = df["Close"]
     high = df["High"]
     low = df["Low"]
 
     df["EMA20"] = close.ewm(span=20, adjust=False).mean()
     df["EMA50"] = close.ewm(span=50, adjust=False).mean()
-    df["EMA20Slope5"] = df["EMA20"].pct_change(5) * 100
+    df["EMA20_SLOPE"] = df["EMA20"] - df["EMA20"].shift(5)
 
-    # RSI 14
     delta = close.diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
 
-    rs = gain / loss.replace(0, float("nan"))
+    avg_gain = gain.ewm(
+        alpha=1 / 14, min_periods=14, adjust=False
+    ).mean()
+    avg_loss = loss.ewm(
+        alpha=1 / 14, min_periods=14, adjust=False
+    ).mean()
+
+    rs = avg_gain / avg_loss.replace(0, np.nan)
     df["RSI"] = 100 - (100 / (1 + rs))
-    df.loc[loss.eq(0) & gain.gt(0), "RSI"] = 100
-    df.loc[loss.eq(0) & gain.eq(0), "RSI"] = 50
 
-    # ATR 14
+    # 損失ゼロが続く場合のRSIを補正
+    df.loc[(avg_loss == 0) & (avg_gain > 0), "RSI"] = 100
+    df.loc[(avg_loss == 0) & (avg_gain == 0), "RSI"] = 50
+
     previous_close = close.shift(1)
     true_range = pd.concat(
         [
@@ -140,332 +167,313 @@ def add_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     ).max(axis=1)
 
-    df["ATR14"] = true_range.rolling(14).mean()
-    return df
+    df["ATR"] = true_range.ewm(
+        alpha=1 / 14, min_periods=14, adjust=False
+    ).mean()
+
+    return df.replace([np.inf, -np.inf], np.nan)
 
 
-def classify_signal(
-    row: pd.Series,
-) -> tuple[str, int, list[str], int]:
-    """ルールベースの方向判定。勝率の予測ではありません。"""
-    close = safe_float(row.get("Close"))
-    ema20 = safe_float(row.get("EMA20"))
-    ema50 = safe_float(row.get("EMA50"))
-    slope = safe_float(row.get("EMA20Slope5"))
-    rsi = safe_float(row.get("RSI"))
-
-    if None in (close, ema20, ema50, slope, rsi):
-        return "WAIT", 50, ["指標データ不足"], 0
+def make_signal(row):
+    """確定済み足の情報だけで方向を判定する。"""
+    values = [
+        row.get("Close"),
+        row.get("EMA20"),
+        row.get("EMA50"),
+        row.get("EMA20_SLOPE"),
+        row.get("RSI"),
+        row.get("ATR"),
+    ]
+    if any(pd.isna(v) for v in values):
+        return "WAIT", 0, ["指標データ不足"]
 
     score = 0
     reasons = []
 
-    if close > ema20:
+    if row["Close"] > row["EMA20"]:
         score += 1
-        reasons.append("価格はEMA20より上")
-    elif close < ema20:
+        reasons.append("価格がEMA20より上")
+    elif row["Close"] < row["EMA20"]:
         score -= 1
-        reasons.append("価格はEMA20より下")
-    else:
-        reasons.append("価格とEMA20はほぼ同水準")
+        reasons.append("価格がEMA20より下")
 
-    if ema20 > ema50:
+    if row["EMA20"] > row["EMA50"]:
         score += 1
-        reasons.append("EMA20はEMA50より上")
-    elif ema20 < ema50:
+        reasons.append("EMA20がEMA50より上")
+    elif row["EMA20"] < row["EMA50"]:
         score -= 1
-        reasons.append("EMA20はEMA50より下")
-    else:
-        reasons.append("EMA20とEMA50はほぼ同水準")
+        reasons.append("EMA20がEMA50より下")
 
-    if slope > 0.02:
+    if row["EMA20_SLOPE"] > 0:
         score += 1
-        reasons.append("EMA20は直近5本で上向き")
-    elif slope < -0.02:
+        reasons.append("EMA20は上向き")
+    elif row["EMA20_SLOPE"] < 0:
         score -= 1
-        reasons.append("EMA20は直近5本で下向き")
-    else:
-        reasons.append("EMA20の傾きは小さい")
+        reasons.append("EMA20は下向き")
 
-    if 50 <= rsi <= 68:
-        score += 1
-        reasons.append("RSIは上昇寄り")
-    elif 32 <= rsi < 50:
-        score -= 1
-        reasons.append("RSIは弱め")
-    elif rsi > 75:
-        reasons.append("RSIが高水準。追い買いに注意")
-    elif rsi < 25:
-        reasons.append("RSIが低水準。追い売りに注意")
-    else:
-        reasons.append("RSIは中立寄り")
+    # RSIの極端な領域では新規サインを抑制
+    if row["RSI"] >= 75:
+        reasons.append("RSIが高く、追い買いに注意")
+    elif row["RSI"] <= 25:
+        reasons.append("RSIが低く、追い売りに注意")
 
-    if score >= 2:
-        signal = "BUY"
-    elif score <= -2:
-        signal = "SELL"
-    else:
-        signal = "WAIT"
+    if score >= 2 and row["RSI"] < 75:
+        return "BUY", score, reasons
+    if score <= -2 and row["RSI"] > 25:
+        return "SELL", score, reasons
 
-    strength = min(90, 50 + abs(score) * 8) if signal != "WAIT" else 50
-    return signal, strength, reasons, score
+    return "WAIT", score, reasons
 
 
-def backtest(
-    frame: pd.DataFrame,
-    pair: str,
-) -> dict[str, Any]:
+def backtest(df, pip_size, spread, start_i, end_i):
     """
-    過去のシグナルを8本後の終値で評価する簡易検証。
+    シグナル足の次の足の始値でエントリーし、
+    そこからLOOKAHEAD_BARS本目の終値で決済する。
 
-    手数料・スプレッドは指定した参考スプレッドだけを控除。
-    スリッページ、スワップ、実際の約定条件は再現しない。
+    サンプルの重複を抑えるため、シグナル候補は
+    LOOKAHEAD_BARS本ずつ進める。
     """
-    pip = 0.01 if "JPY" in pair else 0.0001
-    spread = SPREAD_PIPS.get(pair, 1.0)
+    trades = []
+    i = max(start_i, 55)
 
-    evaluated = 0
-    wins = 0
-    losses = 0
-    neutral = 0
-    net_pips_list = []
-    gross_pips_list = []
+    # i + 1 がエントリー足、i + LOOKAHEAD_BARS が決済足
+    last_signal_i = min(
+        end_i - LOOKAHEAD_BARS,
+        len(df) - LOOKAHEAD_BARS - 1,
+    )
 
-    # 未来の価格を使ってシグナルを作らない。
-    # 各時点の指標で判定し、その後8本の価格変化で評価する。
-    end = len(frame) - LOOKAHEAD_BARS
+    while i <= last_signal_i:
+        row = df.iloc[i]
+        signal, score, _ = make_signal(row)
 
-    for i in range(end):
-        row = frame.iloc[i]
-        signal, _, _, _ = classify_signal(row)
+        if signal in ("BUY", "SELL"):
+            entry_i = i + 1
+            exit_i = i + LOOKAHEAD_BARS
 
-        if signal not in ("BUY", "SELL"):
-            continue
+            entry_price = float(df["Open"].iloc[entry_i])
+            exit_price = float(df["Close"].iloc[exit_i])
 
-        entry = safe_float(row.get("Close"))
-        future = safe_float(
-            frame.iloc[i + LOOKAHEAD_BARS].get("Close")
-        )
+            if (
+                not math.isfinite(entry_price)
+                or not math.isfinite(exit_price)
+                or entry_price <= 0
+            ):
+                i += LOOKAHEAD_BARS
+                continue
 
-        if entry is None or future is None or pip <= 0:
-            continue
+            direction = 1 if signal == "BUY" else -1
+            gross_pips = (
+                (exit_price - entry_price)
+                * direction
+                / pip_size
+            )
+            net_pips = gross_pips - spread
 
-        move_pips = (future - entry) / pip
+            trades.append({
+                "signal_time": str(df.index[i]),
+                "entry_time": str(df.index[entry_i]),
+                "exit_time": str(df.index[exit_i]),
+                "signal": signal,
+                "score": int(score),
+                "entry": entry_price,
+                "exit": exit_price,
+                "gross_pips": float(gross_pips),
+                "net_pips": float(net_pips),
+                "win": bool(net_pips > 0),
+            })
 
-        if signal == "SELL":
-            move_pips *= -1
+        i += LOOKAHEAD_BARS
 
-        # 方向一致率では、価格変化がゼロのケースを別枠にする
-        if abs(move_pips) < 1e-9:
-            neutral += 1
-            continue
+    return trades
 
-        evaluated += 1
-        gross_pips_list.append(move_pips)
 
-        net_pips = move_pips - spread
-        net_pips_list.append(net_pips)
+def summarize_trades(trades):
+    count = len(trades)
+    if count == 0:
+        return {
+            "samples": 0,
+            "hit_rate_pct": None,
+            "wins": 0,
+            "losses": 0,
+            "avg_win_pips": None,
+            "avg_loss_pips": None,
+            "profit_loss_ratio": None,
+            "avg_net_pips": None,
+            "total_net_pips": 0.0,
+        }
 
-        if move_pips > 0:
-            wins += 1
-        else:
-            losses += 1
+    net = np.array([t["net_pips"] for t in trades], dtype=float)
+    winners = net[net > 0]
+    losers = net[net < 0]
 
-    if evaluated:
-        hit_rate = round(wins / evaluated * 100, 2)
-        avg_gross = round(sum(gross_pips_list) / evaluated, 2)
-        avg_net = round(sum(net_pips_list) / evaluated, 2)
-        total_net = round(sum(net_pips_list), 2)
-        positive_net = sum(1 for p in net_pips_list if p > 0)
-        net_positive_rate = round(positive_net / evaluated * 100, 2)
+    avg_win = float(winners.mean()) if len(winners) else None
+    avg_loss = float(abs(losers.mean())) if len(losers) else None
+
+    if avg_win is not None and avg_loss is not None and avg_loss > 0:
+        pl_ratio = avg_win / avg_loss
     else:
-        hit_rate = None
-        avg_gross = None
-        avg_net = None
-        total_net = None
-        net_positive_rate = None
+        pl_ratio = None
 
     return {
-        "pair": pair,
-        "evaluation_method": (
-            f"シグナル時点の終値から{LOOKAHEAD_BARS}本後の終値まで"
-        ),
-        "lookahead_bars": LOOKAHEAD_BARS,
-        "spread_assumption_pips": spread,
-        "sample_count": evaluated,
-        "neutral_count": neutral,
-        "direction_hit_rate_percent": hit_rate,
-        "net_positive_rate_percent": net_positive_rate,
-        "average_gross_pips": avg_gross,
-        "average_net_pips_after_reference_spread": avg_net,
-        "total_net_pips_after_reference_spread": total_net,
-        "warning": (
-            "過去データの簡易検証です。将来の勝率・利益を保証しません。"
-            "実際の約定、スリッページ、スワップ、取引可能時間は"
-            "完全には再現していません。"
-        ),
+        "samples": count,
+        "hit_rate_pct": round(float((net > 0).mean() * 100), 2),
+        "wins": int((net > 0).sum()),
+        "losses": int((net < 0).sum()),
+        "avg_win_pips": round(avg_win, 2) if avg_win is not None else None,
+        "avg_loss_pips": round(avg_loss, 2) if avg_loss is not None else None,
+        "profit_loss_ratio": round(pl_ratio, 2) if pl_ratio is not None else None,
+        "avg_net_pips": round(float(net.mean()), 2),
+        "total_net_pips": round(float(net.sum()), 2),
     }
 
 
-def analyze_pair(name: str, ticker: str) -> dict[str, Any]:
-    frame = add_indicators(download_bars(ticker))
-    row = frame.iloc[-1]
+def evaluate_pair(name, config):
+    df, error = download_prices(config["ticker"])
+    if error:
+        return {
+            "pair": name,
+            "error": error,
+            "decision": "判定保留",
+        }
 
-    signal, strength, reasons, direction_score = classify_signal(row)
+    df = add_indicators(df)
 
-    close = safe_float(row.get("Close"))
-    atr = safe_float(row.get("ATR14"))
-    rsi = safe_float(row.get("RSI"))
-    ema20 = safe_float(row.get("EMA20"))
-    ema50 = safe_float(row.get("EMA50"))
-    slope = safe_float(row.get("EMA20Slope5"))
+    # 価格データの時間順で前半と後半を分離する。
+    # 指標は過去データのみを使うため、未来の価格を参照しない。
+    split_i = int(len(df) * TRAIN_RATIO)
 
-    if close is None or atr is None or atr <= 0:
-        raise RuntimeError("価格またはATRの値が不正です。")
+    # 前半の終盤で発生した取引が後半へまたがらないよう、
+    # 前半の取引候補を境界より十分前で打ち切る。
+    train_end = max(56, split_i - LOOKAHEAD_BARS)
+    train_trades = backtest(
+        df, 0.01 if "JPY" in config["ticker"] else 0.0001,
+        config["spread"], 55, train_end
+    )
 
-    pip = 0.01 if "JPY" in name else 0.0001
-    spread = SPREAD_PIPS.get(name, 1.0)
-    spread_to_atr = (spread * pip) / atr
+    test_trades = backtest(
+        df, 0.01 if "JPY" in config["ticker"] else 0.0001,
+        config["spread"], split_i, len(df)
+    )
 
-    cautions = []
+    train_stats = summarize_trades(train_trades)
+    test_stats = summarize_trades(test_trades)
 
-    if spread_to_atr > 0.15:
-        cautions.append("参考スプレッドがATRに対して大きめです")
+    current_signal, current_score, reasons = make_signal(df.iloc[-1])
 
-    if rsi is not None and (rsi >= 75 or rsi <= 25):
-        cautions.append("RSIが極端な水準です。急変動に注意")
+    quality_ok = (
+        train_stats["samples"] >= MIN_TRAIN_SAMPLES
+        and test_stats["samples"] >= MIN_TEST_SAMPLES
+        and test_stats["hit_rate_pct"] is not None
+        and test_stats["hit_rate_pct"] >= MIN_DIRECTION_HIT_RATE * 100
+        and test_stats["avg_net_pips"] is not None
+        and test_stats["avg_net_pips"] > MIN_AVG_NET_PIPS
+    )
 
-    if signal == "WAIT":
-        cautions.append("方向性が弱い、または条件が一致していません")
-
-    historical = backtest(frame, name)
-
-    if historical["sample_count"] < 30:
-        cautions.append(
-            "過去検証の件数が少ないため、成績を判断するには不十分です"
+    if quality_ok:
+        decision = current_signal
+        decision_reason = (
+            "テスト期間の最低基準を満たしました。"
+            "将来の利益を保証するものではありません。"
+        )
+    else:
+        decision = "判定保留"
+        decision_reason = (
+            "サンプル数またはテスト成績が基準未達です。"
+            "この結果だけで売買判断をしないでください。"
         )
 
     return {
         "pair": name,
-        "ticker": ticker,
-        "signal": signal,
-        "direction_score": direction_score,
-        "signal_strength_score": strength,
-        "score_note": "ルールの一致度。勝率・成功確率ではありません",
-        "price": close,
-        "ema20": ema20,
-        "ema50": ema50,
-        "ema20_slope_5bar_percent": slope,
-        "rsi14": rsi,
-        "atr14": atr,
-        "spread_reference_pips": spread,
-        "spread_to_atr_ratio": round(spread_to_atr, 4),
-        "bar_time": str(frame.index[-1]),
+        "latest_bar_time": str(df.index[-1]),
+        "signal": current_signal,
+        "direction_score": int(current_score),
+        "decision": decision,
+        "decision_reason": decision_reason,
         "reasons": reasons,
-        "cautions": cautions,
-        "historical_backtest": historical,
-        "data_source": "Yahoo Finance / yfinance（参考データ）",
-        "auto_order": False,
+        "train_period": {
+            "from": str(df.index[0]),
+            "to": str(df.index[max(0, split_i - 1)]),
+        },
+        "test_period": {
+            "from": str(df.index[split_i]),
+            "to": str(df.index[-1]),
+        },
+        "train": train_stats,
+        "test": test_stats,
+        "notes": [
+            "強度スコアは勝率や確率ではありません。",
+            "次の足の始値でエントリーする想定です。",
+            "スプレッドは固定値を差し引いた参考値です。",
+            "スリッページ、スワップ、実際の約定差は未反映です。",
+            "テスト期間は短く、将来の成績を保証しません。",
+        ],
     }
 
 
-def load_history() -> list[dict[str, Any]]:
-    try:
-        data = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except (OSError, json.JSONDecodeError):
-        return []
-
-
-def save_json(path: Path, data: Any) -> None:
-    path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-
-
-def main() -> int:
-    if yf is None:
-        print("エラー: yfinance がインストールされていません。")
-        return 2
+def main():
+    print("=" * 64)
+    print("FX Simple Scanner - 検証改善版")
+    print(f"実行時刻: {now_jst()}")
+    print("分析専用 / 自動発注なし / 口座接続なし")
+    print("=" * 64)
 
     results = []
-    errors = []
+    for name, config in PAIRS.items():
+        print(f"\n--- {name} ---")
+        result = evaluate_pair(name, config)
+        results.append(result)
 
-    for name, ticker in PAIRS.items():
-        try:
-            results.append(analyze_pair(name, ticker))
-        except Exception as exc:
-            errors.append({
-                "pair": name,
-                "error": f"{type(exc).__name__}: {exc}",
-            })
+        if "error" in result:
+            print(f"状態: {result['decision']}")
+            print(f"理由: {result['error']}")
+            continue
 
-    report = {
-        "schema_version": 3,
-        "created_at": now_jst(),
-        "mode": "simple_analysis_with_historical_backtest",
+        print(f"現在のサイン: {result['signal']}")
+        print(f"方向スコア: {result['direction_score']}")
+        print(f"検証判定: {result['decision']}")
+        print(result["decision_reason"])
+
+        for label, key in [
+            ("前半・確認期間", "train"),
+            ("後半・テスト期間", "test"),
+        ]:
+            stats = result[key]
+            print(f"\n{label}")
+            print(f"サンプル数: {stats['samples']}")
+            print(f"勝率: {stats['hit_rate_pct']}%")
+            print(f"勝ち / 負け: {stats['wins']} / {stats['losses']}")
+            print(f"平均利益: {stats['avg_win_pips']} pips")
+            print(f"平均損失: {stats['avg_loss_pips']} pips")
+            print(f"損益比: {stats['profit_loss_ratio']}")
+            print(f"平均損益: {stats['avg_net_pips']} pips")
+            print(f"合計損益: {stats['total_net_pips']} pips")
+
+        print("注意点:")
+        for note in result["notes"]:
+            print(f"- {note}")
+
+    payload = {
+        "schema_version": 4,
+        "last_run_jst": now_jst(),
+        "mode": "next_bar_open_time_split_holdout_no_auto_orders",
         "interval": INTERVAL,
-        "period": PERIOD,
         "lookahead_bars": LOOKAHEAD_BARS,
-        "auto_order": False,
-        "warning": (
-            "分析・過去検証専用です。スコアは勝率ではありません。"
-            "過去の成績は将来の利益を保証しません。"
-            "Yahoo Financeの価格は松井証券FXの価格・約定価格と"
-            "異なる場合があります。"
-        ),
+        "train_ratio": TRAIN_RATIO,
         "results": results,
-        "errors": errors,
     }
 
-    save_json(STATE_FILE, report)
+    save_json(STATE_FILE, payload)
 
     history = load_history()
-    history.append(report)
+    history.append(payload)
     save_json(HISTORY_FILE, history[-200:])
 
-    print(f"FX簡易スキャナー — {report['created_at']}")
-    print("分析・過去検証専用 / 自動発注なし")
-    print("スコアや過去検証結果は将来の勝率を保証しません")
-    print("-" * 68)
-
-    for item in results:
-        print(
-            f"\n{item['pair']} {item['signal']} "
-            f"方向スコア={item['direction_score']:+d} "
-            f"強度目安={item['signal_strength_score']}"
-        )
-        print(
-            f"価格={item['price']} "
-            f"RSI={item['rsi14']} "
-            f"EMA20傾き(5本)={item['ema20_slope_5bar_percent']}%"
-        )
-
-        for reason in item["reasons"]:
-            print(f"  判定理由: {reason}")
-
-        for caution in item["cautions"]:
-            print(f"  注意: {caution}")
-
-        bt = item["historical_backtest"]
-        print("  --- 過去データ検証 ---")
-        print(f"  検証件数: {bt['sample_count']}")
-        print(f"  方向一致率: {bt['direction_hit_rate_percent']}%")
-        print(f"  スプレッド控除後の平均参考損益: "
-              f"{bt['average_net_pips_after_reference_spread']} pips")
-        print(f"  スプレッド控除後の合計参考損益: "
-              f"{bt['total_net_pips_after_reference_spread']} pips")
-        print("  ※過去データの結果であり、将来の成績を保証しません")
-
-    for item in errors:
-        print(f"\n{item['pair']}: 取得エラー — {item['error']}")
-
-    print(f"\n結果保存: {STATE_FILE}")
+    print("\n" + "=" * 64)
+    print(f"結果保存: {STATE_FILE}")
     print(f"履歴保存: {HISTORY_FILE}")
-
-    return 0 if results else 1
+    print("実行終了")
+    print("=" * 64)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
