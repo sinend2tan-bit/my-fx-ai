@@ -598,6 +598,7 @@ def bars(ticker, interval="1h", period="60d"):
     raw = raw[["Open", "High", "Low", "Close", "Volume"]].copy()
     raw = raw.apply(pd.to_numeric, errors="coerce")
     raw = raw.dropna(subset=required)
+    print(f"[DATA TIME AFTER DROPNA] {ticker} {interval}: last={raw.index[-1].isoformat()}")
     raw = raw[~raw.index.duplicated(keep="last")].sort_index()
 
     if len(raw) < 220:
