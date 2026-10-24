@@ -1167,8 +1167,9 @@ def walk_forward_validation(df):
                 "sell": round(float(fold_recall[0] * 100), 1),
                 "neutral": round(float(fold_recall[1] * 100), 1),
                 "buy": round(float(fold_recall[2] * 100), 1),
-            }
+        
 
+            train_counts = class_counts(train_y)
             true_counts = class_counts(test_y)
             pred_counts = class_counts(pred)
 
@@ -1193,6 +1194,7 @@ def walk_forward_validation(df):
                     float(fold_base), 4
                 ),
                 "class_recall_pct": recalls,
+                "train_class_counts": train_counts,
                 "actual_class_counts": true_counts,
                 "predicted_class_counts": pred_counts,
             }
@@ -1208,6 +1210,7 @@ def walk_forward_validation(df):
                 f"baseline={fold_base:.4f}, "
                 f"buy_recall={recalls['buy']:.1f}%, "
                 f"sell_recall={recalls['sell']:.1f}%, "
+                f"train_counts={train_counts}, "
                 f"actual_counts={true_counts}, "
                 f"predicted_counts={pred_counts}, "
                 f"purge_gap={purge_gap}"
