@@ -722,10 +722,12 @@ def bars(ticker, interval="1h", period="60d"):
 # 時系列検証
 # =========================================================
 
+
 def walk_forward_validation(df):
     """
-    将来データを過去の学習に混ぜないよう、
-    時系列順に分割して検証する。
+    時系列順に検証する。
+    LOOKAHEAD_BARS 本分のギャップを設け、
+    検証期間の値動きが学習ラベルに混入するのを防ぐ。
     """
     if df is None or len(df) < MIN_TRAIN_ROWS:
         return {
@@ -751,6 +753,7 @@ def walk_forward_validation(df):
         }
 
     fold_size = len(df) // (N_WALK_FORWARD_FOLDS + 1)
+
     if fold_size < 30:
         return {
             "passed": False,
@@ -761,6 +764,9 @@ def walk_forward_validation(df):
             "folds": 0,
         }
 
+    # 将来ラベルの期間と検証期間が重ならないようにする。
+    purge_gap = max(0, int(LOOKAHEAD_BARS))
+
     all_true = []
     all_pred = []
     all_baseline = []
@@ -768,10 +774,19 @@ def walk_forward_validation(df):
 
     for fold in range(1, N_WALK_FORWARD_FOLDS + 1):
         train_end = fold_size * fold
-        test_end = min(fold_size * (fold + 1), len(df))
+        test_end = min(
+            fold_size * (fold + 1),
+            len(df),
+        )
 
-        train_X = X.iloc[:train_end]
-        train_y = y.iloc[:train_end]
+        # 検証開始位置から LOOKAHEAD_BARS 本分を
+        # 学習データの末尾から除外する。
+        train_cutoff = max(0, train_end - purge_gap)
+
+        train_X = X.iloc[:train_cutoff]
+        train_y = y.iloc[:train_cutoff]
+
+        # 検証データは元の時系列境界から開始する。
         test_X = X.iloc[train_end:test_end]
         test_y = y.iloc[train_end:test_end]
 
@@ -796,10 +811,17 @@ def walk_forward_validation(df):
         )
 
         try:
-            model.fit(train_X, train_y, sample_weight=weights)
+            model.fit(
+                train_X,
+                train_y,
+                sample_weight=weights,
+            )
+
             pred = model.predict(test_X)
 
-            baseline = DummyClassifier(strategy="most_frequent")
+            baseline = DummyClassifier(
+                strategy="most_frequent"
+            )
             baseline.fit(train_X, train_y)
             baseline_pred = baseline.predict(test_X)
 
@@ -807,6 +829,7 @@ def walk_forward_validation(df):
             all_pred.extend(pred.tolist())
             all_baseline.extend(baseline_pred.tolist())
             used_folds += 1
+
         except Exception as exc:
             print(f"[VALIDATION ERROR] {exc}")
 
@@ -820,8 +843,14 @@ def walk_forward_validation(df):
             "folds": used_folds,
         }
 
-    score = balanced_accuracy_score(all_true, all_pred)
-    baseline_score = balanced_accuracy_score(all_true, all_baseline)
+    score = balanced_accuracy_score(
+        all_true,
+        all_pred,
+    )
+    baseline_score = balanced_accuracy_score(
+        all_true,
+        all_baseline,
+    )
 
     recalls = recall_score(
         all_true,
@@ -837,7 +866,7 @@ def walk_forward_validation(df):
         "buy": round(float(recalls[2] * 100), 1),
     }
 
-    # しきい値を満たさないモデルは売買候補を出さない。
+    # 検証条件を満たさない場合は売買候補を出さない。
     passed = (
         score >= 0.40
         and score >= baseline_score
@@ -858,6 +887,7 @@ def walk_forward_validation(df):
         f"buy_recall={recall_pct['buy']:.1f}%, "
         f"sell_recall={recall_pct['sell']:.1f}%, "
         f"folds={used_folds}, "
+        f"purge_gap={purge_gap}, "
         f"passed={passed}"
     )
 
@@ -865,10 +895,13 @@ def walk_forward_validation(df):
         "passed": bool(passed),
         "reason": reason,
         "balanced_accuracy": round(float(score), 4),
-        "baseline_balanced_accuracy": round(float(baseline_score), 4),
+        "baseline_balanced_accuracy": round(
+            float(baseline_score), 4
+        ),
         "class_recall_pct": recall_pct,
         "folds": used_folds,
     }
+
 
 
 # =========================================================
