@@ -1218,6 +1218,7 @@ def walk_forward_validation(df):
                 f"train_counts={train_counts}, "
                 f"actual_counts={true_counts}, "
                 f"predicted_counts={pred_counts}, "
+                f"confusion_matrix={cm}, "
                 f"purge_gap={purge_gap}"
             )
 
