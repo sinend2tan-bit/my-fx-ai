@@ -10,7 +10,7 @@ import yfinance as yf
 
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import balanced_accuracy_score, recall_score
+from sklearn.metrics import balanced_accuracy_score, recall_score, confusion_matrix
 from sklearn.utils.class_weight import compute_sample_weight
 
 
