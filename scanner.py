@@ -824,10 +824,21 @@ def bars(ticker, interval="1h", period="60d"):
     training_df = feature_df.copy()
     training_df["Target"] = targets
     # 検証専用の仮想損益計算用。モデルの特徴量には絶対に含めない。
-    # 予測時点の終値から8本後の終値までを仮想保有した場合を計算する。
+    # 学習ラベルと同じく、エントリー時ATRを基準に、今後8本の高値・安値で
+    # 利確/損切りの先着を判定できるようにする。どちらにも到達しない場合は8本後終値。
     training_df["Future_Close"] = feature_df["Close"].shift(-LOOKAHEAD_BARS)
+    future_path_columns = []
+    for step in range(1, LOOKAHEAD_BARS + 1):
+        high_col = f"Future_High_{step}"
+        low_col = f"Future_Low_{step}"
+        training_df[high_col] = feature_df["High"].shift(-step)
+        training_df[low_col] = feature_df["Low"].shift(-step)
+        future_path_columns.extend([high_col, low_col])
+
     training_df = training_df.dropna(
-        subset=FEATURE_COLUMNS + ["Target", "ATR", "Close", "Future_Close"]
+        subset=FEATURE_COLUMNS + [
+            "Target", "ATR", "Close", "Future_Close", *future_path_columns
+        ]
     )
 
     if len(training_df) < MIN_TRAIN_ROWS:
@@ -940,7 +951,45 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
             entry = safe_float(rows.at[idx, "Close"])
             exit_price = safe_float(rows.at[idx, "Future_Close"])
-            if entry is None or exit_price is None:
+            entry_atr = safe_float(rows.at[idx, "ATR"])
+            if entry is None or exit_price is None or entry_atr is None or entry_atr <= 0:
+                continue
+
+            # 損益検証を学習ラベルのバリア方式に合わせる。
+            # 買い: +1 ATRが利確、-1 ATRが損切り。売りは逆。
+            # 同じ足で上下両方に触れた場合、足内の順序が分からないため損切りを先に扱う。
+            upper = entry + entry_atr
+            lower = entry - entry_atr
+            exit_reason = "time_exit"
+            for step in range(1, LOOKAHEAD_BARS + 1):
+                future_high = safe_float(rows.at[idx, f"Future_High_{step}"])
+                future_low = safe_float(rows.at[idx, f"Future_Low_{step}"])
+                if future_high is None or future_low is None:
+                    exit_price = None
+                    break
+
+                hit_upper = future_high >= upper
+                hit_lower = future_low <= lower
+                if direction == 1:
+                    if hit_lower:
+                        exit_price = lower
+                        exit_reason = "stop_loss_or_ambiguous_bar"
+                        break
+                    if hit_upper:
+                        exit_price = upper
+                        exit_reason = "take_profit"
+                        break
+                else:
+                    if hit_upper:
+                        exit_price = upper
+                        exit_reason = "stop_loss_or_ambiguous_bar"
+                        break
+                    if hit_lower:
+                        exit_price = lower
+                        exit_reason = "take_profit"
+                        break
+
+            if exit_price is None:
                 continue
 
             gross_pips = (exit_price - entry) * direction / pip_size
@@ -960,6 +1009,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "gross_pips": float(gross_pips),
                 "spread_cost_pips": float(spread_pips),
                 "net_pips": float(net_pips),
+                "exit_reason": exit_reason,
                 "adx": adx_value,
                 "atr_ratio": atr_ratio_value,
                 "market_regime": market_regime,
@@ -1357,7 +1407,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     print(
         f"[SIMULATED PNL COST CHECK] pair={pair_name}, gross_pips={gross_all}, "
         f"spread_cost_pips={spread_all}, net_pips={total_pnl['net_pips']}, "
-        f"note=spread deducted once per simulated trade; excludes slippage/swaps/real fills"
+        f"note=spread deducted once per simulated trade; ATR barrier exits; excludes slippage/swaps/real fills"
     )
 
     print(
@@ -1368,7 +1418,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         f"avg_pips={total_pnl['avg_pips_per_trade']}, "
         f"max_drawdown_pips={total_pnl['max_drawdown_pips']}, "
         f"spread_pips={spread_pips}, hold_bars={LOOKAHEAD_BARS}, "
-        f"note=non-overlapping close-to-close estimate; last hold window per fold excluded; not executable results"
+        f"note=non-overlapping ATR-barrier estimate; same-bar ambiguity counted adversely; excludes slippage/swaps/real fills"
     )
 
     print(
