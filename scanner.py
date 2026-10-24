@@ -35,7 +35,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 6
+MODEL_VERSION = 7
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -945,10 +945,24 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
             gross_pips = (exit_price - entry) * direction / pip_size
             net_pips = gross_pips - float(spread_pips)
+            adx_value = safe_float(rows.at[idx, "ADX"]) if "ADX" in rows.columns else None
+            atr_ratio_value = safe_float(rows.at[idx, "ATR_Ratio"]) if "ATR_Ratio" in rows.columns else None
+            if adx_value is None:
+                market_regime = "ADX unavailable"
+            elif adx_value >= 25.0:
+                market_regime = "stronger trend (ADX>=25)"
+            else:
+                market_regime = "weaker trend/range (ADX<25)"
+
             trades.append({
                 "index": idx,
                 "direction": direction,
+                "gross_pips": float(gross_pips),
+                "spread_cost_pips": float(spread_pips),
                 "net_pips": float(net_pips),
+                "adx": adx_value,
+                "atr_ratio": atr_ratio_value,
+                "market_regime": market_regime,
             })
             # 8本後の終値で決済した後まで、新しい取引を開始しない。
             next_allowed_position = position + LOOKAHEAD_BARS
@@ -1270,8 +1284,47 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         else "複数期間の時系列検証条件を満たさない"
     )
 
-    # 各fold内で非重褩かつ決済がfold内に収まる取引だけを合算する。
+    # 各fold内で非重複かつ決済がfold内に収まる取引だけを合算する。
     total_pnl = summarize_trade_results(simulated_trade_rows)
+
+    # 売買方向別の損益を出し、買い・売りのどちらが成績を悪化させているか確認する。
+    for direction, direction_name in ((1, "BUY"), (-1, "SELL")):
+        direction_trades = [t for t in simulated_trade_rows if t.get("direction") == direction]
+        direction_summary = summarize_trade_results(direction_trades)
+        gross_total = round(sum(t.get("gross_pips", 0.0) for t in direction_trades), 2)
+        spread_total = round(sum(t.get("spread_cost_pips", 0.0) for t in direction_trades), 2)
+        print(
+            f"[SIMULATED PNL BY DIRECTION] pair={pair_name}, direction={direction_name}, "
+            f"trades={direction_summary['trades']}, gross_pips={gross_total}, "
+            f"spread_cost_pips={spread_total}, net_pips={direction_summary['net_pips']}, "
+            f"win_rate={direction_summary['win_rate_pct']}, "
+            f"avg_pips={direction_summary['avg_pips_per_trade']}"
+        )
+
+    # ADX 25を目安に、トレンドが比較的強い局面と弱い局面を分けて確認する。
+    for regime in ("stronger trend (ADX>=25)", "weaker trend/range (ADX<25)", "ADX unavailable"):
+        regime_trades = [t for t in simulated_trade_rows if t.get("market_regime") == regime]
+        if not regime_trades:
+            continue
+        regime_summary = summarize_trade_results(regime_trades)
+        gross_total = round(sum(t.get("gross_pips", 0.0) for t in regime_trades), 2)
+        spread_total = round(sum(t.get("spread_cost_pips", 0.0) for t in regime_trades), 2)
+        print(
+            f"[SIMULATED PNL BY MARKET REGIME] pair={pair_name}, regime={regime}, "
+            f"trades={regime_summary['trades']}, gross_pips={gross_total}, "
+            f"spread_cost_pips={spread_total}, net_pips={regime_summary['net_pips']}, "
+            f"win_rate={regime_summary['win_rate_pct']}, "
+            f"avg_pips={regime_summary['avg_pips_per_trade']}"
+        )
+
+    # スプレッド負担が総利益をどの程度押し下げたかを確認する。
+    gross_all = round(sum(t.get("gross_pips", 0.0) for t in simulated_trade_rows), 2)
+    spread_all = round(sum(t.get("spread_cost_pips", 0.0) for t in simulated_trade_rows), 2)
+    print(
+        f"[SIMULATED PNL COST CHECK] pair={pair_name}, gross_pips={gross_all}, "
+        f"spread_cost_pips={spread_all}, net_pips={total_pnl['net_pips']}, "
+        f"note=spread deducted once per simulated trade; excludes slippage/swaps/real fills"
+    )
 
     print(
         f"[SIMULATED PNL SUMMARY] pair={pair_name}, "
