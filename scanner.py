@@ -908,6 +908,149 @@ def walk_forward_validation(df):
 # 急変動・モデル分析
 # =========================================================
 
+def walk_forward_validation(df):
+    """時系列検証を行い、集計値と各foldの詳細を返す。"""
+    def failure(reason, folds=0, details=None):
+        return {
+            "passed": False,
+            "reason": reason,
+            "balanced_accuracy": None,
+            "baseline_balanced_accuracy": None,
+            "class_recall_pct": {},
+            "folds": folds,
+            "fold_details": details or [],
+        }
+
+    if df is None or len(df) < MIN_TRAIN_ROWS:
+        return failure("学習データ不足")
+
+    X = df[FEATURE_COLUMNS]
+    y = df["Target"].astype(int)
+    if y.nunique() < 2:
+        return failure("目的変数の種類が不足")
+
+    fold_size = len(df) // (N_WALK_FORWARD_FOLDS + 1)
+    if fold_size < 30:
+        return failure("時系列検証データ不足")
+
+    purge_gap = max(0, int(LOOKAHEAD_BARS))
+    all_true, all_pred, all_baseline = [], [], []
+    fold_details = []
+    used_folds = 0
+
+    for fold in range(1, N_WALK_FORWARD_FOLDS + 1):
+        train_end = fold_size * fold
+        test_end = min(fold_size * (fold + 1), len(df))
+        train_cutoff = max(0, train_end - purge_gap)
+        train_X, train_y = X.iloc[:train_cutoff], y.iloc[:train_cutoff]
+        test_X, test_y = X.iloc[train_end:test_end], y.iloc[train_end:test_end]
+
+        if len(train_X) < MIN_TRAIN_ROWS or len(test_X) < 10:
+            print(
+                f"[VALIDATION FOLD SKIP] fold={fold}, "
+                f"train_rows={len(train_X)}, test_rows={len(test_X)}"
+            )
+            continue
+        if train_y.nunique() < 2:
+            print(f"[VALIDATION FOLD SKIP] fold={fold}: 学習クラス不足")
+            continue
+
+        model = RandomForestClassifier(
+            n_estimators=250,
+            max_depth=7,
+            min_samples_leaf=8,
+            random_state=42,
+            n_jobs=-1,
+        )
+        weights = compute_sample_weight(class_weight="balanced", y=train_y)
+
+        try:
+            model.fit(train_X, train_y, sample_weight=weights)
+            pred = model.predict(test_X)
+            baseline = DummyClassifier(strategy="most_frequent")
+            baseline.fit(train_X, train_y)
+            baseline_pred = baseline.predict(test_X)
+
+            fold_score = balanced_accuracy_score(test_y, pred)
+            fold_base = balanced_accuracy_score(test_y, baseline_pred)
+            fold_recall = recall_score(
+                test_y, pred, labels=[-1, 0, 1],
+                average=None, zero_division=0
+            )
+            fold_start = pd.Timestamp(test_X.index[0]).isoformat()
+            fold_end_time = pd.Timestamp(test_X.index[-1]).isoformat()
+            recalls = {
+                "sell": round(float(fold_recall[0] * 100), 1),
+                "neutral": round(float(fold_recall[1] * 100), 1),
+                "buy": round(float(fold_recall[2] * 100), 1),
+            }
+            detail = {
+                "fold": int(fold),
+                "train_rows": int(len(train_X)),
+                "test_rows": int(len(test_X)),
+                "purge_gap": int(purge_gap),
+                "test_start": fold_start,
+                "test_end": fold_end_time,
+                "balanced_accuracy": round(float(fold_score), 4),
+                "baseline_balanced_accuracy": round(float(fold_base), 4),
+                "class_recall_pct": recalls,
+            }
+            fold_details.append(detail)
+            print(
+                f"[VALIDATION FOLD] fold={fold}, "
+                f"test={fold_start}..{fold_end_time}, "
+                f"train_rows={len(train_X)}, test_rows={len(test_X)}, "
+                f"score={fold_score:.4f}, baseline={fold_base:.4f}, "
+                f"buy_recall={recalls['buy']:.1f}%, "
+                f"sell_recall={recalls['sell']:.1f}%, purge_gap={purge_gap}"
+            )
+            all_true.extend(test_y.tolist())
+            all_pred.extend(pred.tolist())
+            all_baseline.extend(baseline_pred.tolist())
+            used_folds += 1
+        except Exception as exc:
+            print(f"[VALIDATION ERROR] fold={fold}: {type(exc).__name__}: {exc}")
+
+    if not all_true or used_folds == 0:
+        return failure("時系列検証を完了できませんでした", used_folds, fold_details)
+
+    score = balanced_accuracy_score(all_true, all_pred)
+    baseline_score = balanced_accuracy_score(all_true, all_baseline)
+    recalls = recall_score(
+        all_true, all_pred, labels=[-1, 0, 1],
+        average=None, zero_division=0
+    )
+    recall_pct = {
+        "sell": round(float(recalls[0] * 100), 1),
+        "neutral": round(float(recalls[1] * 100), 1),
+        "buy": round(float(recalls[2] * 100), 1),
+    }
+
+    # 既存の合格条件は変更しない。
+    passed = (
+        score >= 0.40
+        and score >= baseline_score
+        and recall_pct["buy"] >= 20.0
+        and recall_pct["sell"] >= 20.0
+    )
+    reason = "検証条件を満たしました" if passed else "複数期間の時系列検証条件を満たさない"
+    print(
+        f"[VALIDATION DETAIL] score={score:.4f}, "
+        f"baseline={baseline_score:.4f}, "
+        f"buy_recall={recall_pct['buy']:.1f}%, "
+        f"sell_recall={recall_pct['sell']:.1f}%, "
+        f"folds={used_folds}, purge_gap={purge_gap}, passed={passed}"
+    )
+    return {
+        "passed": bool(passed),
+        "reason": reason,
+        "balanced_accuracy": round(float(score), 4),
+        "baseline_balanced_accuracy": round(float(baseline_score), 4),
+        "class_recall_pct": recall_pct,
+        "folds": used_folds,
+        "fold_details": fold_details,
+    }
+
 def fast_move_detected(df):
     if df is None or len(df) < 4:
         return False, None
