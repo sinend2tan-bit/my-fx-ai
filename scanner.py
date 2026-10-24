@@ -823,8 +823,11 @@ def bars(ticker, interval="1h", period="60d"):
 
     training_df = feature_df.copy()
     training_df["Target"] = targets
+    # 検証専用の仮想損益計算用。モデルの特徴量には絶対に含めない。
+    # 予測時点の終値から8本後の終値までを仮想保有した場合を計算する。
+    training_df["Future_Close"] = feature_df["Close"].shift(-LOOKAHEAD_BARS)
     training_df = training_df.dropna(
-        subset=FEATURE_COLUMNS + ["Target", "ATR", "Close"]
+        subset=FEATURE_COLUMNS + ["Target", "ATR", "Close", "Future_Close"]
     )
 
     if len(training_df) < MIN_TRAIN_ROWS:
@@ -891,6 +894,44 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             "buy": counts[1],
         }
 
+    def simulated_pnl(predictions, test_rows, spread_pips, pip_size):
+        """検証期間だけを使う概算シミュレーション。実約定成績ではない。"""
+        trades = []
+        for idx, prediction in zip(test_rows.index, predictions):
+            direction = int(prediction)
+            if direction not in (-1, 1):
+                continue  # 中立予測は取引しない
+            entry = safe_float(test_rows.at[idx, "Close"])
+            exit_price = safe_float(test_rows.at[idx, "Future_Close"])
+            if entry is None or exit_price is None or pip_size <= 0:
+                continue
+            gross_pips = (exit_price - entry) * direction / pip_size
+            net_pips = gross_pips - float(spread_pips)
+            trades.append({"index": idx, "net_pips": float(net_pips)})
+
+        if not trades:
+            return {
+                "trades": 0,
+                "net_pips": 0.0,
+                "win_rate_pct": None,
+                "avg_pips_per_trade": None,
+                "max_drawdown_pips": 0.0,
+            }
+
+        # 時系列順に損益を積み上げ、ピークからの最大下落を算出。
+        trades.sort(key=lambda item: item["index"])
+        values = np.array([item["net_pips"] for item in trades], dtype=float)
+        equity = np.cumsum(values)
+        peaks = np.maximum.accumulate(np.concatenate(([0.0], equity)))[1:]
+        drawdowns = peaks - equity
+        return {
+            "trades": int(len(values)),
+            "net_pips": round(float(values.sum()), 2),
+            "win_rate_pct": round(float((values > 0).mean() * 100), 1),
+            "avg_pips_per_trade": round(float(values.mean()), 2),
+            "max_drawdown_pips": round(float(drawdowns.max(initial=0.0)), 2),
+        }
+
     if df is None or len(df) < MIN_TRAIN_ROWS:
         return failure("学習データ不足")
 
@@ -911,6 +952,10 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     all_pred = []
     all_baseline = []
     fold_details = []
+    simulated_trade_rows = []
+    pair_config = PAIRS.get(pair_name, {})
+    spread_pips = safe_float(pair_config.get("spread_pips"), 0.0) or 0.0
+    pip_size = safe_float(pair_config.get("pip"), 0.0) or 0.0
     used_folds = 0
 
     # 特徴量重要度を、検証に成功したfoldごとに記録する。
@@ -967,6 +1012,16 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             )
 
             pred = model.predict(test_X)
+
+            fold_pnl = simulated_pnl(
+                pred,
+                df.loc[test_X.index],
+                spread_pips,
+                pip_size,
+            )
+            for idx, prediction in zip(test_X.index, pred):
+                if int(prediction) in (-1, 1):
+                    simulated_trade_rows.append((idx, int(prediction)))
 
             importances = model.feature_importances_
             top_idx = np.argsort(importances)[::-1][:5]
@@ -1052,6 +1107,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "actual_class_counts": true_counts,
                 "predicted_class_counts": pred_counts,
                 "confusion_matrix": cm,
+                "simulated_pnl": fold_pnl,
             }
 
             fold_details.append(detail)
@@ -1071,6 +1127,11 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 f"confusion_matrix={cm}, "
                 f"sell_to_buy={sell_to_buy_rate:.1f}%, "
                 f"buy_to_sell={buy_to_sell_rate:.1f}%, "
+                f"sim_trades={fold_pnl['trades']}, "
+                f"sim_net_pips={fold_pnl['net_pips']}, "
+                f"sim_win_rate={fold_pnl['win_rate_pct']}, "
+                f"sim_avg_pips={fold_pnl['avg_pips_per_trade']}, "
+                f"sim_max_dd_pips={fold_pnl['max_drawdown_pips']}, "
                 f"purge_gap={purge_gap}"
             )
 
@@ -1187,6 +1248,31 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         else "複数期間の時系列検証条件を満たさない"
     )
 
+    # 全検証期間を時系列順にまとめて、仮想損益を再計算する。
+    total_pnl = simulated_pnl(
+        [prediction for _, prediction in sorted(simulated_trade_rows, key=lambda item: item[0])],
+        df.loc[[idx for idx, _ in sorted(simulated_trade_rows, key=lambda item: item[0])]],
+        spread_pips,
+        pip_size,
+    ) if simulated_trade_rows else {
+        "trades": 0,
+        "net_pips": 0.0,
+        "win_rate_pct": None,
+        "avg_pips_per_trade": None,
+        "max_drawdown_pips": 0.0,
+    }
+
+    print(
+        f"[SIMULATED PNL SUMMARY] pair={pair_name}, "
+        f"trades={total_pnl['trades']}, "
+        f"net_pips={total_pnl['net_pips']}, "
+        f"win_rate={total_pnl['win_rate_pct']}, "
+        f"avg_pips={total_pnl['avg_pips_per_trade']}, "
+        f"max_drawdown_pips={total_pnl['max_drawdown_pips']}, "
+        f"spread_pips={spread_pips}, hold_bars={LOOKAHEAD_BARS}, "
+        f"note=close-to-close estimate, not executable results"
+    )
+
     print(
         f"[VALIDATION DETAIL] pair={pair_name}, "
         f"score={score:.4f}, "
@@ -1210,6 +1296,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "class_recall_pct": recall_pct,
         "folds": used_folds,
         "fold_details": fold_details,
+        "simulated_pnl": total_pnl,
         "class_counts": {
             "actual": actual_counts,
             "predicted": predicted_counts,
