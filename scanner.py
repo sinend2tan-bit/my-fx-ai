@@ -1201,6 +1201,7 @@ def walk_forward_validation(df):
                 "train_class_counts": train_counts,
                 "actual_class_counts": true_counts,
                 "predicted_class_counts": pred_counts,
+                "confusion_matrix": cm,
             }
 
             fold_details.append(detail)
