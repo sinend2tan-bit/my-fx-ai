@@ -1167,7 +1167,7 @@ def walk_forward_validation(df):
                 "sell": round(float(fold_recall[0] * 100), 1),
                 "neutral": round(float(fold_recall[1] * 100), 1),
                 "buy": round(float(fold_recall[2] * 100), 1),
-        
+            }
 
             train_counts = class_counts(train_y)
             true_counts = class_counts(test_y)
