@@ -894,21 +894,8 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             "buy": counts[1],
         }
 
-    def simulated_pnl(predictions, test_rows, spread_pips, pip_size):
-        """検証期間だけを使う概算シミュレーション。実約定成績ではない。"""
-        trades = []
-        for idx, prediction in zip(test_rows.index, predictions):
-            direction = int(prediction)
-            if direction not in (-1, 1):
-                continue  # 中立予測は取引しない
-            entry = safe_float(test_rows.at[idx, "Close"])
-            exit_price = safe_float(test_rows.at[idx, "Future_Close"])
-            if entry is None or exit_price is None or pip_size <= 0:
-                continue
-            gross_pips = (exit_price - entry) * direction / pip_size
-            net_pips = gross_pips - float(spread_pips)
-            trades.append({"index": idx, "net_pips": float(net_pips)})
-
+    def summarize_trade_results(trades):
+        """選択済み取引の損益を集計する。取引の選択処理は行わない。"""
         if not trades:
             return {
                 "trades": 0,
@@ -918,9 +905,8 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "max_drawdown_pips": 0.0,
             }
 
-        # 時系列順に損益を積み上げ、ピークからの最大下落を算出。
-        trades.sort(key=lambda item: item["index"])
-        values = np.array([item["net_pips"] for item in trades], dtype=float)
+        ordered = sorted(trades, key=lambda item: item["index"])
+        values = np.array([item["net_pips"] for item in ordered], dtype=float)
         equity = np.cumsum(values)
         peaks = np.maximum.accumulate(np.concatenate(([0.0], equity)))[1:]
         drawdowns = peaks - equity
@@ -931,6 +917,43 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             "avg_pips_per_trade": round(float(values.mean()), 2),
             "max_drawdown_pips": round(float(drawdowns.max(initial=0.0)), 2),
         }
+
+    def simulated_pnl(predictions, test_rows, spread_pips, pip_size):
+        """非重複・検証区間内の概算。実約定成績ではない。"""
+        rows = test_rows.sort_index()
+        pred_by_index = dict(zip(test_rows.index, predictions))
+        trades = []
+        if pip_size <= 0 or len(rows) <= LOOKAHEAD_BARS:
+            return summarize_trade_results(trades), trades
+
+        # 取引の決済がテスト区間外へはみ出す最後のLOOKAHEAD_BARS本は除外。
+        usable_rows = rows.iloc[:-LOOKAHEAD_BARS]
+        next_allowed_position = 0
+
+        for position, idx in enumerate(usable_rows.index):
+            if position < next_allowed_position:
+                continue
+
+            direction = int(pred_by_index.get(idx, 0))
+            if direction not in (-1, 1):
+                continue  # 中立予測は取引しない
+
+            entry = safe_float(rows.at[idx, "Close"])
+            exit_price = safe_float(rows.at[idx, "Future_Close"])
+            if entry is None or exit_price is None:
+                continue
+
+            gross_pips = (exit_price - entry) * direction / pip_size
+            net_pips = gross_pips - float(spread_pips)
+            trades.append({
+                "index": idx,
+                "direction": direction,
+                "net_pips": float(net_pips),
+            })
+            # 8本後の終値で決済した後まで、新しい取引を開始しない。
+            next_allowed_position = position + LOOKAHEAD_BARS
+
+        return summarize_trade_results(trades), trades
 
     if df is None or len(df) < MIN_TRAIN_ROWS:
         return failure("学習データ不足")
@@ -1013,15 +1036,14 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
             pred = model.predict(test_X)
 
-            fold_pnl = simulated_pnl(
+            fold_pnl, fold_trades = simulated_pnl(
                 pred,
                 df.loc[test_X.index],
                 spread_pips,
                 pip_size,
             )
-            for idx, prediction in zip(test_X.index, pred):
-                if int(prediction) in (-1, 1):
-                    simulated_trade_rows.append((idx, int(prediction)))
+            # 各foldで選ばれた非重複取引だけを全体集計に使う。
+            simulated_trade_rows.extend(fold_trades)
 
             importances = model.feature_importances_
             top_idx = np.argsort(importances)[::-1][:5]
@@ -1248,19 +1270,8 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         else "複数期間の時系列検証条件を満たさない"
     )
 
-    # 全検証期間を時系列順にまとめて、仮想損益を再計算する。
-    total_pnl = simulated_pnl(
-        [prediction for _, prediction in sorted(simulated_trade_rows, key=lambda item: item[0])],
-        df.loc[[idx for idx, _ in sorted(simulated_trade_rows, key=lambda item: item[0])]],
-        spread_pips,
-        pip_size,
-    ) if simulated_trade_rows else {
-        "trades": 0,
-        "net_pips": 0.0,
-        "win_rate_pct": None,
-        "avg_pips_per_trade": None,
-        "max_drawdown_pips": 0.0,
-    }
+    # 各fold内で非重褩かつ決済がfold内に収まる取引だけを合算する。
+    total_pnl = summarize_trade_results(simulated_trade_rows)
 
     print(
         f"[SIMULATED PNL SUMMARY] pair={pair_name}, "
@@ -1270,7 +1281,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         f"avg_pips={total_pnl['avg_pips_per_trade']}, "
         f"max_drawdown_pips={total_pnl['max_drawdown_pips']}, "
         f"spread_pips={spread_pips}, hold_bars={LOOKAHEAD_BARS}, "
-        f"note=close-to-close estimate, not executable results"
+        f"note=non-overlapping close-to-close estimate; last hold window per fold excluded; not executable results"
     )
 
     print(
