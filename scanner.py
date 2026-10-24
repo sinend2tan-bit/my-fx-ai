@@ -1090,6 +1090,9 @@ def walk_forward_validation(df):
     fold_details = []
     used_folds = 0
 
+    # 特徴量重要度を、検証に成功したfoldごとに記録する。
+    feature_importance_history = []
+
     for fold in range(1, N_WALK_FORWARD_FOLDS + 1):
         train_end = fold_size * fold
         test_end = min(
@@ -1251,6 +1254,15 @@ def walk_forward_validation(df):
             all_true.extend(test_y.tolist())
             all_pred.extend(pred.tolist())
             all_baseline.extend(baseline_pred.tolist())
+
+            # 検証処理を完了したfoldの重要度だけを記録する。
+            feature_importance_history.append({
+                str(name): float(value)
+                for name, value in zip(
+                    train_X.columns,
+                    importances,
+                )
+            })
             used_folds += 1
 
         except Exception as exc:
@@ -1264,6 +1276,52 @@ def walk_forward_validation(df):
             "時系列検証を完了できませんでした",
             used_folds,
             fold_details,
+        )
+
+    # fold間での特徴量重要度の平均・ばらつき・トップ5登場回数を集計。
+    if feature_importance_history:
+        importance_summary = []
+
+        for name in FEATURE_COLUMNS:
+            values = [
+                item[name]
+                for item in feature_importance_history
+                if name in item
+            ]
+
+            if not values:
+                continue
+
+            top5_count = sum(
+                1
+                for item in feature_importance_history
+                if name in sorted(
+                    item,
+                    key=item.get,
+                    reverse=True,
+                )[:5]
+            )
+
+            importance_summary.append({
+                "feature": name,
+                "top5_count": int(top5_count),
+                "mean_importance": round(
+                    float(np.mean(values)), 4
+                ),
+                "std_importance": round(
+                    float(np.std(values)), 4
+                ),
+            })
+
+        importance_summary.sort(
+            key=lambda item: item["mean_importance"],
+            reverse=True,
+        )
+
+        print(
+            f"[FEATURE IMPORTANCE SUMMARY] "
+            f"folds={len(feature_importance_history)}, "
+            f"features={importance_summary}"
         )
 
     score = balanced_accuracy_score(
