@@ -222,32 +222,58 @@ def save_state(state):
 # ニュース取得・確認
 # =========================================================
 
+
 def parse_news_time(article):
     """
-    Yahoo Financeのニュース日時は形式が一定とは限らないため、
-    pubDate / providerPublishTime の両方を確認する。
+    Yahoo Financeのニュース日時を複数の形式から読み取る。
+    数値形式、文字列形式、providerPublishTimeに対応する。
     """
     content = article.get("content", article)
 
     pub_date = content.get("pubDate")
-    if pub_date:
+    if pub_date is not None:
         try:
+            if isinstance(
+                pub_date,
+                (int, float, np.integer, np.floating),
+            ):
+                return datetime.fromtimestamp(
+                    float(pub_date), tz=JST
+                )
+
+            if (
+                isinstance(pub_date, str)
+                and pub_date.strip().isdigit()
+            ):
+                return datetime.fromtimestamp(
+                    float(pub_date.strip()), tz=JST
+                )
+
             timestamp = pd.Timestamp(pub_date)
+
             if timestamp.tzinfo is None:
                 timestamp = timestamp.tz_localize("UTC")
-            return timestamp.tz_convert("Asia/Tokyo").to_pydatetime()
+
+            return timestamp.tz_convert(
+                "Asia/Tokyo"
+            ).to_pydatetime()
+
         except Exception:
             pass
 
     for obj in (content, article):
         epoch = obj.get("providerPublishTime")
+
         if epoch is not None:
             try:
-                return datetime.fromtimestamp(float(epoch), tz=JST)
-            except Exception:
+                return datetime.fromtimestamp(
+                    float(epoch), tz=JST
+                )
+            except (TypeError, ValueError, OverflowError, OSError):
                 pass
 
     return None
+
 
 
 def extract_news_fields(article):
@@ -291,18 +317,15 @@ def contains_news_keyword(title):
     return any(keyword.lower() in text for keyword in NEWS_KEYWORDS)
 
 
+
 def fetch_news(ticker):
     """
     Yahoo Financeからニュースを取得する。
-
-    注意:
-    - ニュース取得ができても、経済指標カレンダーの代わりにはならない。
-    - 取得失敗を「重要ニュースなし」と解釈しない。
+    複数の取得方法を順番に試し、取得失敗を
+    「重要ニュースなし」と誤認しない。
     """
-    checked_at = iso_now()
-
     result = {
-        "news_checked_at_jst": checked_at,
+        "news_checked_at_jst": iso_now(),
         "news_status": "unknown",
         "news_article_count": 0,
         "news_recent_count": 0,
@@ -311,56 +334,150 @@ def fetch_news(ticker):
         "news_risk_headlines": [],
         "news_headlines": [],
         "news_source": "Yahoo Finance",
+        "news_retrieval_method": None,
+        "news_retrieval_errors": [],
     }
 
-    try:
-        raw_news = yf.Ticker(ticker).news
-    except Exception as exc:
-        result["news_status"] = "error"
-        result["news_risk_reason"] = (
-            "ニュース取得エラー: " + str(exc)[:200]
-        )
-        return result
+    raw_news = []
+    retrieval_errors = []
 
-    if not isinstance(raw_news, list) or not raw_news:
-        result["news_status"] = "empty"
-        result["news_risk_reason"] = (
-            "ニュース記事を取得できませんでした。重要ニュースがないとは判断できません。"
+    # 方法1：yf.Search が利用可能なら試す
+    search_api = getattr(yf, "Search", None)
+
+    if callable(search_api):
+        try:
+            search_result = search_api(
+                ticker, news_count=10
+            )
+            candidate = getattr(
+                search_result, "news", None
+            )
+
+            if isinstance(candidate, list) and candidate:
+                raw_news = candidate
+                result["news_retrieval_method"] = "yf.Search"
+
+        except Exception as exc:
+            retrieval_errors.append(
+                "yf.Search: "
+                + type(exc).__name__
+                + ": "
+                + str(exc)[:120]
+            )
+
+    # 方法2：Ticker.get_news、または従来のTicker.news
+    if not raw_news:
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            get_news = getattr(
+                ticker_obj, "get_news", None
+            )
+
+            if callable(get_news):
+                try:
+                    candidate = get_news(count=10)
+                except TypeError:
+                    candidate = get_news()
+
+                method = "Ticker.get_news"
+            else:
+                candidate = ticker_obj.news
+                method = "Ticker.news"
+
+            if isinstance(candidate, list) and candidate:
+                raw_news = candidate
+                result["news_retrieval_method"] = method
+
+        except Exception as exc:
+            retrieval_errors.append(
+                "Ticker news: "
+                + type(exc).__name__
+                + ": "
+                + str(exc)[:120]
+            )
+
+    result["news_retrieval_errors"] = retrieval_errors[:3]
+
+    if not raw_news:
+        result["news_status"] = (
+            "error" if retrieval_errors else "empty"
+        )
+
+        if retrieval_errors:
+            result["news_risk_reason"] = (
+                "複数のニュース取得方法でエラーが発生しました。"
+                "重要ニュースがないとは判断できません。"
+            )
+        else:
+            result["news_risk_reason"] = (
+                "ニュース記事が返されませんでした。"
+                "重要ニュースがないとは判断できません。"
+            )
+
+        print(
+            f"[NEWS FETCH] ticker={ticker}, "
+            f"status={result['news_status']}, "
+            f"method=None, "
+            f"errors={len(retrieval_errors)}"
         )
         return result
 
     result["news_article_count"] = len(raw_news)
 
     current_time = now_jst()
-    cutoff = current_time - timedelta(hours=NEWS_MAX_AGE_HOURS)
+    cutoff = current_time - timedelta(
+        hours=NEWS_MAX_AGE_HOURS
+    )
 
     recent_articles = []
+
     for article in raw_news:
         if not isinstance(article, dict):
             continue
 
-        item = extract_news_fields(article)
+        try:
+            item = extract_news_fields(article)
+        except Exception as exc:
+            print(
+                f"[NEWS PARSE ERROR] "
+                f"ticker={ticker}, "
+                f"error={type(exc).__name__}"
+            )
+            continue
+
         if not item["title"]:
             continue
 
         published = item.pop("_published")
         result["news_headlines"].append(item)
 
-        # 発行日時が確認できない記事は「直近の記事」とみなさない
+        # 日時が確認できない記事は直近扱いにしない
         if published is not None:
             if published.tzinfo is None:
                 published = published.replace(tzinfo=JST)
 
-            if cutoff <= published <= current_time + timedelta(minutes=10):
+            if cutoff <= published <= (
+                current_time + timedelta(minutes=10)
+            ):
                 recent_articles.append(item)
 
-    result["news_headlines"] = result["news_headlines"][:10]
+    result["news_headlines"] = (
+        result["news_headlines"][:10]
+    )
     result["news_recent_count"] = len(recent_articles)
 
     if not recent_articles:
         result["news_status"] = "no_recent_articles"
         result["news_risk_reason"] = (
-            f"過去{NEWS_MAX_AGE_HOURS}時間以内の日時を確認できる記事がありません。"
+            f"取得記事の中に過去{NEWS_MAX_AGE_HOURS}時間以内と"
+            "確認できる記事がありません。"
+        )
+
+        print(
+            f"[NEWS FETCH] ticker={ticker}, "
+            f"status=no_recent_articles, "
+            f"articles={result['news_article_count']}, "
+            f"method={result['news_retrieval_method']}"
         )
         return result
 
@@ -370,19 +487,33 @@ def fetch_news(ticker):
     ]
 
     if risk_headlines:
-        result["news_status"] = "recent_articles_with_risk_keywords"
+        result["news_status"] = (
+            "recent_articles_with_risk_keywords"
+        )
         result["news_risk_detected"] = True
         result["news_risk_headlines"] = risk_headlines[:5]
         result["news_risk_reason"] = (
-            "直近のニュース見出しに重要キーワードが含まれています。"
-            "見出しだけでは市場への影響方向を判断できないため保留します。"
+            "直近のニュース見出しに重要キーワードがあります。"
+            "影響方向を見出しだけでは判断できないため保留します。"
         )
     else:
-        result["news_status"] = "recent_articles_no_risk_keywords"
-        result["news_risk_reason"] = (
-            "直近記事を取得しましたが、設定した重要キーワードは検出されませんでした。"
-            "重要情報がすべて網羅されている保証はありません。"
+        result["news_status"] = (
+            "recent_articles_no_risk_keywords"
         )
+        result["news_risk_reason"] = (
+            "直近記事を取得しましたが、設定した重要キーワードは"
+            "検出されませんでした。重要ニュースをすべて網羅する"
+            "保証はありません。"
+        )
+
+    print(
+        f"[NEWS FETCH] ticker={ticker}, "
+        f"status={result['news_status']}, "
+        f"articles={result['news_article_count']}, "
+        f"recent={result['news_recent_count']}, "
+        f"method={result['news_retrieval_method']}, "
+        f"risk={result['news_risk_detected']}"
+    )
 
     return result
 
