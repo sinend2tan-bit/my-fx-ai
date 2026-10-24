@@ -1,6 +1,6 @@
 {
-  "schema_version": 6,
-  "last_run_jst": "2026-10-24T20:27:29.259738+09:00",
+  "schema_version": 7,
+  "last_run_jst": "2026-10-24T20:35:53.018838+09:00",
   "mode": "multi_period_validation_with_news_risk_gate_no_auto_orders",
   "interval": "1h",
   "news_policy": {
@@ -15,20 +15,20 @@
     "no_recent_articles": 2
   },
   "summary": [
-    "米ドル/円 (USD/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 37.2, 'neutral': 13.9, 'buy': 51.5}",
-    "英ポンド/円 (GBP/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 34.5, 'neutral': 10.7, 'buy': 49.2}",
-    "ユーロ/円 (EUR/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=no_recent_articles / 重要ニュース=False / 再現率={'sell': 31.4, 'neutral': 16.8, 'buy': 57.9}",
-    "豪ドル/円 (AUD/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 45.8, 'neutral': 9.7, 'buy': 37.6}",
-    "ユーロ/米ドル (EUR/USD): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=no_recent_articles / 重要ニュース=False / 再現率={'sell': 27.0, 'neutral': 46.1, 'buy': 33.8}"
+    "米ドル/円 (USD/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 37.0, 'neutral': 13.9, 'buy': 51.3}",
+    "英ポンド/円 (GBP/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 35.8, 'neutral': 10.8, 'buy': 48.4}",
+    "ユーロ/円 (EUR/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=no_recent_articles / 重要ニュース=False / 再現率={'sell': 32.5, 'neutral': 14.7, 'buy': 58.6}",
+    "豪ドル/円 (AUD/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 46.1, 'neutral': 10.8, 'buy': 38.8}",
+    "ユーロ/米ドル (EUR/USD): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=no_recent_articles / 重要ニュース=False / 再現率={'sell': 27.7, 'neutral': 43.1, 'buy': 35.1}"
   ],
   "pairs": [
     {
       "name": "米ドル/円 (USD/JPY)",
       "ticker": "USDJPY=X",
-      "updated_at_jst": "2026-10-24T20:27:30.299872+09:00",
+      "updated_at_jst": "2026-10-24T20:35:53.459889+09:00",
       "decision": "データ古い・保留",
       "direction": "様子見",
-      "reason": "最新の確定足から約988分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
+      "reason": "最新の確定足から約996分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
       "price": 156.83399963378906,
       "spread_pips": 0.2,
       "timeframe_trends": [
@@ -38,16 +38,16 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": null,
-      "data_age_minutes": 987.5,
+      "data_age_minutes": 995.9,
       "validation": {
         "passed": false,
         "reason": "複数期間の時系列検証条件を満たさない",
-        "balanced_accuracy": 0.3422,
+        "balanced_accuracy": 0.3407,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 37.2,
+          "sell": 37.0,
           "neutral": 13.9,
-          "buy": 51.5
+          "buy": 51.3
         },
         "folds": 3,
         "fold_details": [
@@ -58,12 +58,12 @@
             "purge_gap": 8,
             "test_start": "2026-08-24T12:00:00+01:00",
             "test_end": "2026-09-14T04:00:00+01:00",
-            "balanced_accuracy": 0.3035,
+            "balanced_accuracy": 0.3011,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
               "sell": 26.9,
               "neutral": 6.8,
-              "buy": 57.3
+              "buy": 56.6
             },
             "train_class_counts": {
               "sell": 166,
@@ -76,15 +76,15 @@
               "buy": 143
             },
             "predicted_class_counts": {
-              "sell": 100,
-              "neutral": 25,
-              "buy": 222
+              "sell": 101,
+              "neutral": 26,
+              "buy": 220
             },
             "confusion_matrix": [
               [
                 43,
-                10,
-                107
+                11,
+                106
               ],
               [
                 8,
@@ -92,9 +92,9 @@
                 33
               ],
               [
-                49,
+                50,
                 12,
-                82
+                81
               ]
             ],
             "simulated_pnl": {
@@ -131,32 +131,32 @@
             },
             "predicted_class_counts": {
               "sell": 163,
-              "neutral": 71,
-              "buy": 113
+              "neutral": 74,
+              "buy": 110
             },
             "confusion_matrix": [
               [
                 72,
-                26,
-                45
+                28,
+                43
               ],
               [
-                11,
+                12,
                 10,
-                8
+                7
               ],
               [
-                80,
-                35,
+                79,
+                36,
                 60
               ]
             ],
             "simulated_pnl": {
-              "trades": 41,
-              "net_pips": 96.6,
-              "win_rate_pct": 63.4,
-              "avg_pips_per_trade": 2.36,
-              "max_drawdown_pips": 214.8
+              "trades": 40,
+              "net_pips": 221.0,
+              "win_rate_pct": 60.0,
+              "avg_pips_per_trade": 5.53,
+              "max_drawdown_pips": 146.8
             }
           },
           {
@@ -166,10 +166,10 @@
             "purge_gap": 8,
             "test_start": "2026-10-02T20:00:00+01:00",
             "test_end": "2026-10-23T12:00:00+01:00",
-            "balanced_accuracy": 0.3653,
+            "balanced_accuracy": 0.3634,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
-              "sell": 36.0,
+              "sell": 35.4,
               "neutral": 5.7,
               "buy": 67.9
             },
@@ -184,15 +184,15 @@
               "buy": 134
             },
             "predicted_class_counts": {
-              "sell": 97,
+              "sell": 96,
               "neutral": 45,
-              "buy": 205
+              "buy": 206
             },
             "confusion_matrix": [
               [
-                64,
+                63,
                 21,
-                93
+                94
               ],
               [
                 12,
@@ -207,18 +207,18 @@
             ],
             "simulated_pnl": {
               "trades": 42,
-              "net_pips": 190.6,
+              "net_pips": 180.6,
               "win_rate_pct": 59.5,
-              "avg_pips_per_trade": 4.54,
-              "max_drawdown_pips": 133.8
+              "avg_pips_per_trade": 4.3,
+              "max_drawdown_pips": 189.4
             }
           }
         ],
         "simulated_pnl": {
-          "trades": 125,
-          "net_pips": -149.4,
-          "win_rate_pct": 56.8,
-          "avg_pips_per_trade": -1.2,
+          "trades": 124,
+          "net_pips": -35.0,
+          "win_rate_pct": 55.6,
+          "avg_pips_per_trade": -0.28,
           "max_drawdown_pips": 714.9
         },
         "class_counts": {
@@ -229,15 +229,15 @@
           },
           "predicted": {
             "sell": 360,
-            "neutral": 141,
-            "buy": 540
+            "neutral": 145,
+            "buy": 536
           }
         }
       },
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-24T20:27:29.267973+09:00",
+      "news_checked_at_jst": "2026-10-24T20:35:53.028043+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -252,10 +252,10 @@
     {
       "name": "英ポンド/円 (GBP/JPY)",
       "ticker": "GBPJPY=X",
-      "updated_at_jst": "2026-10-24T20:27:33.177065+09:00",
+      "updated_at_jst": "2026-10-24T20:35:55.956361+09:00",
       "decision": "データ古い・保留",
       "direction": "様子見",
-      "reason": "最新の確定足から約928分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
+      "reason": "最新の確定足から約936分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
       "price": 209.83700561523438,
       "spread_pips": 1.0,
       "timeframe_trends": [
@@ -265,16 +265,16 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": null,
-      "data_age_minutes": 927.6,
+      "data_age_minutes": 935.9,
       "validation": {
         "passed": false,
         "reason": "複数期間の時系列検証条件を満たさない",
-        "balanced_accuracy": 0.3147,
+        "balanced_accuracy": 0.317,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 34.5,
-          "neutral": 10.7,
-          "buy": 49.2
+          "sell": 35.8,
+          "neutral": 10.8,
+          "buy": 48.4
         },
         "folds": 3,
         "fold_details": [
@@ -288,9 +288,9 @@
             "balanced_accuracy": 0.3229,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
-              "sell": 12.3,
+              "sell": 13.3,
               "neutral": 6.5,
-              "buy": 78.1
+              "buy": 77.1
             },
             "train_class_counts": {
               "sell": 149,
@@ -303,15 +303,15 @@
               "buy": 105
             },
             "predicted_class_counts": {
-              "sell": 40,
-              "neutral": 25,
-              "buy": 282
+              "sell": 44,
+              "neutral": 23,
+              "buy": 280
             },
             "confusion_matrix": [
               [
-                26,
-                11,
-                174
+                28,
+                10,
+                173
               ],
               [
                 3,
@@ -319,9 +319,9 @@
                 26
               ],
               [
+                13,
                 11,
-                12,
-                82
+                81
               ]
             ],
             "simulated_pnl": {
@@ -339,12 +339,12 @@
             "purge_gap": 8,
             "test_start": "2026-09-14T05:00:00+01:00",
             "test_end": "2026-10-02T19:00:00+01:00",
-            "balanced_accuracy": 0.3206,
+            "balanced_accuracy": 0.3266,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
-              "sell": 44.4,
-              "neutral": 15.4,
-              "buy": 36.4
+              "sell": 47.9,
+              "neutral": 16.0,
+              "buy": 34.1
             },
             "train_class_counts": {
               "sell": 360,
@@ -352,38 +352,38 @@
               "buy": 251
             },
             "actual_class_counts": {
-              "sell": 189,
-              "neutral": 26,
+              "sell": 190,
+              "neutral": 25,
               "buy": 132
             },
             "predicted_class_counts": {
-              "sell": 157,
-              "neutral": 46,
-              "buy": 144
+              "sell": 169,
+              "neutral": 44,
+              "buy": 134
             },
             "confusion_matrix": [
               [
-                84,
-                24,
-                81
+                91,
+                23,
+                76
               ],
               [
-                7,
+                8,
                 4,
-                15
+                13
               ],
               [
-                66,
-                18,
-                48
+                70,
+                17,
+                45
               ]
             ],
             "simulated_pnl": {
               "trades": 42,
-              "net_pips": -77.0,
-              "win_rate_pct": 45.2,
-              "avg_pips_per_trade": -1.83,
-              "max_drawdown_pips": 356.7
+              "net_pips": -201.4,
+              "win_rate_pct": 52.4,
+              "avg_pips_per_trade": -4.8,
+              "max_drawdown_pips": 306.6
             }
           },
           {
@@ -393,16 +393,16 @@
             "purge_gap": 8,
             "test_start": "2026-10-02T20:00:00+01:00",
             "test_end": "2026-10-23T12:00:00+01:00",
-            "balanced_accuracy": 0.3375,
+            "balanced_accuracy": 0.3379,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
-              "sell": 50.0,
+              "sell": 49.5,
               "neutral": 11.1,
-              "buy": 40.1
+              "buy": 40.8
             },
             "train_class_counts": {
-              "sell": 546,
-              "neutral": 100,
+              "sell": 547,
+              "neutral": 99,
               "buy": 387
             },
             "actual_class_counts": {
@@ -417,54 +417,54 @@
             },
             "confusion_matrix": [
               [
-                91,
-                19,
-                72
+                90,
+                23,
+                69
               ],
               [
-                11,
+                9,
                 2,
-                5
+                7
               ],
               [
-                74,
-                14,
-                59
+                77,
+                10,
+                60
               ]
             ],
             "simulated_pnl": {
               "trades": 42,
-              "net_pips": 144.3,
-              "win_rate_pct": 54.8,
-              "avg_pips_per_trade": 3.44,
-              "max_drawdown_pips": 223.9
+              "net_pips": 42.8,
+              "win_rate_pct": 52.4,
+              "avg_pips_per_trade": 1.02,
+              "max_drawdown_pips": 290.3
             }
           }
         ],
         "simulated_pnl": {
           "trades": 126,
-          "net_pips": -806.9,
-          "win_rate_pct": 46.8,
-          "avg_pips_per_trade": -6.4,
-          "max_drawdown_pips": 1175.8
+          "net_pips": -1032.79,
+          "win_rate_pct": 48.4,
+          "avg_pips_per_trade": -8.2,
+          "max_drawdown_pips": 1422.6
         },
         "class_counts": {
           "actual": {
-            "sell": 582,
-            "neutral": 75,
+            "sell": 583,
+            "neutral": 74,
             "buy": 384
           },
           "predicted": {
-            "sell": 373,
-            "neutral": 106,
-            "buy": 562
+            "sell": 389,
+            "neutral": 102,
+            "buy": 550
           }
         }
       },
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-24T20:27:32.717593+09:00",
+      "news_checked_at_jst": "2026-10-24T20:35:55.675140+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -479,10 +479,10 @@
     {
       "name": "ユーロ/円 (EUR/JPY)",
       "ticker": "EURJPY=X",
-      "updated_at_jst": "2026-10-24T20:27:35.822674+09:00",
+      "updated_at_jst": "2026-10-24T20:35:58.327304+09:00",
       "decision": "データ古い・保留",
       "direction": "様子見",
-      "reason": "最新の確定足から約928分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
+      "reason": "最新の確定足から約936分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
       "price": 175.6280059814453,
       "spread_pips": 0.5,
       "timeframe_trends": [
@@ -492,16 +492,16 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": null,
-      "data_age_minutes": 927.6,
+      "data_age_minutes": 936.0,
       "validation": {
         "passed": false,
         "reason": "複数期間の時系列検証条件を満たさない",
-        "balanced_accuracy": 0.3536,
+        "balanced_accuracy": 0.3528,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 31.4,
-          "neutral": 16.8,
-          "buy": 57.9
+          "sell": 32.5,
+          "neutral": 14.7,
+          "buy": 58.6
         },
         "folds": 3,
         "fold_details": [
@@ -512,12 +512,12 @@
             "purge_gap": 8,
             "test_start": "2026-08-24T13:00:00+01:00",
             "test_end": "2026-09-14T05:00:00+01:00",
-            "balanced_accuracy": 0.3467,
+            "balanced_accuracy": 0.3496,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
               "sell": 19.0,
               "neutral": 7.4,
-              "buy": 77.6
+              "buy": 78.4
             },
             "train_class_counts": {
               "sell": 149,
@@ -530,8 +530,8 @@
               "buy": 116
             },
             "predicted_class_counts": {
-              "sell": 62,
-              "neutral": 43,
+              "sell": 61,
+              "neutral": 44,
               "buy": 243
             },
             "confusion_matrix": [
@@ -541,22 +541,22 @@
                 132
               ],
               [
-                4,
+                5,
                 2,
-                21
+                20
               ],
               [
-                19,
-                7,
-                90
+                17,
+                8,
+                91
               ]
             ],
             "simulated_pnl": {
               "trades": 41,
-              "net_pips": -595.2,
-              "win_rate_pct": 46.3,
-              "avg_pips_per_trade": -14.52,
-              "max_drawdown_pips": 746.5
+              "net_pips": -588.4,
+              "win_rate_pct": 48.8,
+              "avg_pips_per_trade": -14.35,
+              "max_drawdown_pips": 745.9
             }
           },
           {
@@ -566,12 +566,12 @@
             "purge_gap": 8,
             "test_start": "2026-09-14T06:00:00+01:00",
             "test_end": "2026-10-02T20:00:00+01:00",
-            "balanced_accuracy": 0.3361,
+            "balanced_accuracy": 0.3226,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
               "sell": 39.0,
-              "neutral": 20.0,
-              "buy": 41.8
+              "neutral": 16.7,
+              "buy": 41.1
             },
             "train_class_counts": {
               "sell": 357,
@@ -584,32 +584,32 @@
               "buy": 141
             },
             "predicted_class_counts": {
-              "sell": 146,
+              "sell": 145,
               "neutral": 47,
-              "buy": 155
+              "buy": 156
             },
             "confusion_matrix": [
               [
                 69,
-                23,
-                85
+                22,
+                86
               ],
               [
                 13,
-                6,
-                11
+                5,
+                12
               ],
               [
-                64,
-                18,
-                59
+                63,
+                20,
+                58
               ]
             ],
             "simulated_pnl": {
-              "trades": 41,
-              "net_pips": -150.6,
-              "win_rate_pct": 43.9,
-              "avg_pips_per_trade": -3.67,
+              "trades": 42,
+              "net_pips": -374.01,
+              "win_rate_pct": 40.5,
+              "avg_pips_per_trade": -8.9,
               "max_drawdown_pips": 441.4
             }
           },
@@ -620,12 +620,12 @@
             "purge_gap": 8,
             "test_start": "2026-10-02T21:00:00+01:00",
             "test_end": "2026-10-23T11:00:00+01:00",
-            "balanced_accuracy": 0.3883,
+            "balanced_accuracy": 0.3983,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
-              "sell": 37.8,
-              "neutral": 21.1,
-              "buy": 57.6
+              "sell": 41.1,
+              "neutral": 18.4,
+              "buy": 60.0
             },
             "train_class_counts": {
               "sell": 530,
@@ -638,42 +638,42 @@
               "buy": 125
             },
             "predicted_class_counts": {
-              "sell": 125,
-              "neutral": 28,
-              "buy": 195
+              "sell": 129,
+              "neutral": 25,
+              "buy": 194
             },
             "confusion_matrix": [
               [
-                70,
+                76,
+                4,
+                105
+              ],
+              [
+                17,
                 7,
-                108
+                14
               ],
               [
-                15,
-                8,
-                15
-              ],
-              [
-                40,
-                13,
-                72
+                36,
+                14,
+                75
               ]
             ],
             "simulated_pnl": {
               "trades": 42,
-              "net_pips": 195.8,
-              "win_rate_pct": 54.8,
-              "avg_pips_per_trade": 4.66,
-              "max_drawdown_pips": 174.0
+              "net_pips": 342.8,
+              "win_rate_pct": 64.3,
+              "avg_pips_per_trade": 8.16,
+              "max_drawdown_pips": 174.1
             }
           }
         ],
         "simulated_pnl": {
-          "trades": 124,
-          "net_pips": -550.01,
-          "win_rate_pct": 48.4,
-          "avg_pips_per_trade": -4.44,
-          "max_drawdown_pips": 1111.8
+          "trades": 125,
+          "net_pips": -619.61,
+          "win_rate_pct": 51.2,
+          "avg_pips_per_trade": -4.96,
+          "max_drawdown_pips": 1165.11
         },
         "class_counts": {
           "actual": {
@@ -682,8 +682,8 @@
             "buy": 382
           },
           "predicted": {
-            "sell": 333,
-            "neutral": 118,
+            "sell": 335,
+            "neutral": 116,
             "buy": 593
           }
         }
@@ -691,7 +691,7 @@
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-24T20:27:35.657540+09:00",
+      "news_checked_at_jst": "2026-10-24T20:35:58.200636+09:00",
       "news_status": "no_recent_articles",
       "news_article_count": 1,
       "news_recent_count": 0,
@@ -713,10 +713,10 @@
     {
       "name": "豪ドル/円 (AUD/JPY)",
       "ticker": "AUDJPY=X",
-      "updated_at_jst": "2026-10-24T20:27:39.232132+09:00",
+      "updated_at_jst": "2026-10-24T20:36:00.806174+09:00",
       "decision": "データ古い・保留",
       "direction": "様子見",
-      "reason": "最新の確定足から約928分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
+      "reason": "最新の確定足から約936分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
       "price": 110.29399871826172,
       "spread_pips": 0.6,
       "timeframe_trends": [
@@ -726,16 +726,16 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": null,
-      "data_age_minutes": 927.7,
+      "data_age_minutes": 936.0,
       "validation": {
         "passed": false,
         "reason": "複数期間の時系列検証条件を満たさない",
-        "balanced_accuracy": 0.3101,
+        "balanced_accuracy": 0.319,
         "baseline_balanced_accuracy": 0.3295,
         "class_recall_pct": {
-          "sell": 45.8,
-          "neutral": 9.7,
-          "buy": 37.6
+          "sell": 46.1,
+          "neutral": 10.8,
+          "buy": 38.8
         },
         "folds": 3,
         "fold_details": [
@@ -746,12 +746,12 @@
             "purge_gap": 8,
             "test_start": "2026-08-24T13:00:00+01:00",
             "test_end": "2026-09-14T06:00:00+01:00",
-            "balanced_accuracy": 0.2893,
+            "balanced_accuracy": 0.2843,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
-              "sell": 33.5,
+              "sell": 31.2,
               "neutral": 4.4,
-              "buy": 48.8
+              "buy": 49.6
             },
             "train_class_counts": {
               "sell": 155,
@@ -764,33 +764,33 @@
               "buy": 127
             },
             "predicted_class_counts": {
-              "sell": 133,
+              "sell": 127,
               "neutral": 8,
-              "buy": 207
+              "buy": 213
             },
             "confusion_matrix": [
               [
-                59,
+                55,
                 3,
-                114
+                118
               ],
               [
-                12,
+                11,
                 2,
-                31
+                32
               ],
               [
-                62,
+                61,
                 3,
-                62
+                63
               ]
             ],
             "simulated_pnl": {
               "trades": 43,
-              "net_pips": -407.1,
-              "win_rate_pct": 32.6,
-              "avg_pips_per_trade": -9.47,
-              "max_drawdown_pips": 407.1
+              "net_pips": -488.5,
+              "win_rate_pct": 30.2,
+              "avg_pips_per_trade": -11.36,
+              "max_drawdown_pips": 488.5
             }
           },
           {
@@ -800,10 +800,10 @@
             "purge_gap": 8,
             "test_start": "2026-09-14T07:00:00+01:00",
             "test_end": "2026-10-02T20:00:00+01:00",
-            "balanced_accuracy": 0.3423,
+            "balanced_accuracy": 0.3514,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
-              "sell": 53.8,
+              "sell": 56.5,
               "neutral": 22.6,
               "buy": 26.3
             },
@@ -818,33 +818,33 @@
               "buy": 133
             },
             "predicted_class_counts": {
-              "sell": 188,
-              "neutral": 71,
-              "buy": 89
+              "sell": 194,
+              "neutral": 70,
+              "buy": 84
             },
             "confusion_matrix": [
               [
-                99,
-                39,
-                46
+                104,
+                40,
+                40
               ],
               [
-                16,
+                15,
                 7,
-                8
+                9
               ],
               [
-                73,
-                25,
+                75,
+                23,
                 35
               ]
             ],
             "simulated_pnl": {
-              "trades": 40,
-              "net_pips": 299.0,
-              "win_rate_pct": 57.5,
-              "avg_pips_per_trade": 7.48,
-              "max_drawdown_pips": 124.6
+              "trades": 39,
+              "net_pips": 53.8,
+              "win_rate_pct": 59.0,
+              "avg_pips_per_trade": 1.38,
+              "max_drawdown_pips": 159.9
             }
           },
           {
@@ -854,12 +854,12 @@
             "purge_gap": 8,
             "test_start": "2026-10-02T21:00:00+01:00",
             "test_end": "2026-10-23T12:00:00+01:00",
-            "balanced_accuracy": 0.2918,
+            "balanced_accuracy": 0.3223,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
-              "sell": 49.5,
-              "neutral": 0.0,
-              "buy": 38.1
+              "sell": 50.0,
+              "neutral": 5.9,
+              "buy": 40.8
             },
             "train_class_counts": {
               "sell": 518,
@@ -872,42 +872,42 @@
               "buy": 147
             },
             "predicted_class_counts": {
-              "sell": 180,
-              "neutral": 30,
-              "buy": 138
+              "sell": 178,
+              "neutral": 29,
+              "buy": 141
             },
             "confusion_matrix": [
               [
-                91,
-                17,
+                92,
+                16,
                 76
               ],
               [
                 11,
-                0,
-                6
+                1,
+                5
               ],
               [
-                78,
-                13,
-                56
+                75,
+                12,
+                60
               ]
             ],
             "simulated_pnl": {
               "trades": 42,
-              "net_pips": -78.8,
+              "net_pips": -30.4,
               "win_rate_pct": 47.6,
-              "avg_pips_per_trade": -1.88,
-              "max_drawdown_pips": 236.6
+              "avg_pips_per_trade": -0.72,
+              "max_drawdown_pips": 188.2
             }
           }
         ],
         "simulated_pnl": {
-          "trades": 125,
-          "net_pips": -186.9,
-          "win_rate_pct": 45.6,
-          "avg_pips_per_trade": -1.5,
-          "max_drawdown_pips": 424.6
+          "trades": 124,
+          "net_pips": -465.1,
+          "win_rate_pct": 45.2,
+          "avg_pips_per_trade": -3.75,
+          "max_drawdown_pips": 611.2
         },
         "class_counts": {
           "actual": {
@@ -916,16 +916,16 @@
             "buy": 407
           },
           "predicted": {
-            "sell": 501,
-            "neutral": 109,
-            "buy": 434
+            "sell": 499,
+            "neutral": 107,
+            "buy": 438
           }
         }
       },
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-24T20:27:38.752403+09:00",
+      "news_checked_at_jst": "2026-10-24T20:36:00.505690+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -940,10 +940,10 @@
     {
       "name": "ユーロ/米ドル (EUR/USD)",
       "ticker": "EURUSD=X",
-      "updated_at_jst": "2026-10-24T20:27:41.911479+09:00",
+      "updated_at_jst": "2026-10-24T20:36:03.214879+09:00",
       "decision": "データ古い・保留",
       "direction": "様子見",
-      "reason": "最新の確定足から約928分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
+      "reason": "最新の確定足から約936分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
       "price": 1.1204482316970825,
       "spread_pips": 0.4,
       "timeframe_trends": [
@@ -953,16 +953,16 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": null,
-      "data_age_minutes": 927.7,
+      "data_age_minutes": 936.1,
       "validation": {
         "passed": false,
         "reason": "複数期間の時系列検証条件を満たさない",
-        "balanced_accuracy": 0.3563,
+        "balanced_accuracy": 0.353,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 27.0,
-          "neutral": 46.1,
-          "buy": 33.8
+          "sell": 27.7,
+          "neutral": 43.1,
+          "buy": 35.1
         },
         "folds": 3,
         "fold_details": [
@@ -1027,12 +1027,12 @@
             "purge_gap": 8,
             "test_start": "2026-09-14T04:00:00+01:00",
             "test_end": "2026-10-02T18:00:00+01:00",
-            "balanced_accuracy": 0.3988,
+            "balanced_accuracy": 0.4027,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
-              "sell": 7.0,
+              "sell": 7.1,
               "neutral": 64.5,
-              "buy": 48.1
+              "buy": 49.2
             },
             "train_class_counts": {
               "sell": 257,
@@ -1040,20 +1040,20 @@
               "buy": 334
             },
             "actual_class_counts": {
-              "sell": 185,
+              "sell": 184,
               "neutral": 31,
-              "buy": 131
+              "buy": 132
             },
             "predicted_class_counts": {
-              "sell": 26,
+              "sell": 25,
               "neutral": 186,
-              "buy": 135
+              "buy": 136
             },
             "confusion_matrix": [
               [
                 13,
                 110,
-                62
+                61
               ],
               [
                 1,
@@ -1061,9 +1061,9 @@
                 10
               ],
               [
-                12,
+                11,
                 56,
-                63
+                65
               ]
             ],
             "simulated_pnl": {
@@ -1081,17 +1081,17 @@
             "purge_gap": 8,
             "test_start": "2026-10-02T19:00:00+01:00",
             "test_end": "2026-10-23T10:00:00+01:00",
-            "balanced_accuracy": 0.3463,
+            "balanced_accuracy": 0.324,
             "baseline_balanced_accuracy": 0.3333,
             "class_recall_pct": {
-              "sell": 39.1,
-              "neutral": 55.6,
-              "buy": 9.3
+              "sell": 40.8,
+              "neutral": 44.4,
+              "buy": 11.9
             },
             "train_class_counts": {
-              "sell": 445,
+              "sell": 444,
               "neutral": 124,
-              "buy": 464
+              "buy": 465
             },
             "actual_class_counts": {
               "sell": 169,
@@ -1099,60 +1099,60 @@
               "buy": 151
             },
             "predicted_class_counts": {
-              "sell": 136,
-              "neutral": 173,
-              "buy": 38
+              "sell": 148,
+              "neutral": 160,
+              "buy": 39
             },
             "confusion_matrix": [
               [
-                66,
-                81,
-                22
+                69,
+                80,
+                20
               ],
               [
-                10,
-                15,
-                2
+                14,
+                12,
+                1
               ],
               [
-                60,
-                77,
-                14
+                65,
+                68,
+                18
               ]
             ],
             "simulated_pnl": {
-              "trades": 30,
-              "net_pips": -321.74,
-              "win_rate_pct": 36.7,
-              "avg_pips_per_trade": -10.72,
-              "max_drawdown_pips": 322.6
+              "trades": 32,
+              "net_pips": -177.87,
+              "win_rate_pct": 46.9,
+              "avg_pips_per_trade": -5.56,
+              "max_drawdown_pips": 244.54
             }
           }
         ],
         "simulated_pnl": {
-          "trades": 97,
-          "net_pips": -52.69,
-          "win_rate_pct": 51.5,
-          "avg_pips_per_trade": -0.54,
-          "max_drawdown_pips": 338.66
+          "trades": 99,
+          "net_pips": 91.17,
+          "win_rate_pct": 54.5,
+          "avg_pips_per_trade": 0.92,
+          "max_drawdown_pips": 256.59
         },
         "class_counts": {
           "actual": {
-            "sell": 507,
+            "sell": 506,
             "neutral": 102,
-            "buy": 432
+            "buy": 433
           },
           "predicted": {
-            "sell": 274,
-            "neutral": 449,
-            "buy": 318
+            "sell": 285,
+            "neutral": 436,
+            "buy": 320
           }
         }
       },
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-24T20:27:41.637693+09:00",
+      "news_checked_at_jst": "2026-10-24T20:36:03.003195+09:00",
       "news_status": "no_recent_articles",
       "news_article_count": 10,
       "news_recent_count": 0,
@@ -20905,6 +20905,1221 @@
           "sell_pct": null,
           "neutral_pct": null,
           "news_checked_at_jst": "2026-10-24T20:27:41.637693+09:00",
+          "news_status": "no_recent_articles",
+          "news_article_count": 10,
+          "news_recent_count": 0,
+          "news_risk_detected": false,
+          "news_risk_reason": "取得記事の中に過去12時間以内と確認できる記事がありません。",
+          "news_risk_headlines": [],
+          "news_headlines": [
+            {
+              "title": "US Dollar Price Forecast: AI Rout Hits Rate Edge, DXY Holds 101.50 as EUR/USD, GBP/USD Coil",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/us-dollar-price-forecast-ai-070000807.html",
+              "published_at": "2026-10-23T16:00:00+09:00"
+            },
+            {
+              "title": "US Dollar Price Forecast: Dollar Pauses Before Central Bank Week as UK Inflation Firms Hike Bets, DXY Tests 101.51",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/us-dollar-price-forecast-dollar-073000676.html",
+              "published_at": "2026-10-22T16:30:00+09:00"
+            },
+            {
+              "title": "US Dollar Price Forecast: UK CPI Hits 3.5%, DXY Eyes 102.01 as EUR/USD, GBP/USD Split",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/us-dollar-price-forecast-uk-073000818.html",
+              "published_at": "2026-10-21T16:30:00+09:00"
+            },
+            {
+              "title": "US Dollar Price Forecast: UK Jobs Surprise, DXY Tests 101.76 as EUR/USD, GBP/USD Firm",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/us-dollar-price-forecast-uk-072421507.html",
+              "published_at": "2026-10-20T16:24:21+09:00"
+            },
+            {
+              "title": "US Dollar Price Forecast: Fed Hike Bets Fade, DXY Tests 102.18 as EUR/USD, GBP/USD Slip",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/us-dollar-price-forecast-fed-082744655.html",
+              "published_at": "2026-10-19T17:27:44+09:00"
+            },
+            {
+              "title": "US Dollar Price Forecast: Warsh Holds Fire, DXY Tests 101.80 as EUR/USD, GBP/USD Gain",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/us-dollar-price-forecast-warsh-082128574.html",
+              "published_at": "2026-10-16T17:21:28+09:00"
+            },
+            {
+              "title": "US Dollar Price Forecast: DXY Eyes 102.40, Can EUR/USD and GBP/USD Break Resistance?",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/us-dollar-price-forecast-dxy-081105442.html",
+              "published_at": "2026-10-15T17:11:05+09:00"
+            },
+            {
+              "title": "US Dollar Price Forecast: DXY Tests 101.93, Can EUR/USD and GBP/USD Break Higher?",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/us-dollar-price-forecast-dxy-053712286.html",
+              "published_at": "2026-10-14T14:37:12+09:00"
+            },
+            {
+              "title": "US Dollar Price Forecast: DXY Eyes 102.61, Can EUR/USD and GBP/USD Break Higher?",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/us-dollar-price-forecast-dxy-070645491.html",
+              "published_at": "2026-10-13T16:06:45+09:00"
+            },
+            {
+              "title": "US Dollar Price Forecast: DXY Eyes 102.49, Can EUR/USD Hold 1.1180 Ahead of CPI?",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/us-dollar-price-forecast-dxy-072924993.html",
+              "published_at": "2026-10-12T16:29:24+09:00"
+            }
+          ],
+          "news_source": "Yahoo Finance",
+          "news_retrieval_method": "yf.Search",
+          "news_retrieval_errors": []
+        }
+      ]
+    },
+    {
+      "run_at_jst": "2026-10-24T20:35:53.018838+09:00",
+      "summary": [
+        "米ドル/円 (USD/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 37.0, 'neutral': 13.9, 'buy': 51.3}",
+        "英ポンド/円 (GBP/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 35.8, 'neutral': 10.8, 'buy': 48.4}",
+        "ユーロ/円 (EUR/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=no_recent_articles / 重要ニュース=False / 再現率={'sell': 32.5, 'neutral': 14.7, 'buy': 58.6}",
+        "豪ドル/円 (AUD/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={'sell': 46.1, 'neutral': 10.8, 'buy': 38.8}",
+        "ユーロ/米ドル (EUR/USD): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=no_recent_articles / 重要ニュース=False / 再現率={'sell': 27.7, 'neutral': 43.1, 'buy': 35.1}"
+      ],
+      "pairs": [
+        {
+          "name": "米ドル/円 (USD/JPY)",
+          "ticker": "USDJPY=X",
+          "updated_at_jst": "2026-10-24T20:35:53.459889+09:00",
+          "decision": "データ古い・保留",
+          "direction": "様子見",
+          "reason": "最新の確定足から約996分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
+          "price": 156.83399963378906,
+          "spread_pips": 0.2,
+          "timeframe_trends": [
+            "下降",
+            "下降",
+            "中立"
+          ],
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": null,
+          "data_age_minutes": 995.9,
+          "validation": {
+            "passed": false,
+            "reason": "複数期間の時系列検証条件を満たさない",
+            "balanced_accuracy": 0.3407,
+            "baseline_balanced_accuracy": 0.3333,
+            "class_recall_pct": {
+              "sell": 37.0,
+              "neutral": 13.9,
+              "buy": 51.3
+            },
+            "folds": 3,
+            "fold_details": [
+              {
+                "fold": 1,
+                "train_rows": 339,
+                "test_rows": 347,
+                "purge_gap": 8,
+                "test_start": "2026-08-24T12:00:00+01:00",
+                "test_end": "2026-09-14T04:00:00+01:00",
+                "balanced_accuracy": 0.3011,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 26.9,
+                  "neutral": 6.8,
+                  "buy": 56.6
+                },
+                "train_class_counts": {
+                  "sell": 166,
+                  "neutral": 42,
+                  "buy": 131
+                },
+                "actual_class_counts": {
+                  "sell": 160,
+                  "neutral": 44,
+                  "buy": 143
+                },
+                "predicted_class_counts": {
+                  "sell": 101,
+                  "neutral": 26,
+                  "buy": 220
+                },
+                "confusion_matrix": [
+                  [
+                    43,
+                    11,
+                    106
+                  ],
+                  [
+                    8,
+                    3,
+                    33
+                  ],
+                  [
+                    50,
+                    12,
+                    81
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 42,
+                  "net_pips": -436.6,
+                  "win_rate_pct": 47.6,
+                  "avg_pips_per_trade": -10.4,
+                  "max_drawdown_pips": 638.1
+                }
+              },
+              {
+                "fold": 2,
+                "train_rows": 686,
+                "test_rows": 347,
+                "purge_gap": 8,
+                "test_start": "2026-09-14T05:00:00+01:00",
+                "test_end": "2026-10-02T19:00:00+01:00",
+                "balanced_accuracy": 0.3971,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 50.3,
+                  "neutral": 34.5,
+                  "buy": 34.3
+                },
+                "train_class_counts": {
+                  "sell": 328,
+                  "neutral": 86,
+                  "buy": 272
+                },
+                "actual_class_counts": {
+                  "sell": 143,
+                  "neutral": 29,
+                  "buy": 175
+                },
+                "predicted_class_counts": {
+                  "sell": 163,
+                  "neutral": 74,
+                  "buy": 110
+                },
+                "confusion_matrix": [
+                  [
+                    72,
+                    28,
+                    43
+                  ],
+                  [
+                    12,
+                    10,
+                    7
+                  ],
+                  [
+                    79,
+                    36,
+                    60
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 40,
+                  "net_pips": 221.0,
+                  "win_rate_pct": 60.0,
+                  "avg_pips_per_trade": 5.53,
+                  "max_drawdown_pips": 146.8
+                }
+              },
+              {
+                "fold": 3,
+                "train_rows": 1033,
+                "test_rows": 347,
+                "purge_gap": 8,
+                "test_start": "2026-10-02T20:00:00+01:00",
+                "test_end": "2026-10-23T12:00:00+01:00",
+                "balanced_accuracy": 0.3634,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 35.4,
+                  "neutral": 5.7,
+                  "buy": 67.9
+                },
+                "train_class_counts": {
+                  "sell": 468,
+                  "neutral": 114,
+                  "buy": 451
+                },
+                "actual_class_counts": {
+                  "sell": 178,
+                  "neutral": 35,
+                  "buy": 134
+                },
+                "predicted_class_counts": {
+                  "sell": 96,
+                  "neutral": 45,
+                  "buy": 206
+                },
+                "confusion_matrix": [
+                  [
+                    63,
+                    21,
+                    94
+                  ],
+                  [
+                    12,
+                    2,
+                    21
+                  ],
+                  [
+                    21,
+                    22,
+                    91
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 42,
+                  "net_pips": 180.6,
+                  "win_rate_pct": 59.5,
+                  "avg_pips_per_trade": 4.3,
+                  "max_drawdown_pips": 189.4
+                }
+              }
+            ],
+            "simulated_pnl": {
+              "trades": 124,
+              "net_pips": -35.0,
+              "win_rate_pct": 55.6,
+              "avg_pips_per_trade": -0.28,
+              "max_drawdown_pips": 714.9
+            },
+            "class_counts": {
+              "actual": {
+                "sell": 481,
+                "neutral": 108,
+                "buy": 452
+              },
+              "predicted": {
+                "sell": 360,
+                "neutral": 145,
+                "buy": 536
+              }
+            }
+          },
+          "buy_pct": null,
+          "sell_pct": null,
+          "neutral_pct": null,
+          "news_checked_at_jst": "2026-10-24T20:35:53.028043+09:00",
+          "news_status": "empty",
+          "news_article_count": 0,
+          "news_recent_count": 0,
+          "news_risk_detected": false,
+          "news_risk_reason": "ニュース記事が返されませんでした。重要ニュースがないとは判断できません。",
+          "news_risk_headlines": [],
+          "news_headlines": [],
+          "news_source": "Yahoo Finance",
+          "news_retrieval_method": null,
+          "news_retrieval_errors": []
+        },
+        {
+          "name": "英ポンド/円 (GBP/JPY)",
+          "ticker": "GBPJPY=X",
+          "updated_at_jst": "2026-10-24T20:35:55.956361+09:00",
+          "decision": "データ古い・保留",
+          "direction": "様子見",
+          "reason": "最新の確定足から約936分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
+          "price": 209.83700561523438,
+          "spread_pips": 1.0,
+          "timeframe_trends": [
+            "下降",
+            "中立",
+            "中立"
+          ],
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": null,
+          "data_age_minutes": 935.9,
+          "validation": {
+            "passed": false,
+            "reason": "複数期間の時系列検証条件を満たさない",
+            "balanced_accuracy": 0.317,
+            "baseline_balanced_accuracy": 0.3333,
+            "class_recall_pct": {
+              "sell": 35.8,
+              "neutral": 10.8,
+              "buy": 48.4
+            },
+            "folds": 3,
+            "fold_details": [
+              {
+                "fold": 1,
+                "train_rows": 339,
+                "test_rows": 347,
+                "purge_gap": 8,
+                "test_start": "2026-08-24T12:00:00+01:00",
+                "test_end": "2026-09-14T04:00:00+01:00",
+                "balanced_accuracy": 0.3229,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 13.3,
+                  "neutral": 6.5,
+                  "buy": 77.1
+                },
+                "train_class_counts": {
+                  "sell": 149,
+                  "neutral": 44,
+                  "buy": 146
+                },
+                "actual_class_counts": {
+                  "sell": 211,
+                  "neutral": 31,
+                  "buy": 105
+                },
+                "predicted_class_counts": {
+                  "sell": 44,
+                  "neutral": 23,
+                  "buy": 280
+                },
+                "confusion_matrix": [
+                  [
+                    28,
+                    10,
+                    173
+                  ],
+                  [
+                    3,
+                    2,
+                    26
+                  ],
+                  [
+                    13,
+                    11,
+                    81
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 42,
+                  "net_pips": -874.2,
+                  "win_rate_pct": 40.5,
+                  "avg_pips_per_trade": -20.81,
+                  "max_drawdown_pips": 989.2
+                }
+              },
+              {
+                "fold": 2,
+                "train_rows": 686,
+                "test_rows": 347,
+                "purge_gap": 8,
+                "test_start": "2026-09-14T05:00:00+01:00",
+                "test_end": "2026-10-02T19:00:00+01:00",
+                "balanced_accuracy": 0.3266,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 47.9,
+                  "neutral": 16.0,
+                  "buy": 34.1
+                },
+                "train_class_counts": {
+                  "sell": 360,
+                  "neutral": 75,
+                  "buy": 251
+                },
+                "actual_class_counts": {
+                  "sell": 190,
+                  "neutral": 25,
+                  "buy": 132
+                },
+                "predicted_class_counts": {
+                  "sell": 169,
+                  "neutral": 44,
+                  "buy": 134
+                },
+                "confusion_matrix": [
+                  [
+                    91,
+                    23,
+                    76
+                  ],
+                  [
+                    8,
+                    4,
+                    13
+                  ],
+                  [
+                    70,
+                    17,
+                    45
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 42,
+                  "net_pips": -201.4,
+                  "win_rate_pct": 52.4,
+                  "avg_pips_per_trade": -4.8,
+                  "max_drawdown_pips": 306.6
+                }
+              },
+              {
+                "fold": 3,
+                "train_rows": 1033,
+                "test_rows": 347,
+                "purge_gap": 8,
+                "test_start": "2026-10-02T20:00:00+01:00",
+                "test_end": "2026-10-23T12:00:00+01:00",
+                "balanced_accuracy": 0.3379,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 49.5,
+                  "neutral": 11.1,
+                  "buy": 40.8
+                },
+                "train_class_counts": {
+                  "sell": 547,
+                  "neutral": 99,
+                  "buy": 387
+                },
+                "actual_class_counts": {
+                  "sell": 182,
+                  "neutral": 18,
+                  "buy": 147
+                },
+                "predicted_class_counts": {
+                  "sell": 176,
+                  "neutral": 35,
+                  "buy": 136
+                },
+                "confusion_matrix": [
+                  [
+                    90,
+                    23,
+                    69
+                  ],
+                  [
+                    9,
+                    2,
+                    7
+                  ],
+                  [
+                    77,
+                    10,
+                    60
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 42,
+                  "net_pips": 42.8,
+                  "win_rate_pct": 52.4,
+                  "avg_pips_per_trade": 1.02,
+                  "max_drawdown_pips": 290.3
+                }
+              }
+            ],
+            "simulated_pnl": {
+              "trades": 126,
+              "net_pips": -1032.79,
+              "win_rate_pct": 48.4,
+              "avg_pips_per_trade": -8.2,
+              "max_drawdown_pips": 1422.6
+            },
+            "class_counts": {
+              "actual": {
+                "sell": 583,
+                "neutral": 74,
+                "buy": 384
+              },
+              "predicted": {
+                "sell": 389,
+                "neutral": 102,
+                "buy": 550
+              }
+            }
+          },
+          "buy_pct": null,
+          "sell_pct": null,
+          "neutral_pct": null,
+          "news_checked_at_jst": "2026-10-24T20:35:55.675140+09:00",
+          "news_status": "empty",
+          "news_article_count": 0,
+          "news_recent_count": 0,
+          "news_risk_detected": false,
+          "news_risk_reason": "ニュース記事が返されませんでした。重要ニュースがないとは判断できません。",
+          "news_risk_headlines": [],
+          "news_headlines": [],
+          "news_source": "Yahoo Finance",
+          "news_retrieval_method": null,
+          "news_retrieval_errors": []
+        },
+        {
+          "name": "ユーロ/円 (EUR/JPY)",
+          "ticker": "EURJPY=X",
+          "updated_at_jst": "2026-10-24T20:35:58.327304+09:00",
+          "decision": "データ古い・保留",
+          "direction": "様子見",
+          "reason": "最新の確定足から約936分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
+          "price": 175.6280059814453,
+          "spread_pips": 0.5,
+          "timeframe_trends": [
+            "下降",
+            "下降",
+            "下降"
+          ],
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": null,
+          "data_age_minutes": 936.0,
+          "validation": {
+            "passed": false,
+            "reason": "複数期間の時系列検証条件を満たさない",
+            "balanced_accuracy": 0.3528,
+            "baseline_balanced_accuracy": 0.3333,
+            "class_recall_pct": {
+              "sell": 32.5,
+              "neutral": 14.7,
+              "buy": 58.6
+            },
+            "folds": 3,
+            "fold_details": [
+              {
+                "fold": 1,
+                "train_rows": 340,
+                "test_rows": 348,
+                "purge_gap": 8,
+                "test_start": "2026-08-24T13:00:00+01:00",
+                "test_end": "2026-09-14T05:00:00+01:00",
+                "balanced_accuracy": 0.3496,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 19.0,
+                  "neutral": 7.4,
+                  "buy": 78.4
+                },
+                "train_class_counts": {
+                  "sell": 149,
+                  "neutral": 50,
+                  "buy": 141
+                },
+                "actual_class_counts": {
+                  "sell": 205,
+                  "neutral": 27,
+                  "buy": 116
+                },
+                "predicted_class_counts": {
+                  "sell": 61,
+                  "neutral": 44,
+                  "buy": 243
+                },
+                "confusion_matrix": [
+                  [
+                    39,
+                    34,
+                    132
+                  ],
+                  [
+                    5,
+                    2,
+                    20
+                  ],
+                  [
+                    17,
+                    8,
+                    91
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 41,
+                  "net_pips": -588.4,
+                  "win_rate_pct": 48.8,
+                  "avg_pips_per_trade": -14.35,
+                  "max_drawdown_pips": 745.9
+                }
+              },
+              {
+                "fold": 2,
+                "train_rows": 688,
+                "test_rows": 348,
+                "purge_gap": 8,
+                "test_start": "2026-09-14T06:00:00+01:00",
+                "test_end": "2026-10-02T20:00:00+01:00",
+                "balanced_accuracy": 0.3226,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 39.0,
+                  "neutral": 16.7,
+                  "buy": 41.1
+                },
+                "train_class_counts": {
+                  "sell": 357,
+                  "neutral": 77,
+                  "buy": 254
+                },
+                "actual_class_counts": {
+                  "sell": 177,
+                  "neutral": 30,
+                  "buy": 141
+                },
+                "predicted_class_counts": {
+                  "sell": 145,
+                  "neutral": 47,
+                  "buy": 156
+                },
+                "confusion_matrix": [
+                  [
+                    69,
+                    22,
+                    86
+                  ],
+                  [
+                    13,
+                    5,
+                    12
+                  ],
+                  [
+                    63,
+                    20,
+                    58
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 42,
+                  "net_pips": -374.01,
+                  "win_rate_pct": 40.5,
+                  "avg_pips_per_trade": -8.9,
+                  "max_drawdown_pips": 441.4
+                }
+              },
+              {
+                "fold": 3,
+                "train_rows": 1036,
+                "test_rows": 348,
+                "purge_gap": 8,
+                "test_start": "2026-10-02T21:00:00+01:00",
+                "test_end": "2026-10-23T11:00:00+01:00",
+                "balanced_accuracy": 0.3983,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 41.1,
+                  "neutral": 18.4,
+                  "buy": 60.0
+                },
+                "train_class_counts": {
+                  "sell": 530,
+                  "neutral": 106,
+                  "buy": 400
+                },
+                "actual_class_counts": {
+                  "sell": 185,
+                  "neutral": 38,
+                  "buy": 125
+                },
+                "predicted_class_counts": {
+                  "sell": 129,
+                  "neutral": 25,
+                  "buy": 194
+                },
+                "confusion_matrix": [
+                  [
+                    76,
+                    4,
+                    105
+                  ],
+                  [
+                    17,
+                    7,
+                    14
+                  ],
+                  [
+                    36,
+                    14,
+                    75
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 42,
+                  "net_pips": 342.8,
+                  "win_rate_pct": 64.3,
+                  "avg_pips_per_trade": 8.16,
+                  "max_drawdown_pips": 174.1
+                }
+              }
+            ],
+            "simulated_pnl": {
+              "trades": 125,
+              "net_pips": -619.61,
+              "win_rate_pct": 51.2,
+              "avg_pips_per_trade": -4.96,
+              "max_drawdown_pips": 1165.11
+            },
+            "class_counts": {
+              "actual": {
+                "sell": 567,
+                "neutral": 95,
+                "buy": 382
+              },
+              "predicted": {
+                "sell": 335,
+                "neutral": 116,
+                "buy": 593
+              }
+            }
+          },
+          "buy_pct": null,
+          "sell_pct": null,
+          "neutral_pct": null,
+          "news_checked_at_jst": "2026-10-24T20:35:58.200636+09:00",
+          "news_status": "no_recent_articles",
+          "news_article_count": 1,
+          "news_recent_count": 0,
+          "news_risk_detected": false,
+          "news_risk_reason": "取得記事の中に過去12時間以内と確認できる記事がありません。",
+          "news_risk_headlines": [],
+          "news_headlines": [
+            {
+              "title": "EUR/USD, EUR/JPY and AUD/USD Brace for Jackson Hole Volatility",
+              "publisher": "FX Empire",
+              "url": "https://finance.yahoo.com/markets/currencies/articles/eur-usd-eur-jpy-aud-125008520.html",
+              "published_at": "2026-08-28T21:50:08+09:00"
+            }
+          ],
+          "news_source": "Yahoo Finance",
+          "news_retrieval_method": "yf.Search",
+          "news_retrieval_errors": []
+        },
+        {
+          "name": "豪ドル/円 (AUD/JPY)",
+          "ticker": "AUDJPY=X",
+          "updated_at_jst": "2026-10-24T20:36:00.806174+09:00",
+          "decision": "データ古い・保留",
+          "direction": "様子見",
+          "reason": "最新の確定足から約936分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
+          "price": 110.29399871826172,
+          "spread_pips": 0.6,
+          "timeframe_trends": [
+            "中立",
+            "中立",
+            "中立"
+          ],
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": null,
+          "data_age_minutes": 936.0,
+          "validation": {
+            "passed": false,
+            "reason": "複数期間の時系列検証条件を満たさない",
+            "balanced_accuracy": 0.319,
+            "baseline_balanced_accuracy": 0.3295,
+            "class_recall_pct": {
+              "sell": 46.1,
+              "neutral": 10.8,
+              "buy": 38.8
+            },
+            "folds": 3,
+            "fold_details": [
+              {
+                "fold": 1,
+                "train_rows": 340,
+                "test_rows": 348,
+                "purge_gap": 8,
+                "test_start": "2026-08-24T13:00:00+01:00",
+                "test_end": "2026-09-14T06:00:00+01:00",
+                "balanced_accuracy": 0.2843,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 31.2,
+                  "neutral": 4.4,
+                  "buy": 49.6
+                },
+                "train_class_counts": {
+                  "sell": 155,
+                  "neutral": 23,
+                  "buy": 162
+                },
+                "actual_class_counts": {
+                  "sell": 176,
+                  "neutral": 45,
+                  "buy": 127
+                },
+                "predicted_class_counts": {
+                  "sell": 127,
+                  "neutral": 8,
+                  "buy": 213
+                },
+                "confusion_matrix": [
+                  [
+                    55,
+                    3,
+                    118
+                  ],
+                  [
+                    11,
+                    2,
+                    32
+                  ],
+                  [
+                    61,
+                    3,
+                    63
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 43,
+                  "net_pips": -488.5,
+                  "win_rate_pct": 30.2,
+                  "avg_pips_per_trade": -11.36,
+                  "max_drawdown_pips": 488.5
+                }
+              },
+              {
+                "fold": 2,
+                "train_rows": 688,
+                "test_rows": 348,
+                "purge_gap": 8,
+                "test_start": "2026-09-14T07:00:00+01:00",
+                "test_end": "2026-10-02T20:00:00+01:00",
+                "balanced_accuracy": 0.3514,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 56.5,
+                  "neutral": 22.6,
+                  "buy": 26.3
+                },
+                "train_class_counts": {
+                  "sell": 336,
+                  "neutral": 65,
+                  "buy": 287
+                },
+                "actual_class_counts": {
+                  "sell": 184,
+                  "neutral": 31,
+                  "buy": 133
+                },
+                "predicted_class_counts": {
+                  "sell": 194,
+                  "neutral": 70,
+                  "buy": 84
+                },
+                "confusion_matrix": [
+                  [
+                    104,
+                    40,
+                    40
+                  ],
+                  [
+                    15,
+                    7,
+                    9
+                  ],
+                  [
+                    75,
+                    23,
+                    35
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 39,
+                  "net_pips": 53.8,
+                  "win_rate_pct": 59.0,
+                  "avg_pips_per_trade": 1.38,
+                  "max_drawdown_pips": 159.9
+                }
+              },
+              {
+                "fold": 3,
+                "train_rows": 1036,
+                "test_rows": 348,
+                "purge_gap": 8,
+                "test_start": "2026-10-02T21:00:00+01:00",
+                "test_end": "2026-10-23T12:00:00+01:00",
+                "balanced_accuracy": 0.3223,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 50.0,
+                  "neutral": 5.9,
+                  "buy": 40.8
+                },
+                "train_class_counts": {
+                  "sell": 518,
+                  "neutral": 95,
+                  "buy": 423
+                },
+                "actual_class_counts": {
+                  "sell": 184,
+                  "neutral": 17,
+                  "buy": 147
+                },
+                "predicted_class_counts": {
+                  "sell": 178,
+                  "neutral": 29,
+                  "buy": 141
+                },
+                "confusion_matrix": [
+                  [
+                    92,
+                    16,
+                    76
+                  ],
+                  [
+                    11,
+                    1,
+                    5
+                  ],
+                  [
+                    75,
+                    12,
+                    60
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 42,
+                  "net_pips": -30.4,
+                  "win_rate_pct": 47.6,
+                  "avg_pips_per_trade": -0.72,
+                  "max_drawdown_pips": 188.2
+                }
+              }
+            ],
+            "simulated_pnl": {
+              "trades": 124,
+              "net_pips": -465.1,
+              "win_rate_pct": 45.2,
+              "avg_pips_per_trade": -3.75,
+              "max_drawdown_pips": 611.2
+            },
+            "class_counts": {
+              "actual": {
+                "sell": 544,
+                "neutral": 93,
+                "buy": 407
+              },
+              "predicted": {
+                "sell": 499,
+                "neutral": 107,
+                "buy": 438
+              }
+            }
+          },
+          "buy_pct": null,
+          "sell_pct": null,
+          "neutral_pct": null,
+          "news_checked_at_jst": "2026-10-24T20:36:00.505690+09:00",
+          "news_status": "empty",
+          "news_article_count": 0,
+          "news_recent_count": 0,
+          "news_risk_detected": false,
+          "news_risk_reason": "ニュース記事が返されませんでした。重要ニュースがないとは判断できません。",
+          "news_risk_headlines": [],
+          "news_headlines": [],
+          "news_source": "Yahoo Finance",
+          "news_retrieval_method": null,
+          "news_retrieval_errors": []
+        },
+        {
+          "name": "ユーロ/米ドル (EUR/USD)",
+          "ticker": "EURUSD=X",
+          "updated_at_jst": "2026-10-24T20:36:03.214879+09:00",
+          "decision": "データ古い・保留",
+          "direction": "様子見",
+          "reason": "最新の確定足から約936分経過しているため保留します。週末や市場休場時は古いデータになることがあります。",
+          "price": 1.1204482316970825,
+          "spread_pips": 0.4,
+          "timeframe_trends": [
+            "下降",
+            "下降",
+            "下降"
+          ],
+          "fast_move_detected": false,
+          "fast_move_atr_ratio": null,
+          "data_age_minutes": 936.1,
+          "validation": {
+            "passed": false,
+            "reason": "複数期間の時系列検証条件を満たさない",
+            "balanced_accuracy": 0.353,
+            "baseline_balanced_accuracy": 0.3333,
+            "class_recall_pct": {
+              "sell": 27.7,
+              "neutral": 43.1,
+              "buy": 35.1
+            },
+            "folds": 3,
+            "fold_details": [
+              {
+                "fold": 1,
+                "train_rows": 339,
+                "test_rows": 347,
+                "purge_gap": 8,
+                "test_start": "2026-08-24T12:00:00+01:00",
+                "test_end": "2026-09-14T03:00:00+01:00",
+                "balanced_accuracy": 0.3706,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 37.9,
+                  "neutral": 27.3,
+                  "buy": 46.0
+                },
+                "train_class_counts": {
+                  "sell": 108,
+                  "neutral": 50,
+                  "buy": 181
+                },
+                "actual_class_counts": {
+                  "sell": 153,
+                  "neutral": 44,
+                  "buy": 150
+                },
+                "predicted_class_counts": {
+                  "sell": 112,
+                  "neutral": 90,
+                  "buy": 145
+                },
+                "confusion_matrix": [
+                  [
+                    58,
+                    30,
+                    65
+                  ],
+                  [
+                    21,
+                    12,
+                    11
+                  ],
+                  [
+                    33,
+                    48,
+                    69
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 38,
+                  "net_pips": 194.09,
+                  "win_rate_pct": 63.2,
+                  "avg_pips_per_trade": 5.11,
+                  "max_drawdown_pips": 26.78
+                }
+              },
+              {
+                "fold": 2,
+                "train_rows": 686,
+                "test_rows": 347,
+                "purge_gap": 8,
+                "test_start": "2026-09-14T04:00:00+01:00",
+                "test_end": "2026-10-02T18:00:00+01:00",
+                "balanced_accuracy": 0.4027,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 7.1,
+                  "neutral": 64.5,
+                  "buy": 49.2
+                },
+                "train_class_counts": {
+                  "sell": 257,
+                  "neutral": 95,
+                  "buy": 334
+                },
+                "actual_class_counts": {
+                  "sell": 184,
+                  "neutral": 31,
+                  "buy": 132
+                },
+                "predicted_class_counts": {
+                  "sell": 25,
+                  "neutral": 186,
+                  "buy": 136
+                },
+                "confusion_matrix": [
+                  [
+                    13,
+                    110,
+                    61
+                  ],
+                  [
+                    1,
+                    20,
+                    10
+                  ],
+                  [
+                    11,
+                    56,
+                    65
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 29,
+                  "net_pips": 74.95,
+                  "win_rate_pct": 51.7,
+                  "avg_pips_per_trade": 2.58,
+                  "max_drawdown_pips": 35.56
+                }
+              },
+              {
+                "fold": 3,
+                "train_rows": 1033,
+                "test_rows": 347,
+                "purge_gap": 8,
+                "test_start": "2026-10-02T19:00:00+01:00",
+                "test_end": "2026-10-23T10:00:00+01:00",
+                "balanced_accuracy": 0.324,
+                "baseline_balanced_accuracy": 0.3333,
+                "class_recall_pct": {
+                  "sell": 40.8,
+                  "neutral": 44.4,
+                  "buy": 11.9
+                },
+                "train_class_counts": {
+                  "sell": 444,
+                  "neutral": 124,
+                  "buy": 465
+                },
+                "actual_class_counts": {
+                  "sell": 169,
+                  "neutral": 27,
+                  "buy": 151
+                },
+                "predicted_class_counts": {
+                  "sell": 148,
+                  "neutral": 160,
+                  "buy": 39
+                },
+                "confusion_matrix": [
+                  [
+                    69,
+                    80,
+                    20
+                  ],
+                  [
+                    14,
+                    12,
+                    1
+                  ],
+                  [
+                    65,
+                    68,
+                    18
+                  ]
+                ],
+                "simulated_pnl": {
+                  "trades": 32,
+                  "net_pips": -177.87,
+                  "win_rate_pct": 46.9,
+                  "avg_pips_per_trade": -5.56,
+                  "max_drawdown_pips": 244.54
+                }
+              }
+            ],
+            "simulated_pnl": {
+              "trades": 99,
+              "net_pips": 91.17,
+              "win_rate_pct": 54.5,
+              "avg_pips_per_trade": 0.92,
+              "max_drawdown_pips": 256.59
+            },
+            "class_counts": {
+              "actual": {
+                "sell": 506,
+                "neutral": 102,
+                "buy": 433
+              },
+              "predicted": {
+                "sell": 285,
+                "neutral": 436,
+                "buy": 320
+              }
+            }
+          },
+          "buy_pct": null,
+          "sell_pct": null,
+          "neutral_pct": null,
+          "news_checked_at_jst": "2026-10-24T20:36:03.003195+09:00",
           "news_status": "no_recent_articles",
           "news_article_count": 10,
           "news_recent_count": 0,
