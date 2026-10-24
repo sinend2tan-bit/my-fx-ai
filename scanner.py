@@ -35,7 +35,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 7
+MODEL_VERSION = 8
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -1270,22 +1270,56 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     actual_counts = class_counts(all_true)
     predicted_counts = class_counts(all_pred)
 
-    # 既存の合格条件は変更しない。
-    passed = (
+    # 各fold内で非重複かつ決済がfold内に収まる取引だけを合算する。
+    total_pnl = summarize_trade_results(simulated_trade_rows)
+
+    # 追加の安定性ゲート：全体損益が一部の期間だけに依存していないか確認する。
+    # 3期間中2期間以上がプラス、全体損益がプラス、かつ最低30件の仮想取引を要求。
+    # これは概算バックテスト上の保守的な足切りであり、実取引の利益を保証しない。
+    fold_pnl_values = []
+    for detail in fold_details:
+        fold_pnl = detail.get("simulated_pnl") or {}
+        fold_net = safe_float(fold_pnl.get("net_pips"))
+        fold_trades = safe_float(fold_pnl.get("trades"))
+        if fold_net is not None and fold_trades is not None:
+            fold_pnl_values.append({"net_pips": fold_net, "trades": int(fold_trades)})
+
+    positive_pnl_folds = sum(1 for item in fold_pnl_values if item["trades"] > 0 and item["net_pips"] > 0)
+    required_positive_folds = 2 if len(fold_pnl_values) >= 3 else len(fold_pnl_values)
+    pnl_stability_ok = bool(
+        len(fold_pnl_values) >= N_WALK_FORWARD_FOLDS
+        and positive_pnl_folds >= required_positive_folds
+        and total_pnl["trades"] >= 30
+        and total_pnl["net_pips"] > 0
+    )
+
+    # 既存の精度・基準モデル・方向別再現率の合格条件は緩めない。
+    model_validation_ok = (
         score >= 0.40
         and score >= baseline_score
         and recall_pct["buy"] >= 20.0
         and recall_pct["sell"] >= 20.0
     )
+    passed = bool(model_validation_ok and pnl_stability_ok)
 
-    reason = (
-        "検証条件を満たしました"
-        if passed
-        else "複数期間の時系列検証条件を満たさない"
+    if not model_validation_ok:
+        reason = "複数期間の時系列検証条件を満たさない"
+    elif not pnl_stability_ok:
+        reason = "仮想損益の期間別安定性条件を満たさない（利益保証ではありません）"
+    else:
+        reason = "時系列検証と仮想損益の期間別安定性条件を満たしました（実取引成績ではありません）"
+
+    print(
+        f"[PNL STABILITY GATE] pair={pair_name}, "
+        f"folds_with_pnl={len(fold_pnl_values)}, "
+        f"positive_folds={positive_pnl_folds}, "
+        f"required_positive_folds={required_positive_folds}, "
+        f"total_trades={total_pnl['trades']}, "
+        f"total_net_pips={total_pnl['net_pips']}, "
+        f"pnl_stability_ok={pnl_stability_ok}, "
+        f"model_validation_ok={model_validation_ok}, "
+        f"passed={passed}"
     )
-
-    # 各fold内で非重複かつ決済がfold内に収まる取引だけを合算する。
-    total_pnl = summarize_trade_results(simulated_trade_rows)
 
     # 売買方向別の損益を出し、買い・売りのどちらが成績を悪化させているか確認する。
     for direction, direction_name in ((1, "BUY"), (-1, "SELL")):
@@ -1347,12 +1381,19 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         f"predicted_counts={predicted_counts}, "
         f"folds={used_folds}, "
         f"purge_gap={purge_gap}, "
+        f"model_validation_ok={model_validation_ok}, "
+        f"pnl_stability_ok={pnl_stability_ok}, "
+        f"positive_pnl_folds={positive_pnl_folds}, "
         f"passed={passed}"
     )
 
     return {
         "passed": bool(passed),
         "reason": reason,
+        "model_validation_ok": bool(model_validation_ok),
+        "pnl_stability_ok": bool(pnl_stability_ok),
+        "positive_pnl_folds": int(positive_pnl_folds),
+        "total_pnl_trades": int(total_pnl["trades"]),
         "balanced_accuracy": round(float(score), 4),
         "baseline_balanced_accuracy": round(
             float(baseline_score), 4
