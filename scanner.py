@@ -1142,6 +1142,21 @@ def walk_forward_validation(df):
 
             pred = model.predict(test_X)
 
+            importances = model.feature_importances_
+            top_idx = np.argsort(importances)[::-1][:5]
+            top_features = [
+                (
+                    str(train_X.columns[i]),
+                    round(float(importances[i]), 4),
+                )
+                for i in top_idx
+            ]
+
+            print(
+                f"[FEATURE IMPORTANCE] "
+                f"top5={top_features}"
+            )
+
             cm = confusion_matrix(
                 test_y, pred, labels=[-1, 0, 1]
             ).tolist()
