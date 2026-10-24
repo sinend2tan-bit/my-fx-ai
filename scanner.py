@@ -1146,6 +1146,15 @@ def walk_forward_validation(df):
                 test_y, pred, labels=[-1, 0, 1]
             ).tolist()
 
+            sell_to_buy_rate = (
+                cm[0][2] / sum(cm[0]) * 100
+                if sum(cm[0]) > 0 else 0.0
+            )
+            buy_to_sell_rate = (
+                cm[2][0] / sum(cm[2]) * 100
+                if sum(cm[2]) > 0 else 0.0
+            )
+
             baseline = DummyClassifier(
                 strategy="most_frequent"
             )
