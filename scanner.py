@@ -35,7 +35,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 5
+MODEL_VERSION = 6
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -72,7 +72,6 @@ FEATURE_COLUMNS = [
     "Dev_SMA20",
     "Dev_EMA20",
     "Dev_EMA200",
-    "Vol_Ratio",
     "RSI",
     "RSI_Diff",
     "MACD_Hist_Ratio",
@@ -755,7 +754,7 @@ def bars(ticker, interval="1h", period="60d"):
     feature_df = add_indicators(raw)
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
-    # 重要度ゼロの原因調査用に、値のばらつきを記録する（売買判定は変更しない）。
+    # Vol_Ratioは診断用に残すが、定数になりやすいため学習特徴量から除外する。
     if "Vol_Ratio" in feature_df.columns:
         vol_unique = int(feature_df["Vol_Ratio"].nunique(dropna=True))
         vol_std = safe_float(feature_df["Vol_Ratio"].std(), 0.0)
@@ -1514,9 +1513,20 @@ def analyze_pair(name, config):
             return result
 
         age = result["data_age_minutes"]
-        if age is None or age > 180:
+        if age is None:
             result["decision"] = "データ鮮度不明・保留"
-            result["reason"] = "最新価格の時刻を確認できないか、データが古いため保留します。"
+            result["reason"] = (
+                "最新の確定足の時刻を確認できないため保留します。"
+                "時刻が確認できるデータを取得できるまで、新規候補に使いません。"
+            )
+            return result
+
+        if age > 180:
+            result["decision"] = "データ古い・保留"
+            result["reason"] = (
+                f"最新の確定足から約{age:.0f}分経過しているため保留します。"
+                "週末や市場休場時は古いデータになることがあります。"
+            )
             return result
 
         if not validation.get("passed"):
