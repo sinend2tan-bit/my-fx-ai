@@ -1228,6 +1228,8 @@ def walk_forward_validation(df):
                 f"actual_counts={true_counts}, "
                 f"predicted_counts={pred_counts}, "
                 f"confusion_matrix={cm}, "
+                f"sell_to_buy={sell_to_buy_rate:.1f}%, "
+                f"buy_to_sell={buy_to_sell_rate:.1f}%, "
                 f"purge_gap={purge_gap}"
             )
 
