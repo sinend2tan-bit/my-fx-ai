@@ -1142,6 +1142,10 @@ def walk_forward_validation(df):
 
             pred = model.predict(test_X)
 
+            cm = confusion_matrix(
+                test_y, pred, labels=[-1, 0, 1]
+            ).tolist()
+
             baseline = DummyClassifier(
                 strategy="most_frequent"
             )
