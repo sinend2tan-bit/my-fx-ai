@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import tempfile
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -38,7 +39,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 14
+MODEL_VERSION = 15
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -200,24 +201,51 @@ def load_state():
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
+        if isinstance(data, dict):
+            return data
+        print("[STATE LOAD WARNING] scan_state.json is not a JSON object; starting with empty state")
+        return {}
+    except Exception as exc:
+        # 壊れた履歴があってもスキャン全体を止めない。原因はログに残す。
+        print(f"[STATE LOAD WARNING] {type(exc).__name__}: {str(exc)[:180]}; starting with empty state")
         return {}
 
 
 def save_state(state):
-    temp_file = STATE_FILE + ".tmp"
+    """一時ファイルへ書いてから置換し、途中終了でJSONが壊れるリスクを下げる。"""
+    target = os.path.abspath(STATE_FILE)
+    target_dir = os.path.dirname(target) or "."
+    temp_path = None
 
-    with open(temp_file, "w", encoding="utf-8") as f:
-        json.dump(
-            state,
-            f,
-            ensure_ascii=False,
-            indent=2,
-            default=json_default,
-        )
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target_dir,
+            prefix=".scan_state_",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            temp_path = f.name
+            json.dump(
+                state,
+                f,
+                ensure_ascii=False,
+                indent=2,
+                default=json_default,
+            )
+            f.flush()
+            os.fsync(f.fileno())
 
-    os.replace(temp_file, STATE_FILE)
+        os.replace(temp_path, target)
+        print(f"[STATE SAVE] path={STATE_FILE}, atomic_replace=True")
+    except Exception:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
 
 
 # =========================================================
@@ -1994,13 +2022,35 @@ def main():
     if not isinstance(history, list):
         history = []
 
+    # 履歴は軽量な要約だけ保存し、各回の詳細な検証データでJSONが肥大化するのを防ぐ。
+    compact_pairs = []
+    for item in pair_results:
+        validation = item.get("validation") or {}
+        simulated_pnl = validation.get("simulated_pnl") or {}
+        compact_pairs.append({
+            "name": item.get("name"),
+            "ticker": item.get("ticker"),
+            "decision": item.get("decision"),
+            "direction": item.get("direction"),
+            "price": item.get("price"),
+            "data_age_minutes": item.get("data_age_minutes"),
+            "buy_pct": item.get("buy_pct"),
+            "sell_pct": item.get("sell_pct"),
+            "news_status": item.get("news_status"),
+            "validation_passed": validation.get("passed"),
+            "model_validation_ok": validation.get("model_validation_ok"),
+            "pnl_stability_ok": validation.get("pnl_stability_ok"),
+            "simulated_net_pips": simulated_pnl.get("net_pips"),
+            "simulated_trades": simulated_pnl.get("trades"),
+        })
+
     run_record = {
         "run_at_jst": started_at,
         "summary": summary,
-        "pairs": pair_results,
+        "pairs": compact_pairs,
     }
     history.append(run_record)
-    history = history[-99:]
+    history = history[-50:]
 
     news_status_counts = {}
     for item in pair_results:
@@ -2009,6 +2059,7 @@ def main():
 
     state = {
         "schema_version": MODEL_VERSION,
+        "scanner_version": f"v{MODEL_VERSION}",
         "last_run_jst": started_at,
         "mode": "freshness_gate_first_multi_period_validation_news_risk_no_auto_orders",
         "interval": "1h",
@@ -2031,6 +2082,10 @@ def main():
         "summary": summary,
         "pairs": pair_results,
         "history": history,
+        "history_policy": {
+            "max_runs": 50,
+            "detail": "履歴には軽量な要約のみを保存。詳細な検証値は最新実行のpairsに保存。",
+        },
         "safety_notice": (
             "価格分析・注文補助専用です。証券口座接続・自動発注・自動決済は行いません。"
             "分析結果は将来の利益を保証しません。"
