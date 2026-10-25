@@ -1,5 +1,5 @@
 # app.py
-# Pro FX Analyzer & Signal Pro — データ鮮度・マルチ時間足・リスク計算改善版
+# Pro FX Analyzer & Signal Pro — 安全性・検証整合性・モバイル表示改善版
 # 価格分析・注文補助専用です。証券口座接続・自動発注は行いません。
 # 予測確率・バックテスト結果は将来の利益や実際の勝率を保証しません。
 
@@ -157,6 +157,17 @@ html, body, [class*="css"] { -webkit-text-size-adjust: 100%; }
 }
 code { overflow-wrap:anywhere; }
 
+/* 画面を簡潔に：余白・見出し・折りたたみ領域を整理 */
+.block-container { max-width: 1450px; padding-top: 1.15rem; padding-bottom: 2rem; }
+[data-testid="stExpander"] { border: 1px solid #334155; border-radius: 10px; }
+[data-testid="stExpander"] summary { min-height: 44px; }
+[data-testid="stMetric"] { background: #111827; border: 1px solid #263449; padding: 10px 12px; border-radius: 10px; }
+[data-testid="stMetricLabel"] { font-size: 0.85rem !important; }
+[data-testid="stMetricValue"] { font-size: clamp(1.15rem, 2.5vw, 1.8rem) !important; }
+[data-testid="stRadio"] > div { gap: 0.35rem; }
+[data-testid="stRadio"] label { padding: 0.2rem 0.1rem; }
+[data-testid="stSelectbox"] { margin-bottom: 0.25rem; }
+[data-testid="stMarkdownContainer"] h3 { margin-top: 0.65rem; }
 /* 縦向きタブレット・スマートフォンでは横幅を節約 */
 @media (max-width: 900px) {
     .block-container {
@@ -457,6 +468,17 @@ def update_forecast_history(items, df, ticker, interval, horizon=LOOKAHEAD_BARS)
                          "evaluated_bar_timestamp": _normalise_timestamp(idx[target_pos]),
                          "evaluated_at": datetime.now(JST).isoformat(),
                          "move_pct": (future_close / base_close - 1.0) * 100.0 if base_close else None})
+            # Separately score the model's predicted class against the exact first-touch
+            # Target used for training. This is distinct from close-to-close direction.
+            try:
+                target_value = pd.to_numeric(pd.Series([df["Target"].iloc[base_pos]]), errors="coerce").iloc[0]
+                predicted_class = item.get("model_class_prediction")
+                if pd.notna(target_value) and predicted_class in (-1, 0, 1):
+                    item["training_target"] = int(target_value)
+                    item["target_label_match"] = bool(int(predicted_class) == int(target_value))
+                    item["target_label_scored_at"] = datetime.now(JST).isoformat()
+            except (KeyError, TypeError, ValueError, IndexError, OverflowError):
+                pass
             changed = True
         except (KeyError, TypeError, ValueError, IndexError, OverflowError):
             continue
@@ -474,8 +496,11 @@ def record_forecast_and_update(df, ticker, interval, signal, probs, horizon=LOOK
     exists = any(x.get("ticker") == ticker and x.get("interval") == interval and x.get("bar_timestamp") == bar_ts for x in items)
     if not exists:
         raw_signal = "BUY" if str(signal).startswith("BUY") else "SELL" if str(signal).startswith("SELL") else "WAIT"
+        _class_probabilities = {-1: int(probs.get("sell", 0)), 0: int(probs.get("wait", 100)), 1: int(probs.get("buy", 0))}
+        _model_class_prediction = max((-1, 0, 1), key=lambda _c: _class_probabilities[_c])
         items.append({"ticker": ticker, "interval": interval, "bar_timestamp": bar_ts,
                       "reference_close": float(df["Close"].iloc[-1]), "signal": raw_signal,
+                      "model_class_prediction": int(_model_class_prediction),
                       "buy_pct": int(probs.get("buy", 0)), "sell_pct": int(probs.get("sell", 0)),
                       "wait_pct": int(probs.get("wait", 100)), "horizon_bars": int(horizon),
                       "status": "PENDING", "created_at": datetime.now(JST).isoformat(),
@@ -1036,9 +1061,8 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             status = "SELL (売り)"
         else:
             status = "WAIT (様子見)"
-        # Automatically save a forecast per completed bar and score it after LOOKAHEAD_BARS.
-        # This evaluates price direction only; it does not infer actual trades or net profit.
-        record_forecast_and_update(data, ticker, interval, status, probs, LOOKAHEAD_BARS)
+        # Forecast logging is performed after freshness and multi-timeframe safety gates.
+        # This avoids recording a raw BUY/SELL recommendation when the final UI decision is WAIT.
         atr_ratio = float(data["ATR_Ratio"].iloc[-1]) if "ATR_Ratio" in data else 0.0
         market_type = "トレンド相場" if adx >= 25 else "レンジ相場"
         if atr_ratio > 0.01:
@@ -1059,7 +1083,7 @@ if "settings_loaded" not in st.session_state:
     st.session_state["settings_loaded"] = True
 
 st.title("AI FX分析ツール")
-st.caption("AI分析・注文条件の計算補助専用。証券口座への接続・自動発注は行いません。数時間〜数日保有向けに日足・4時間足・1時間足・15分足を組み合わせ、保存済み予測の通貨ペア別・時間足別検証を確認できます。表示確率はモデル出力で、利益確率・実際の勝率を保証しません。データが古い場合は売買推奨を判定保留にします。")
+st.caption("価格分析・注文条件の計算補助専用｜口座接続・自動発注なし。まず通貨ペアと時間足を選び、判定・データ鮮度・想定損失を確認してください。表示確率や分類一致率は実際の勝率・利益を保証しません。")
 
 # iPad / スマートフォンで selectbox の検索キーボードが出る不便さを避けるため、
 # 通貨ペア・時間足はタップで切り替えるラジオボタンにする。
@@ -1256,27 +1280,35 @@ def _render_main_area():
     freshness_check_ok = False
     age_minutes = None
     try:
+        # Do not guess the timezone of a naive timestamp. If the provider omits timezone
+        # information, freshness is unknown and new-entry decisions are held for safety.
         if last_bar_index.tzinfo is None:
-            last_bar_utc = last_bar_index.tz_localize("UTC")
-        else:
-            last_bar_utc = last_bar_index.tz_convert("UTC")
-        now_utc = pd.Timestamp.now(tz="UTC")
-        age_minutes = max(0.0, (now_utc - last_bar_utc).total_seconds() / 60.0)
-        freshness_check_ok = True
-        # Limits are deliberately conservative; FX closes and provider delays can create false alarms.
-        stale_limits = {"5m": 25, "15m": 60, "1h": 210, "4h": 600, "1d": 2160}
-        stale_limit = stale_limits.get(tf_config["interval"], 210)
-        data_is_stale = age_minutes > stale_limit
-        if data_is_stale:
+            freshness_check_ok = False
+            data_is_stale = True
             st.warning(
-                f"価格データが古い可能性があります（最終確定足から約{age_minutes / 60:.1f}時間、判定基準 {stale_limit / 60:.1f}時間）。"
-                "日足は休場日やデータ配信元の時刻仕様でも古く見える場合があります。Yahoo Financeの時刻は松井証券FXのリアルタイムレートではありません。"
-                "松井証券の現在Bid/Askを確認し、データ更新を確認できるまで新規注文判断を保留してください。"
+                "価格データの時刻にタイムゾーン情報がありません。UTCと決めつけず、"
+                "安全のため新規注文判断を保留します。配信元の時刻仕様と松井証券FXの現在Bid/Askを確認してください。"
             )
         else:
-            st.caption(f"データ鮮度の目安：最終確定足から約{age_minutes / 60:.1f}時間（配信元の遅延・時刻仕様を完全には検出できません）。")
+            last_bar_utc = last_bar_index.tz_convert("UTC")
+            now_utc = pd.Timestamp.now(tz="UTC")
+            age_minutes = max(0.0, (now_utc - last_bar_utc).total_seconds() / 60.0)
+            freshness_check_ok = True
+            # Limits are deliberately conservative; FX closes and provider delays can create false alarms.
+            stale_limits = {"5m": 25, "15m": 60, "1h": 210, "4h": 600, "1d": 2160}
+            stale_limit = stale_limits.get(tf_config["interval"], 210)
+            data_is_stale = age_minutes > stale_limit
+            if data_is_stale:
+                st.warning(
+                    f"価格データが古い可能性があります（最終確定足から約{age_minutes / 60:.1f}時間、判定基準 {stale_limit / 60:.1f}時間）。"
+                    "休場や配信遅延の可能性があります。Yahoo Financeの時刻は松井証券FXのリアルタイムレートではありません。"
+                    "松井証券の現在Bid/Askを確認し、データ更新を確認できるまで新規注文判断を保留してください。"
+                )
+            else:
+                st.caption(f"データ鮮度の目安：最終確定足から約{age_minutes / 60:.1f}時間（配信元の遅延・時刻仕様を完全には検出できません）。")
     except Exception:
         data_is_stale = True
+        freshness_check_ok = False
         st.warning("価格データの時刻を検証できません。安全のため新規注文判断を保留し、証券会社の現在レートを確認してください。")
     latest_price = float(clean_series(data["Close"]).iloc[-1])
     latest_atr = float(clean_series(data["ATR"]).iloc[-1]) if "ATR" in data else latest_price * 0.005
@@ -1331,6 +1363,11 @@ def _render_main_area():
             _against = [name for name, sign in _required_signs if sign != _direction]
             status = "WAIT（AIと時間足が不一致）"
             mtf_gate_reason = "AI判定と時間足の方向が一致しません（" + "・".join(_against) + "）。無理に方向を決めず、判定を保留しました。"
+    # Save the final gated decision only when the selected price series passed freshness checks.
+    # Stale/unknown timestamps must not create apparently actionable forecast records.
+    if not data_is_stale and freshness_check_ok:
+        record_forecast_and_update(data, ticker, tf_config["interval"], status, prob_dict, LOOKAHEAD_BARS)
+
     std_series = clean_series(data["Close"]).rolling(20, min_periods=1).std()
     band_width_pct = float((std_series.iloc[-1] * 4.0) / (latest_price + 1e-10) * 100)
     adx_val_curr = float(clean_series(data["ADX"]).iloc[-1]) if "ADX" in data else 20.0
@@ -1857,17 +1894,17 @@ def _render_main_area():
     # st.tabs() はボタン操作などの再実行後に先頭タブへ戻ることがあるため、
     # session_state に選択中の画面を保存するラジオ式ナビゲーションに変更。
     APP_SECTIONS = [
-        "📈 メインチャート",
-        "⚡ 単発トレード (AI全自動アシスト)",
-        "📰 経済指標＆為替ニュースAI予測",
-        "📋 松井証券 リピート設定 & リスク管理",
-        "🤖 AI分析詳細 & 自己学習ノート",
+        "📈 チャート",
+        "⚡ 単発注文の計算",
+        "📰 ニュース・経済指標",
+        "📋 リピート注文・リスク",
+        "🤖 AI検証・履歴",
     ]
-    active_section = st.radio(
+    # Compact navigation is easier to use on iPad/phone than a row of long, clipped labels.
+    active_section = st.selectbox(
         "表示する画面",
         APP_SECTIONS,
-        key="active_app_section",
-        horizontal=True,
+        key="active_app_section_v2",
         label_visibility="collapsed",
     )
 
@@ -2591,19 +2628,12 @@ def _render_main_area():
         else:
             st.info("この単純試算だけでは安全性を判断できません。")
         st.markdown("---")
-        st.markdown("##### 📈 リターン・回転数シミュレーション（参考値）")
-        st.caption("実際の利確回数を予測する根拠は限定的です。参考シナリオであり、利益予測として利用しないでください。")
-        net_trap_pips = max(0.0, float(trap_width_pips) - spread_pips)
-        estimated_monthly_turns = max(0, int((latest_atr / (max(1.0, float(trap_width_pips)) * pip_unit)) * 6))
-        est_monthly_profit = estimated_monthly_turns * net_trap_pips * pip_value_yen
-        est_annual_profit = est_monthly_profit * 12
-        est_monthly_roi = est_monthly_profit / account_balance_val * 100 if account_balance_val > 0 else 0
-        est_annual_roi = est_annual_profit / account_balance_val * 100 if account_balance_val > 0 else 0
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("仮定上の月間回数", f"{estimated_monthly_turns} 回")
-        sc2.metric("仮定上の月間損益", f"{est_monthly_profit:,.0f} 円" if risk_calc_available else "算出不可")
-        sc3.metric("仮定上の月間比率", f"{est_monthly_roi:.1f}%" if risk_calc_available else "算出不可")
-        sc4.metric("単純年換算比率", f"{est_annual_roi:.1f}%" if risk_calc_available else "算出不可")
+        st.markdown("##### 📌 損益見通しについて")
+        st.caption(
+            "ATRだけから月間の約定回数・利益を信頼性高く予測することはできないため、"
+            "根拠の弱い月間・年間利益予測は表示しません。上の想定損失・必要証拠金の概算を確認し、"
+            "松井証券FXの最新条件と注文画面で最終確認してください。"
+        )
 
     elif active_section == APP_SECTIONS[4]:
         st.markdown("##### 🤖 AI予測モデルの評価と内訳")
@@ -2623,6 +2653,15 @@ def _render_main_area():
         fc3.metric("方向一致率", f"{(correct_forecasts / len(directional_forecasts) * 100):.1f}%" if directional_forecasts else "データ不足")
         fc4.metric("採点対象外", f"{len(expired_forecasts)} 件")
         st.caption(f"予測後{LOOKAHEAD_BARS}本の確定足終値で方向を自動採点します。WAITは方向一致率から除外。取得範囲外になった未検証記録は誤採点せず『採点対象外』へ変更します。これはYahoo Finance価格の方向性検証で、実際の取引勝率・利益・約定を示すものではありません。検証はアプリが起動し、対象データを取得したときに進みます。")
+        _label_scored = [x for x in relevant_forecasts if isinstance(x.get("target_label_match"), bool)]
+        if _label_scored:
+            _label_hits = sum(bool(x.get("target_label_match")) for x in _label_scored)
+            with st.expander("学習ラベルとの一致（補助評価）", expanded=False):
+                st.metric("学習ラベル一致率", f"{_label_hits / len(_label_scored) * 100:.1f}%", f"検証済み: {len(_label_scored)}件")
+                st.caption("モデルの予測クラスと、学習に使うATR利確・損切りの先着ラベルを比較します。終値方向の一致率とは別指標で、実取引の勝率や利益を示しません。件数が少ない間は参考値です。")
+        else:
+            with st.expander("学習ラベルとの一致（補助評価）", expanded=False):
+                st.info("学習ラベルの採点記録がまだありません。予測後の確定足が十分に蓄積すると表示されます。")
         _wait_records = [x for x in relevant_forecasts if x.get("signal") == "WAIT"]
         _reason_counts = {}
         for _item in _wait_records:
