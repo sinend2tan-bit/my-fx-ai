@@ -1,6 +1,7 @@
 {
-  "schema_version": 14,
-  "last_run_jst": "2026-10-25T16:34:07.188236+09:00",
+  "schema_version": 15,
+  "scanner_version": "v15",
+  "last_run_jst": "2026-10-25T16:47:23.030888+09:00",
   "mode": "freshness_gate_first_multi_period_validation_news_risk_no_auto_orders",
   "interval": "1h",
   "data_freshness_policy": {
@@ -29,10 +30,10 @@
     {
       "name": "米ドル/円 (USD/JPY)",
       "ticker": "USDJPY=X",
-      "updated_at_jst": "2026-10-25T16:34:08.022243+09:00",
+      "updated_at_jst": "2026-10-25T16:47:23.579093+09:00",
       "decision": "データ古い・保留",
       "direction": "様子見",
-      "reason": "最新の確定足から約2134分経過しているため、検証計算を省略して保留します。市場休場時は次の新しい確定足が取得できるまで判断に使用しません。",
+      "reason": "最新の確定足から約2147分経過しているため、検証計算を省略して保留します。市場休場時は次の新しい確定足が取得できるまで判断に使用しません。",
       "price": 156.83399963378906,
       "spread_pips": 0.2,
       "timeframe_trends": [
@@ -42,12 +43,12 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": null,
-      "data_age_minutes": 2134.1,
+      "data_age_minutes": 2147.4,
       "validation": {},
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-25T16:34:07.201732+09:00",
+      "news_checked_at_jst": "2026-10-25T16:47:23.049098+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -62,10 +63,10 @@
     {
       "name": "英ポンド/円 (GBP/JPY)",
       "ticker": "GBPJPY=X",
-      "updated_at_jst": "2026-10-25T16:34:09.210631+09:00",
+      "updated_at_jst": "2026-10-25T16:47:24.402614+09:00",
       "decision": "データ古い・保留",
       "direction": "様子見",
-      "reason": "最新の確定足から約2074分経過しているため、検証計算を省略して保留します。市場休場時は次の新しい確定足が取得できるまで判断に使用しません。",
+      "reason": "最新の確定足から約2087分経過しているため、検証計算を省略して保留します。市場休場時は次の新しい確定足が取得できるまで判断に使用しません。",
       "price": 209.83700561523438,
       "spread_pips": 1.0,
       "timeframe_trends": [
@@ -75,12 +76,12 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": null,
-      "data_age_minutes": 2074.2,
+      "data_age_minutes": 2087.4,
       "validation": {},
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-25T16:34:08.738628+09:00",
+      "news_checked_at_jst": "2026-10-25T16:47:24.070712+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -95,10 +96,10 @@
     {
       "name": "ユーロ/円 (EUR/JPY)",
       "ticker": "EURJPY=X",
-      "updated_at_jst": "2026-10-25T16:34:10.081502+09:00",
+      "updated_at_jst": "2026-10-25T16:47:25.058284+09:00",
       "decision": "データ古い・保留",
       "direction": "様子見",
-      "reason": "最新の確定足から約2074分経過しているため、検証計算を省略して保留します。市場休場時は次の新しい確定足が取得できるまで判断に使用しません。",
+      "reason": "最新の確定足から約2087分経過しているため、検証計算を省略して保留します。市場休場時は次の新しい確定足が取得できるまで判断に使用しません。",
       "price": 175.6280059814453,
       "spread_pips": 0.5,
       "timeframe_trends": [
@@ -108,12 +109,12 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": null,
-      "data_age_minutes": 2074.2,
+      "data_age_minutes": 2087.4,
       "validation": {},
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-25T16:34:09.884481+09:00",
+      "news_checked_at_jst": "2026-10-25T16:47:24.909676+09:00",
       "news_status": "no_recent_articles",
       "news_article_count": 1,
       "news_recent_count": 0,
@@ -135,10 +136,10 @@
     {
       "name": "豪ドル/円 (AUD/JPY)",
       "ticker": "AUDJPY=X",
-      "updated_at_jst": "2026-10-25T16:34:11.143037+09:00",
+      "updated_at_jst": "2026-10-25T16:47:25.998798+09:00",
       "decision": "データ古い・保留",
       "direction": "様子見",
-      "reason": "最新の確定足から約2074分経過しているため、検証計算を省略して保留します。市場休場時は次の新しい確定足が取得できるまで判断に使用しません。",
+      "reason": "最新の確定足から約2087分経過しているため、検証計算を省略して保留します。市場休場時は次の新しい確定足が取得できるまで判断に使用しません。",
       "price": 110.29399871826172,
       "spread_pips": 0.6,
       "timeframe_trends": [
@@ -148,12 +149,12 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": null,
-      "data_age_minutes": 2074.2,
+      "data_age_minutes": 2087.4,
       "validation": {},
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-25T16:34:10.692638+09:00",
+      "news_checked_at_jst": "2026-10-25T16:47:25.619331+09:00",
       "news_status": "empty",
       "news_article_count": 0,
       "news_recent_count": 0,
@@ -168,10 +169,10 @@
     {
       "name": "ユーロ/米ドル (EUR/USD)",
       "ticker": "EURUSD=X",
-      "updated_at_jst": "2026-10-25T16:34:12.026471+09:00",
+      "updated_at_jst": "2026-10-25T16:47:26.703949+09:00",
       "decision": "データ古い・保留",
       "direction": "様子見",
-      "reason": "最新の確定足から約2074分経過しているため、検証計算を省略して保留します。市場休場時は次の新しい確定足が取得できるまで判断に使用しません。",
+      "reason": "最新の確定足から約2088分経過しているため、検証計算を省略して保留します。市場休場時は次の新しい確定足が取得できるまで判断に使用しません。",
       "price": 1.1204482316970825,
       "spread_pips": 0.4,
       "timeframe_trends": [
@@ -181,12 +182,12 @@
       ],
       "fast_move_detected": false,
       "fast_move_atr_ratio": null,
-      "data_age_minutes": 2074.2,
+      "data_age_minutes": 2087.5,
       "validation": {},
       "buy_pct": null,
       "sell_pct": null,
       "neutral_pct": null,
-      "news_checked_at_jst": "2026-10-25T16:34:11.915806+09:00",
+      "news_checked_at_jst": "2026-10-25T16:47:26.502859+09:00",
       "news_status": "no_recent_articles",
       "news_article_count": 10,
       "news_recent_count": 0,
@@ -261,1286 +262,6 @@
     }
   ],
   "history": [
-    {
-      "time_jst": "2026-10-22T00:57:59.454429+09:00",
-      "metrics": {
-        "USDJPY=X": {
-          "pair": "米ドル/円 (USD/JPY)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 158.10499572753906,
-          "bar_time_jst": "2026-10-21 23:00",
-          "data_age_minutes": 117.8,
-          "validation_balanced_accuracy_pct": 47.5,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1385,
-          "timeframe_trends": [
-            "下降",
-            "中立",
-            "上昇"
-          ]
-        },
-        "GBPJPY=X": {
-          "pair": "英ポンド/円 (GBP/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 211.63900756835938,
-          "bar_time_jst": "2026-10-21 23:00",
-          "data_age_minutes": 117.9,
-          "validation_balanced_accuracy_pct": 35.8,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1385,
-          "timeframe_trends": [
-            "上昇",
-            "上昇",
-            "中立"
-          ]
-        },
-        "EURJPY=X": {
-          "pair": "ユーロ/円 (EUR/JPY)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 177.45799255371094,
-          "bar_time_jst": "2026-10-21 23:00",
-          "data_age_minutes": 117.9,
-          "validation_balanced_accuracy_pct": 41.9,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1390,
-          "timeframe_trends": [
-            "中立",
-            "下降",
-            "下降"
-          ]
-        },
-        "AUDJPY=X": {
-          "pair": "豪ドル/円 (AUD/JPY)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 111.11399841308594,
-          "bar_time_jst": "2026-10-21 23:00",
-          "data_age_minutes": 118.0,
-          "validation_balanced_accuracy_pct": 64.7,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1389,
-          "timeframe_trends": [
-            "上昇",
-            "中立",
-            "上昇"
-          ]
-        },
-        "EURUSD=X": {
-          "pair": "ユーロ/米ドル (EUR/USD)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 1.12271249294281,
-          "bar_time_jst": "2026-10-21 23:00",
-          "data_age_minutes": 118.0,
-          "validation_balanced_accuracy_pct": 46.1,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1387,
-          "timeframe_trends": [
-            "中立",
-            "中立",
-            "下降"
-          ]
-        }
-      }
-    },
-    {
-      "time_jst": "2026-10-22T01:27:37.133793+09:00",
-      "metrics": {
-        "USDJPY=X": {
-          "pair": "米ドル/円 (USD/JPY)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 158.13800048828125,
-          "bar_time_jst": "2026-10-22 00:00",
-          "data_age_minutes": 87.4,
-          "validation_balanced_accuracy_pct": 45.6,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1386,
-          "validation": {
-            "passed": true,
-            "mean_balanced_accuracy_pct": 45.6,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 3,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 754,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 42.5,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 962,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 45.9,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1170,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 48.4,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              }
-            ],
-            "reason": "複数期間の検証条件を満たした"
-          },
-          "timeframe_trends": [
-            "中立",
-            "中立",
-            "上昇"
-          ]
-        },
-        "GBPJPY=X": {
-          "pair": "英ポンド/円 (GBP/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 211.6719970703125,
-          "bar_time_jst": "2026-10-22 00:00",
-          "data_age_minutes": 87.5,
-          "validation_balanced_accuracy_pct": 31.9,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1386,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 31.9,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 0,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 754,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 33.3,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 962,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 30.9,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1170,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 31.5,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "timeframe_trends": [
-            "上昇",
-            "上昇",
-            "中立"
-          ]
-        },
-        "EURJPY=X": {
-          "pair": "ユーロ/円 (EUR/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 177.4040069580078,
-          "bar_time_jst": "2026-10-22 00:00",
-          "data_age_minutes": 87.5,
-          "validation_balanced_accuracy_pct": 30.6,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1391,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 30.6,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 0,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 757,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 24.7,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 965,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 34.4,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1173,
-                "validation_samples": 210,
-                "balanced_accuracy_pct": 32.7,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "timeframe_trends": [
-            "中立",
-            "下降",
-            "下降"
-          ]
-        },
-        "AUDJPY=X": {
-          "pair": "豪ドル/円 (AUD/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 111.09500122070312,
-          "bar_time_jst": "2026-10-22 00:00",
-          "data_age_minutes": 87.6,
-          "validation_balanced_accuracy_pct": 32.8,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1390,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 32.8,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 1,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 756,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 27.5,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 964,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 38.4,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1172,
-                "validation_samples": 210,
-                "balanced_accuracy_pct": 32.6,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "timeframe_trends": [
-            "上昇",
-            "中立",
-            "上昇"
-          ]
-        },
-        "EURUSD=X": {
-          "pair": "ユーロ/米ドル (EUR/USD)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 1.1223344802856445,
-          "bar_time_jst": "2026-10-22 00:00",
-          "data_age_minutes": 87.6,
-          "validation_balanced_accuracy_pct": 40.6,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1388,
-          "validation": {
-            "passed": true,
-            "mean_balanced_accuracy_pct": 40.6,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 3,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 755,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 38.0,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 963,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 40.9,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1171,
-                "validation_samples": 209,
-                "balanced_accuracy_pct": 43.0,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              }
-            ],
-            "reason": "複数期間の検証条件を満たした"
-          },
-          "timeframe_trends": [
-            "中立",
-            "中立",
-            "下降"
-          ]
-        }
-      }
-    },
-    {
-      "time_jst": "2026-10-22T06:41:37.504847+09:00",
-      "metrics": {
-        "USDJPY=X": {
-          "pair": "米ドル/円 (USD/JPY)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 158.1269989013672,
-          "bar_time_jst": "2026-10-22 05:00",
-          "data_age_minutes": 101.5,
-          "validation_balanced_accuracy_pct": 47.4,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1391,
-          "validation": {
-            "passed": true,
-            "mean_balanced_accuracy_pct": 47.4,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 3,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 757,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 47.2,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 965,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 48.3,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1173,
-                "validation_samples": 210,
-                "balanced_accuracy_pct": 46.7,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              }
-            ],
-            "reason": "複数期間の検証条件を満たした"
-          },
-          "timeframe_trends": [
-            "下降",
-            "上昇",
-            "上昇"
-          ]
-        },
-        "GBPJPY=X": {
-          "pair": "英ポンド/円 (GBP/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 211.78199768066406,
-          "bar_time_jst": "2026-10-22 05:00",
-          "data_age_minutes": 101.5,
-          "validation_balanced_accuracy_pct": 31.2,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1391,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 31.2,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 0,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 757,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 33.3,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 965,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 30.6,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1173,
-                "validation_samples": 210,
-                "balanced_accuracy_pct": 29.7,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "timeframe_trends": [
-            "上昇",
-            "上昇",
-            "中立"
-          ]
-        },
-        "EURJPY=X": {
-          "pair": "ユーロ/円 (EUR/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 177.59800720214844,
-          "bar_time_jst": "2026-10-22 05:00",
-          "data_age_minutes": 101.6,
-          "validation_balanced_accuracy_pct": 29.5,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1396,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 29.5,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 0,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 759,
-                "validation_samples": 209,
-                "balanced_accuracy_pct": 23.9,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 968,
-                "validation_samples": 209,
-                "balanced_accuracy_pct": 34.3,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1177,
-                "validation_samples": 211,
-                "balanced_accuracy_pct": 30.4,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "timeframe_trends": [
-            "上昇",
-            "中立",
-            "下降"
-          ]
-        },
-        "AUDJPY=X": {
-          "pair": "豪ドル/円 (AUD/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 111.1259994506836,
-          "bar_time_jst": "2026-10-22 05:00",
-          "data_age_minutes": 101.6,
-          "validation_balanced_accuracy_pct": 33.0,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1395,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 33.0,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 0,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 759,
-                "validation_samples": 209,
-                "balanced_accuracy_pct": 28.4,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 968,
-                "validation_samples": 209,
-                "balanced_accuracy_pct": 37.8,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1177,
-                "validation_samples": 210,
-                "balanced_accuracy_pct": 32.7,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "timeframe_trends": [
-            "上昇",
-            "中立",
-            "上昇"
-          ]
-        },
-        "EURUSD=X": {
-          "pair": "ユーロ/米ドル (EUR/USD)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 1.123721718788147,
-          "bar_time_jst": "2026-10-22 05:00",
-          "data_age_minutes": 101.6,
-          "validation_balanced_accuracy_pct": 41.7,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1393,
-          "validation": {
-            "passed": true,
-            "mean_balanced_accuracy_pct": 41.7,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 3,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 758,
-                "validation_samples": 209,
-                "balanced_accuracy_pct": 41.6,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 967,
-                "validation_samples": 209,
-                "balanced_accuracy_pct": 41.3,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1176,
-                "validation_samples": 209,
-                "balanced_accuracy_pct": 42.2,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              }
-            ],
-            "reason": "複数期間の検証条件を満たした"
-          },
-          "timeframe_trends": [
-            "上昇",
-            "下降",
-            "下降"
-          ]
-        }
-      }
-    },
-    {
-      "time_jst": "2026-10-22T13:41:19.377742+09:00",
-      "metrics": {
-        "USDJPY=X": {
-          "pair": "米ドル/円 (USD/JPY)",
-          "status": "ok",
-          "decision": "方向不一致・見送り",
-          "direction": "買い",
-          "close": 157.6959991455078,
-          "bar_time_jst": "2026-10-22 12:00",
-          "data_age_minutes": 101.2,
-          "validation_balanced_accuracy_pct": 46.0,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1374,
-          "validation": {
-            "passed": true,
-            "mean_balanced_accuracy_pct": 46.0,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 3,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 747,
-                "validation_samples": 206,
-                "balanced_accuracy_pct": 41.9,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 953,
-                "validation_samples": 206,
-                "balanced_accuracy_pct": 52.1,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1159,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 44.1,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              }
-            ],
-            "reason": "複数期間の検証条件を満たした"
-          },
-          "timeframe_trends": [
-            "下降",
-            "中立",
-            "上昇"
-          ]
-        },
-        "GBPJPY=X": {
-          "pair": "英ポンド/円 (GBP/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 211.25999450683594,
-          "bar_time_jst": "2026-10-22 12:00",
-          "data_age_minutes": 101.2,
-          "validation_balanced_accuracy_pct": 31.4,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1374,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 31.4,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 0,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 747,
-                "validation_samples": 206,
-                "balanced_accuracy_pct": 30.3,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 953,
-                "validation_samples": 206,
-                "balanced_accuracy_pct": 33.2,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1159,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 30.8,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "timeframe_trends": [
-            "中立",
-            "上昇",
-            "中立"
-          ]
-        },
-        "EURJPY=X": {
-          "pair": "ユーロ/円 (EUR/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 177.2689971923828,
-          "bar_time_jst": "2026-10-22 12:00",
-          "data_age_minutes": 101.3,
-          "validation_balanced_accuracy_pct": 31.7,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1379,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 31.7,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 0,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 750,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 26.1,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 957,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 35.7,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1164,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 33.4,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "timeframe_trends": [
-            "中立",
-            "下降",
-            "下降"
-          ]
-        },
-        "AUDJPY=X": {
-          "pair": "豪ドル/円 (AUD/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 110.56300354003906,
-          "bar_time_jst": "2026-10-22 12:00",
-          "data_age_minutes": 101.3,
-          "validation_balanced_accuracy_pct": 32.3,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1378,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 32.3,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 0,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 749,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 27.6,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 956,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 33.5,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1163,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 35.7,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "timeframe_trends": [
-            "中立",
-            "中立",
-            "上昇"
-          ]
-        },
-        "EURUSD=X": {
-          "pair": "ユーロ/米ドル (EUR/USD)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 1.12447988986969,
-          "bar_time_jst": "2026-10-22 12:00",
-          "data_age_minutes": 101.3,
-          "validation_balanced_accuracy_pct": 42.1,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1376,
-          "validation": {
-            "passed": true,
-            "mean_balanced_accuracy_pct": 42.1,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 3,
-            "fold_count": 3,
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 748,
-                "validation_samples": 206,
-                "balanced_accuracy_pct": 39.6,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 954,
-                "validation_samples": 206,
-                "balanced_accuracy_pct": 39.8,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1160,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 47.0,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              }
-            ],
-            "reason": "複数期間の検証条件を満たした"
-          },
-          "timeframe_trends": [
-            "上昇",
-            "中立",
-            "下降"
-          ]
-        }
-      }
-    },
-    {
-      "time_jst": "2026-10-22T20:49:37.756301+09:00",
-      "metrics": {
-        "USDJPY=X": {
-          "pair": "米ドル/円 (USD/JPY)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 156.87899780273438,
-          "bar_time_jst": "2026-10-22 19:00",
-          "data_age_minutes": 109.4,
-          "validation_balanced_accuracy_pct": 46.6,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1381,
-          "validation": {
-            "passed": true,
-            "mean_balanced_accuracy_pct": 46.6,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 3,
-            "fold_count": 3,
-            "class_recall_pct": {
-              "sell": 38.0,
-              "neutral": 42.3,
-              "buy": 58.5
-            },
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 751,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 40.6,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 958,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 52.9,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1165,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 46.3,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              }
-            ],
-            "reason": "複数期間の検証条件を満たした"
-          },
-          "class_recall_pct": {
-            "sell": 38.0,
-            "neutral": 42.3,
-            "buy": 58.5
-          },
-          "fast_move_detected": false,
-          "fast_move_atr_ratio": 0.54,
-          "wait_reason": "明確なAI方向シグナルなし",
-          "timeframe_trends": [
-            "下降",
-            "中立",
-            "上昇"
-          ]
-        },
-        "GBPJPY=X": {
-          "pair": "英ポンド/円 (GBP/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 209.86399841308594,
-          "bar_time_jst": "2026-10-22 19:00",
-          "data_age_minutes": 109.5,
-          "validation_balanced_accuracy_pct": 32.3,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1381,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 32.3,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 0,
-            "fold_count": 3,
-            "class_recall_pct": {
-              "sell": 53.1,
-              "neutral": 4.5,
-              "buy": 33.3
-            },
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 751,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 30.5,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 958,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 36.1,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1165,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 30.3,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "class_recall_pct": {
-            "sell": 53.1,
-            "neutral": 4.5,
-            "buy": 33.3
-          },
-          "fast_move_detected": false,
-          "fast_move_atr_ratio": 1.81,
-          "wait_reason": "複数期間の時系列検証条件を満たさない",
-          "timeframe_trends": [
-            "中立",
-            "中立",
-            "中立"
-          ]
-        },
-        "EURJPY=X": {
-          "pair": "ユーロ/円 (EUR/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 175.91900634765625,
-          "bar_time_jst": "2026-10-22 19:00",
-          "data_age_minutes": 109.5,
-          "validation_balanced_accuracy_pct": 33.2,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1386,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 33.2,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 1,
-            "fold_count": 3,
-            "class_recall_pct": {
-              "sell": 35.6,
-              "neutral": 3.6,
-              "buy": 62.0
-            },
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 754,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 22.9,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 962,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 43.0,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1170,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 33.7,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "class_recall_pct": {
-            "sell": 35.6,
-            "neutral": 3.6,
-            "buy": 62.0
-          },
-          "fast_move_detected": false,
-          "fast_move_atr_ratio": 1.68,
-          "wait_reason": "複数期間の時系列検証条件を満たさない",
-          "timeframe_trends": [
-            "下降",
-            "下降",
-            "下降"
-          ]
-        },
-        "AUDJPY=X": {
-          "pair": "豪ドル/円 (AUD/JPY)",
-          "status": "ok",
-          "decision": "見送り",
-          "direction": "様子見",
-          "close": 109.95800018310547,
-          "bar_time_jst": "2026-10-22 19:00",
-          "data_age_minutes": 109.6,
-          "validation_balanced_accuracy_pct": 33.2,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": false,
-          "training_samples": 1385,
-          "validation": {
-            "passed": false,
-            "mean_balanced_accuracy_pct": 33.2,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 0,
-            "fold_count": 3,
-            "class_recall_pct": {
-              "sell": 35.6,
-              "neutral": 20.0,
-              "buy": 50.0
-            },
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 753,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 29.1,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 961,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 35.4,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1169,
-                "validation_samples": 208,
-                "balanced_accuracy_pct": 35.2,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": false
-              }
-            ],
-            "reason": "複数期間の検証品質条件を満たさない"
-          },
-          "class_recall_pct": {
-            "sell": 35.6,
-            "neutral": 20.0,
-            "buy": 50.0
-          },
-          "fast_move_detected": false,
-          "fast_move_atr_ratio": 0.65,
-          "wait_reason": "複数期間の時系列検証条件を満たさない",
-          "timeframe_trends": [
-            "中立",
-            "下降",
-            "上昇"
-          ]
-        },
-        "EURUSD=X": {
-          "pair": "ユーロ/米ドル (EUR/USD)",
-          "status": "ok",
-          "decision": "様子見",
-          "direction": "様子見",
-          "close": 1.1217050552368164,
-          "bar_time_jst": "2026-10-22 19:00",
-          "data_age_minutes": 109.6,
-          "validation_balanced_accuracy_pct": 40.7,
-          "baseline_balanced_accuracy_pct": 33.3,
-          "quality_gate_passed": true,
-          "training_samples": 1383,
-          "validation": {
-            "passed": true,
-            "mean_balanced_accuracy_pct": 40.7,
-            "mean_baseline_balanced_accuracy_pct": 33.3,
-            "folds_passed": 3,
-            "fold_count": 3,
-            "class_recall_pct": {
-              "sell": 47.2,
-              "neutral": 65.0,
-              "buy": 19.0
-            },
-            "fold_results": [
-              {
-                "fold": 1,
-                "status": "ok",
-                "train_samples": 752,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 38.6,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 2,
-                "status": "ok",
-                "train_samples": 959,
-                "validation_samples": 207,
-                "balanced_accuracy_pct": 39.7,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              },
-              {
-                "fold": 3,
-                "status": "ok",
-                "train_samples": 1166,
-                "validation_samples": 209,
-                "balanced_accuracy_pct": 43.7,
-                "baseline_balanced_accuracy_pct": 33.3,
-                "passed": true
-              }
-            ],
-            "reason": "複数期間の検証条件を満たした"
-          },
-          "class_recall_pct": {
-            "sell": 47.2,
-            "neutral": 65.0,
-            "buy": 19.0
-          },
-          "fast_move_detected": false,
-          "fast_move_atr_ratio": 2.16,
-          "wait_reason": "明確なAI方向シグナルなし",
-          "timeframe_trends": [
-            "中立",
-            "下降",
-            "下降"
-          ]
-        }
-      }
-    },
     {
       "run_at_jst": "2026-10-22T21:28:56.535088+09:00",
       "summary": [
@@ -41267,7 +39988,103 @@
           "news_retrieval_errors": []
         }
       ]
+    },
+    {
+      "run_at_jst": "2026-10-25T16:47:23.030888+09:00",
+      "summary": [
+        "米ドル/円 (USD/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={}",
+        "英ポンド/円 (GBP/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={}",
+        "ユーロ/円 (EUR/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=no_recent_articles / 重要ニュース=False / 再現率={}",
+        "豪ドル/円 (AUD/JPY): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=empty / 重要ニュース=False / 再現率={}",
+        "ユーロ/米ドル (EUR/USD): データ古い・保留 / 様子見 / 買いNone%・売りNone% / ニュース=no_recent_articles / 重要ニュース=False / 再現率={}"
+      ],
+      "pairs": [
+        {
+          "name": "米ドル/円 (USD/JPY)",
+          "ticker": "USDJPY=X",
+          "decision": "データ古い・保留",
+          "direction": "様子見",
+          "price": 156.83399963378906,
+          "data_age_minutes": 2147.4,
+          "buy_pct": null,
+          "sell_pct": null,
+          "news_status": "empty",
+          "validation_passed": null,
+          "model_validation_ok": null,
+          "pnl_stability_ok": null,
+          "simulated_net_pips": null,
+          "simulated_trades": null
+        },
+        {
+          "name": "英ポンド/円 (GBP/JPY)",
+          "ticker": "GBPJPY=X",
+          "decision": "データ古い・保留",
+          "direction": "様子見",
+          "price": 209.83700561523438,
+          "data_age_minutes": 2087.4,
+          "buy_pct": null,
+          "sell_pct": null,
+          "news_status": "empty",
+          "validation_passed": null,
+          "model_validation_ok": null,
+          "pnl_stability_ok": null,
+          "simulated_net_pips": null,
+          "simulated_trades": null
+        },
+        {
+          "name": "ユーロ/円 (EUR/JPY)",
+          "ticker": "EURJPY=X",
+          "decision": "データ古い・保留",
+          "direction": "様子見",
+          "price": 175.6280059814453,
+          "data_age_minutes": 2087.4,
+          "buy_pct": null,
+          "sell_pct": null,
+          "news_status": "no_recent_articles",
+          "validation_passed": null,
+          "model_validation_ok": null,
+          "pnl_stability_ok": null,
+          "simulated_net_pips": null,
+          "simulated_trades": null
+        },
+        {
+          "name": "豪ドル/円 (AUD/JPY)",
+          "ticker": "AUDJPY=X",
+          "decision": "データ古い・保留",
+          "direction": "様子見",
+          "price": 110.29399871826172,
+          "data_age_minutes": 2087.4,
+          "buy_pct": null,
+          "sell_pct": null,
+          "news_status": "empty",
+          "validation_passed": null,
+          "model_validation_ok": null,
+          "pnl_stability_ok": null,
+          "simulated_net_pips": null,
+          "simulated_trades": null
+        },
+        {
+          "name": "ユーロ/米ドル (EUR/USD)",
+          "ticker": "EURUSD=X",
+          "decision": "データ古い・保留",
+          "direction": "様子見",
+          "price": 1.1204482316970825,
+          "data_age_minutes": 2087.5,
+          "buy_pct": null,
+          "sell_pct": null,
+          "news_status": "no_recent_articles",
+          "validation_passed": null,
+          "model_validation_ok": null,
+          "pnl_stability_ok": null,
+          "simulated_net_pips": null,
+          "simulated_trades": null
+        }
+      ]
     }
   ],
+  "history_policy": {
+    "max_runs": 50,
+    "detail": "履歴には軽量な要約のみを保存。詳細な検証値は最新実行のpairsに保存。"
+  },
   "safety_notice": "価格分析・注文補助専用です。証券口座接続・自動発注・自動決済は行いません。分析結果は将来の利益を保証しません。"
 }
