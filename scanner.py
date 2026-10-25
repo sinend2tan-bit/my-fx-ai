@@ -42,7 +42,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 17
+MODEL_VERSION = 18
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -195,6 +195,70 @@ def json_default(value):
     if isinstance(value, (pd.Timestamp, datetime)):
         return value.isoformat()
     return str(value)
+
+
+def timestamp_diagnostic(value):
+    """時刻を診断用に日本時間へ変換。naive時刻は勝手にUTC扱いせず明示する。"""
+    try:
+        ts = pd.Timestamp(value)
+        if ts.tzinfo is None:
+            return f"timezone_unknown:{ts.isoformat()}"
+        return ts.tz_convert("Asia/Tokyo").isoformat()
+    except Exception:
+        return "unparseable"
+
+
+def news_health_summary(pair_results):
+    """ニュース取得・記事有無・新着確認を混同せずに集計する。"""
+    statuses = [item.get("news_status", "unknown") for item in pair_results]
+    return {
+        "retrieval_error_pairs": sum(status == "error" for status in statuses),
+        "empty_result_pairs": sum(status == "empty" for status in statuses),
+        "articles_returned_but_none_recent_pairs": sum(status == "no_recent_articles" for status in statuses),
+        "recent_articles_checked_pairs": sum(status in {
+            "recent_articles_no_risk_keywords", "recent_articles_with_risk_keywords"
+        } for status in statuses),
+        "important_keyword_pairs": sum(status == "recent_articles_with_risk_keywords" for status in statuses),
+        "unknown_status_pairs": sum(status == "unknown" for status in statuses),
+        "status_counts": {status: statuses.count(status) for status in sorted(set(statuses))},
+        "note": "emptyは取得エラーと同義ではありません。記事なし・新着なし・取得エラーを区別しています。",
+    }
+
+
+def compare_previous_run(previous_state, pair_results):
+    """直前実行との変化を短く記録する。過去の値を現在の予測に混ぜない。"""
+    previous_pairs = previous_state.get("pairs", []) if isinstance(previous_state, dict) else []
+    if not isinstance(previous_pairs, list):
+        previous_pairs = []
+    previous_by_ticker = {
+        item.get("ticker"): item for item in previous_pairs
+        if isinstance(item, dict) and item.get("ticker")
+    }
+    comparisons = []
+    for item in pair_results:
+        old = previous_by_ticker.get(item.get("ticker"))
+        if not old:
+            comparisons.append({"ticker": item.get("ticker"), "name": item.get("name"), "status": "no_previous_pair_record"})
+            continue
+        old_age = safe_float(old.get("data_age_minutes"))
+        new_age = safe_float(item.get("data_age_minutes"))
+        age_delta = round(new_age - old_age, 1) if old_age is not None and new_age is not None else None
+        comparisons.append({
+            "ticker": item.get("ticker"),
+            "name": item.get("name"),
+            "status": "compared",
+            "previous_decision": old.get("decision"),
+            "current_decision": item.get("decision"),
+            "decision_changed": old.get("decision") != item.get("decision"),
+            "previous_freshness": old.get("data_freshness_status"),
+            "current_freshness": item.get("data_freshness_status"),
+            "previous_data_age_minutes": old_age,
+            "current_data_age_minutes": new_age,
+            "data_age_delta_minutes": age_delta,
+            "previous_news_status": old.get("news_status"),
+            "current_news_status": item.get("news_status"),
+        })
+    return comparisons
 
 
 def load_state():
@@ -360,6 +424,7 @@ def fetch_news(ticker):
     result = {
         "news_checked_at_jst": iso_now(),
         "news_status": "unknown",
+        "news_retrieval_status": "unknown",
         "news_article_count": 0,
         "news_recent_count": 0,
         "news_risk_detected": False,
@@ -435,6 +500,9 @@ def fetch_news(ticker):
         result["news_status"] = (
             "error" if retrieval_errors else "empty"
         )
+        result["news_retrieval_status"] = (
+            "error" if retrieval_errors else "no_articles_returned"
+        )
 
         if retrieval_errors:
             result["news_risk_reason"] = (
@@ -455,6 +523,7 @@ def fetch_news(ticker):
         )
         return result
 
+    result["news_retrieval_status"] = "articles_returned"
     result["news_article_count"] = len(raw_news)
 
     current_time = now_jst()
@@ -766,6 +835,13 @@ def bars(ticker, interval="1h", period="60d"):
     raw = raw.dropna(subset=required)
     raw = raw[~raw.index.duplicated(keep="last")].sort_index()
 
+    # timezone-aware timestamps are converted to UTC for a consistent internal index.
+    # Naive timestamps are not silently assigned a timezone; hourly freshness checks will hold them.
+    if raw.index.tz is not None:
+        raw.index = raw.index.tz_convert("UTC")
+    else:
+        print(f"[TIMEZONE DIAGNOSTIC] {ticker} {interval}: index has no timezone; no implicit conversion")
+
     if len(raw) < 221:
         print(f"[DATA SHORT] {ticker} {interval}: {len(raw)} bars")
         return None
@@ -849,7 +925,8 @@ def bars(ticker, interval="1h", period="60d"):
 
     print(
         f"[LATEST CONFIRMED BAR] {ticker} {interval}: "
-        f"time={latest_index.isoformat()}, "
+        f"time_source={latest_index.isoformat()}, "
+        f"time_jst={timestamp_diagnostic(latest_index)}, "
         f"close={latest_data['Close'].iloc[-1]}"
     )
 
@@ -933,11 +1010,22 @@ def bars(ticker, interval="1h", period="60d"):
     training_df.attrs["latest_features"] = feature_df.copy()
 
 
+    constant_features = [
+        col for col in FEATURE_COLUMNS
+        if training_df[col].nunique(dropna=True) <= 1
+    ]
+    print(
+        f"[FEATURE CONSTANT CHECK] pair={ticker}, interval={interval}, "
+        f"constant_model_features={constant_features}, "
+        f"count={len(constant_features)}"
+    )
     print(
         f"[TRAINING DATA] {ticker} {interval}: "
         f"rows={len(training_df)}, "
         f"last_labeled={training_df.index[-1].isoformat()}, "
+        f"last_labeled_jst={timestamp_diagnostic(training_df.index[-1])}, "
         f"latest_confirmed={latest_index.isoformat()}, "
+        f"latest_confirmed_jst={timestamp_diagnostic(latest_index)}, "
         f"close={latest_data['Close'].iloc[-1]}"
     )
     print(
@@ -2190,6 +2278,8 @@ def main():
         news_status_counts[status] = news_status_counts.get(status, 0) + 1
 
     # 実行単位の健康診断。実行成功と分析可能性を分けて見える化する。
+    news_health = news_health_summary(pair_results)
+    previous_comparison = compare_previous_run(previous_state, pair_results)
     run_health = {
         "pairs_total": len(pair_results),
         "fresh_data_pairs": sum(1 for item in pair_results if item.get("data_freshness_status") == "fresh"),
@@ -2197,9 +2287,14 @@ def main():
         "data_quality_fail_pairs": sum(1 for item in pair_results if item.get("data_quality_status") == "fail"),
         "validation_pass_pairs": sum(1 for item in pair_results if (item.get("validation") or {}).get("passed") is True),
         "validation_skipped_or_not_passed_pairs": sum(1 for item in pair_results if (item.get("validation") or {}).get("passed") is not True),
+        # 旧フィールド名は互換性のため残し、意味は「直近記事を確認できなかったペア」。
         "news_unavailable_pairs": sum(1 for item in pair_results if item.get("news_status") not in {
             "recent_articles_no_risk_keywords", "recent_articles_with_risk_keywords"
         }),
+        "news_retrieval_error_pairs": news_health["retrieval_error_pairs"],
+        "news_empty_result_pairs": news_health["empty_result_pairs"],
+        "news_no_recent_article_pairs": news_health["articles_returned_but_none_recent_pairs"],
+        "news_recent_articles_checked_pairs": news_health["recent_articles_checked_pairs"],
         "candidate_pairs": sum(1 for item in pair_results if item.get("decision") == "候補あり（手動確認のみ）"),
         "execution_note": "スキャン完了は売買検証成功を意味しません。候補数が0でも安全ゲートによる正常な保留の場合があります。",
     }
@@ -2208,7 +2303,7 @@ def main():
         "schema_version": MODEL_VERSION,
         "scanner_version": f"v{MODEL_VERSION}",
         "last_run_jst": started_at,
-        "mode": "v17_data_quality_run_health_freshness_directional_pnl_walk_forward_news_risk_no_auto_orders",
+        "mode": "v18_news_health_timezone_feature_diagnostics_previous_run_comparison_data_quality_freshness_directional_pnl_walk_forward_no_auto_orders",
         "interval": "1h",
         "data_freshness_policy": {
             "max_age_minutes": MAX_DATA_AGE_MINUTES,
@@ -2232,6 +2327,8 @@ def main():
             ),
         },
         "news_status_counts": news_status_counts,
+        "news_health": news_health,
+        "previous_run_comparison": previous_comparison,
         "run_health": run_health,
         "data_quality_policy": {
             "checks": ["OHLC欠損・非正価格", "高値安値と始値終値の整合性", "タイムゾーン不明", "未来時刻"],
@@ -2255,6 +2352,8 @@ def main():
     print("\n========== FX SCAN SUMMARY ==========")
     print("\n".join(summary))
     print("ニュース取得状況:", news_status_counts)
+    print("ニュース診断詳細:", json.dumps(news_health, ensure_ascii=False))
+    print("前回実行との比較:", json.dumps(previous_comparison, ensure_ascii=False))
     print("実行健康診断:", json.dumps(run_health, ensure_ascii=False))
     print("通貨ペア別理由:")
     for item in pair_results:
