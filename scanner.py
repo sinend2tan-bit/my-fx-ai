@@ -35,7 +35,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 8
+MODEL_VERSION = 9
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -1724,7 +1724,8 @@ def analyze_pair(name, config):
 
     try:
         # メイン分析は1時間足。4時間足・日足で方向の偏りを確認。
-        hourly = bars(ticker, interval="1h", period="60d")
+        # 検証窓を約2か月から約6か月へ拡大し、各期間の評価を安定させる。
+        hourly = bars(ticker, interval="1h", period="180d")
         four_hour = bars(ticker, interval="4h", period="90d")
         daily = bars(ticker, interval="1d", period="2y")
 
