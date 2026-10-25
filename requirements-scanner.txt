@@ -1,0 +1,8 @@
+# FX Cloud Scan (scanner.py) 専用の依存関係。
+# バージョンを固定し、依存側の破壊的変更でワークフローが突然落ちることを防ぐ。
+# scanner.py が直接 import するパッケージだけを列挙する
+# (numpy / pandas / yfinance / scikit-learn。それ以外はこれらの依存として解決される)。
+yfinance==0.2.66
+pandas==2.2.3
+numpy==2.0.2
+scikit-learn==1.5.2
