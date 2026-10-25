@@ -735,17 +735,52 @@ def bars(ticker, interval="1h", period="60d"):
         print(f"[DATA SHORT] {ticker} {interval}: {len(raw)} bars")
         return None
 
-    # 最新の取得足は進行中の可能性があるため除外する。
-    raw = raw.iloc[:-1].copy()
-
     if interval == "4h":
-        raw = raw.resample("4h").agg({
+        # 4時間足は、終了時刻を過ぎた1時間足だけから作成する。
+        # Yahoo Financeの時刻をUTCに統一する。
+        if raw.index.tz is None:
+            raw.index = raw.index.tz_localize("UTC")
+        else:
+            raw.index = raw.index.tz_convert("UTC")
+
+        # 配信遅延を考慮し、現在時刻より5分前を基準にする。
+        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=5)
+
+        # インデックスを足の開始時刻として扱い、終了済みの1時間足だけ残す。
+        raw = raw.loc[
+            (raw.index + pd.Timedelta(hours=1)) <= cutoff
+        ].copy()
+
+        if raw.empty:
+            print(
+                f"[DATA SHORT] {ticker} {interval}: "
+                "no completed hourly bars"
+            )
+            return None
+
+        # 4時間区間ごとの元データ本数を数える。
+        hourly_counts = raw["Close"].resample(
+            "4h", origin="start_day"
+        ).count()
+
+        # UTCの4時間区間に集約する。
+        raw = raw.resample("4h", origin="start_day").agg({
             "Open": "first",
             "High": "max",
             "Low": "min",
             "Close": "last",
             "Volume": "sum",
         }).dropna(subset=required)
+
+        # 終了済みで、かつ元の1時間足が4本そろった区間だけ採用する。
+        complete_counts = hourly_counts.reindex(raw.index).fillna(0)
+        raw = raw.loc[
+            ((raw.index + pd.Timedelta(hours=4)) <= cutoff)
+            & (complete_counts == 4)
+        ].copy()
+    else:
+        # 1時間足・日足は従来どおり最後の取得足を除外する。
+        raw = raw.iloc[:-1].copy()
 
     if len(raw) < 220:
         return None
