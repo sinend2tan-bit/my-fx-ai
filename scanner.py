@@ -26,6 +26,9 @@ MIN_TRAIN_ROWS = 180
 N_WALK_FORWARD_FOLDS = 3
 FAST_MOVE_ATR_MULTIPLE = 2.5
 
+# 最新の確定1時間足がこの時間を超えて古い場合は、検証計算を行わず保留する。
+MAX_DATA_AGE_MINUTES = 180
+
 # ニュースを新しいものとみなす時間
 NEWS_MAX_AGE_HOURS = 12
 
@@ -35,7 +38,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 12
+MODEL_VERSION = 14
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -1801,6 +1804,38 @@ def analyze_pair(name, config):
         result["price"] = safe_float(latest_data["Close"].iloc[-1])
         result["data_age_minutes"] = data_age_minutes(hourly)
 
+        # 最優先の安全ゲート：古いデータでは重い検証や売買方向の算出をしない。
+        # 週末・休場時に過去データから不要な売買候補を作らないための早期終了。
+        age = result["data_age_minutes"]
+        if age is None:
+            result["decision"] = "データ鮮度不明・保留"
+            result["reason"] = (
+                "最新の確定足の時刻を確認できないため、検証計算を行わず保留します。"
+            )
+            print(
+                f"[DATA FRESHNESS GATE] pair={name}, status=FAIL, "
+                "reason=age_unavailable, validation_skipped=True"
+            )
+            return result
+
+        if age > MAX_DATA_AGE_MINUTES:
+            result["decision"] = "データ古い・保留"
+            result["reason"] = (
+                f"最新の確定足から約{age:.0f}分経過しているため、検証計算を省略して保留します。"
+                "市場休場時は次の新しい確定足が取得できるまで判断に使用しません。"
+            )
+            print(
+                f"[DATA FRESHNESS GATE] pair={name}, status=FAIL, "
+                f"age_minutes={age}, max_age_minutes={MAX_DATA_AGE_MINUTES}, "
+                "validation_skipped=True"
+            )
+            return result
+
+        print(
+            f"[DATA FRESHNESS GATE] pair={name}, status=PASS, "
+            f"age_minutes={age}, max_age_minutes={MAX_DATA_AGE_MINUTES}"
+        )
+
         # 急変動判定も最新足を使う。
         # 直近3本の値動きと最新ATRを比較する。
         fast_move, fast_ratio = fast_move_detected(
@@ -1854,7 +1889,7 @@ def analyze_pair(name, config):
             )
             return result
 
-        if age > 180:
+        if age > MAX_DATA_AGE_MINUTES:
             result["decision"] = "データ古い・保留"
             result["reason"] = (
                 f"最新の確定足から約{age:.0f}分経過しているため保留します。"
@@ -1975,8 +2010,12 @@ def main():
     state = {
         "schema_version": MODEL_VERSION,
         "last_run_jst": started_at,
-        "mode": "multi_period_validation_with_news_risk_gate_no_auto_orders",
+        "mode": "freshness_gate_first_multi_period_validation_news_risk_no_auto_orders",
         "interval": "1h",
+        "data_freshness_policy": {
+            "max_age_minutes": MAX_DATA_AGE_MINUTES,
+            "notice": "古いデータでは時系列検証・売買方向の算出を省略し、判定保留にします。",
+        },
         "news_policy": {
             "source": "Yahoo Finance",
             "max_age_hours": NEWS_MAX_AGE_HOURS,
