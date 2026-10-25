@@ -35,7 +35,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 9
+MODEL_VERSION = 10
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -861,6 +861,9 @@ def bars(ticker, interval="1h", period="60d"):
     # 検証専用の仮想損益計算用。モデルの特徴量には絶対に含めない。
     # 学習ラベルと同じく、エントリー時ATRを基準に、今後8本の高値・安値で
     # 利確/損切りの先着を判定できるようにする。どちらにも到達しない場合は8本後終値。
+    # シグナル足の確定後に取引する想定で、次の足の始値を記録する。
+    # この列は仮想損益検証専用で、モデルの特徴量には含めない。
+    training_df["Future_Open_1"] = feature_df["Open"].shift(-1)
     training_df["Future_Close"] = feature_df["Close"].shift(-LOOKAHEAD_BARS)
     future_path_columns = []
     for step in range(1, LOOKAHEAD_BARS + 1):
@@ -872,7 +875,8 @@ def bars(ticker, interval="1h", period="60d"):
 
     training_df = training_df.dropna(
         subset=FEATURE_COLUMNS + [
-            "Target", "ATR", "Close", "Future_Close", *future_path_columns
+            "Target", "ATR", "Close", "Future_Open_1", "Future_Close",
+            *future_path_columns
         ]
     )
 
@@ -965,7 +969,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         }
 
     def simulated_pnl(predictions, test_rows, spread_pips, pip_size):
-        """非重複・検証区間内の概算。実約定成績ではない。"""
+        """次足始値エントリーによる非重複・検証区間内の概算。実約定成績ではない。"""
         rows = test_rows.sort_index()
         pred_by_index = dict(zip(test_rows.index, predictions))
         trades = []
@@ -984,7 +988,9 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             if direction not in (-1, 1):
                 continue  # 中立予測は取引しない
 
-            entry = safe_float(rows.at[idx, "Close"])
+            # シグナル足の終値では約定できないため、次の足の始値を使う。
+            # ATRと予測方向はシグナル足で確定した値を使用する。
+            entry = safe_float(rows.at[idx, "Future_Open_1"])
             exit_price = safe_float(rows.at[idx, "Future_Close"])
             entry_atr = safe_float(rows.at[idx, "ATR"])
             if entry is None or exit_price is None or entry_atr is None or entry_atr <= 0:
@@ -1442,7 +1448,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     print(
         f"[SIMULATED PNL COST CHECK] pair={pair_name}, gross_pips={gross_all}, "
         f"spread_cost_pips={spread_all}, net_pips={total_pnl['net_pips']}, "
-        f"note=spread deducted once per simulated trade; ATR barrier exits; excludes slippage/swaps/real fills"
+        f"note=next-bar-open entry; spread deducted once per simulated trade; ATR barrier exits; excludes slippage/swaps/real fills"
     )
 
     print(
@@ -1453,7 +1459,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         f"avg_pips={total_pnl['avg_pips_per_trade']}, "
         f"max_drawdown_pips={total_pnl['max_drawdown_pips']}, "
         f"spread_pips={spread_pips}, hold_bars={LOOKAHEAD_BARS}, "
-        f"note=non-overlapping ATR-barrier estimate; same-bar ambiguity counted adversely; excludes slippage/swaps/real fills"
+        f"note=next-bar-open entry; non-overlapping ATR-barrier estimate; same-bar ambiguity counted adversely; excludes slippage/swaps/real fills"
     )
 
     print(
