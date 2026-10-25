@@ -2077,62 +2077,7 @@ def _render_main_area():
             st.session_state[signal_history_key] = signal_log[-100:]
             signal_log = st.session_state[signal_history_key]
 
-        st.markdown("#### 🔄 AI判定の変化・注文状況ガイド")
-        signal_col1, signal_col2 = st.columns(2)
-        with signal_col1:
-            st.metric("今回のAI判定", {"BUY": "BUY（買い）", "SELL": "SELL（売り）", "WAIT": "WAIT（様子見）"}[signal_now])
-        with signal_col2:
-            st.metric("前回記録した判定", previous_signal or "初回記録")
-        latest_signal_record = relevant_log[-1] if relevant_log else None
-        transition_from = previous_signal
-        if (latest_signal_record
-                and latest_signal_record.get("bar_timestamp") == signal_bar_ts
-                and latest_signal_record.get("signal") == signal_now):
-            transition_from = latest_signal_record.get("previous_signal", previous_signal)
-        if transition_from and transition_from not in (signal_now, "（初回）"):
-            st.warning(
-                f"AI判定が {transition_from} → {signal_now} に変化しました。"
-                "判定変更だけで注文が取消・決済されるわけではありません。実際の注文状況は松井証券FXの注文照会で確認してください。"
-            )
-        else:
-            st.caption("判定履歴は、このアプリのセッション中に確認した状態を記録します。アプリを閉じると履歴は保持されない場合があります。")
-
-        order_state = st.selectbox(
-            "現在の注文状況（ご自身で選択）",
-            ["まだ注文していない", "新規注文を発注したが未約定", "新規注文が約定しポジション保有中", "決済済み・注文取消済み"],
-            key="manual_order_state_guide",
-            help="アプリは松井証券FXの実際の注文状態を自動取得しません。注文照会を確認して選択してください。",
-        )
-        if order_state == "まだ注文していない":
-            if signal_now == "WAIT":
-                st.info("【対応】新規注文は急がず、次の確定足や条件成立を待つのが基本です。")
-            else:
-                st.info("【対応】最新の判定・現在レート・IFD-OCO候補を確認してから発注を判断してください。")
-        elif order_state == "新規注文を発注したが未約定":
-            st.warning("【対応】注文照会で有効期限・注文種類・価格を確認してください。最新判定がWAITに変わった場合は、注文を残すか取消すかを再検討してください。AI判定が変わっても注文は自動取消されません。")
-        elif order_state == "新規注文が約定しポジション保有中":
-            st.warning("【対応】現在の建玉、評価損益、IFD-OCOの決済注文が有効かを確認してください。WAITだけを理由に即時決済せず、事前の損切り条件と資金管理に従って判断してください。")
-        else:
-            st.info("【対応】注文照会で決済・取消が完了していることを確認し、次の取引は最新判定から検討してください。")
-
-        with st.expander("📜 BUY・SELL・WAITの判定履歴", expanded=False):
-            history_for_view = [x for x in st.session_state[signal_history_key] if x.get("ticker") == ticker and x.get("interval") == tf_config["interval"]]
-            if history_for_view:
-                history_df = pd.DataFrame(history_for_view).rename(columns={
-                    "recorded_at": "記録時刻", "bar_timestamp": "確定足時刻", "previous_signal": "前回判定",
-                    "signal": "今回判定", "close": "確定足終値", "confidence_pct": "確信度(%)",
-                    "ticker": "通貨ペア", "interval": "時間足"
-                })
-                st.dataframe(history_df.tail(20), use_container_width=True, hide_index=True)
-                st.download_button(
-                    "📥 判定履歴CSVを保存",
-                    data=history_df.to_csv(index=False).encode("utf-8-sig"),
-                    file_name=f"signal_transition_{ticker.replace('=X','')}_{tf_config['interval']}.csv",
-                    mime="text/csv",
-                    key="download_signal_transition_history",
-                )
-            else:
-                st.caption("この通貨ペア・時間足の履歴はまだありません。")
+        st.caption("実際の注文・建玉はこのアプリでは取得できません。松井証券FXの注文照会で確認してください。")
 
         current_usdjpy_rate = get_usdjpy_rate()
         if not is_jpy and current_usdjpy_rate is None:
@@ -2149,19 +2094,18 @@ def _render_main_area():
         ai_rr_ratio = float(st.session_state["rr_ratio"])
         ai_tp_pips = round(ai_sl_pips * ai_rr_ratio, 1)
 
-        # IFD-OCO helper: use a small ATR-based offset for an entry candidate rather than
-        # presenting the last confirmed candle close as a live executable quote.
-        st.markdown("#### 🧾 単発注文の入力ガイド")
-        st.caption("AIが方向・損切り幅・利確幅・数量を計算します。手入力は松井証券FXの現在レート確認が中心です。口座への接続・自動発注は行いません。")
+        # Reference-price calculator only; this does not reproduce Matsui order types.
+        st.markdown("#### 🧾 単発トレードの参考値")
+        st.caption("AIが方向・損切り幅・利確幅・数量の参考値を計算します。実際の注文方式や条件を再現・選択する機能ではありません。松井証券FXの注文画面で注文方式を選んでください。口座接続・自動発注は行いません。")
         entry_style = st.radio(
-            "エントリー方針",
-            ["成行（現在レートで単発）", "押し目・戻り待ち（指値）", "ブレイク追随（逆指値）"],
+            "参考価格の計算パターン（松井証券FXの注文方式ではありません）",
+            ["成行（現在レートを基準）", "押し目・戻りの参考価格", "ブレイク方向の参考価格"],
             horizontal=True,
-            help="成行はすぐに約定を目指しますが価格は保証されません。松井証券FXの現在レートを入力してください。指値・逆指値は価格条件を待つ方法です。",
+            help="ここで選ぶのは参考価格の計算方法だけです。松井証券FXの実際の注文方式・有効期限・決済条件は注文画面で確認してください。",
             key="ifdoco_entry_style",
         )
         check_live_quote = st.checkbox(
-            "松井証券FXの現在レートを入力して、注文種類と価格位置を確認する",
+            "松井証券FXの現在レートを入力して、参考価格との差を確認する",
             value=entry_style.startswith("成行"),
             key="ifdoco_check_live_quote",
         )
@@ -2225,7 +2169,7 @@ def _render_main_area():
                 "注文候補は参考表示に限り、松井証券FXの現在レートを入力するまで転記用の価格として使わないでください。"
             )
             if entry_style.startswith("成行"):
-                st.error("成行の計算には松井証券FXの現在レートが必要です。現在レートを入力するまで注文プランを確定扱いにしないでください。")
+                st.error("現在レートを入力するまで参考値を確定扱いにしないでください。")
 
         entry_offset_atr = max(float(latest_atr) * (0.5 if entry_style.startswith("押し目") else 0.2), pip_unit)
         if entry_style.startswith("成行"):
@@ -2335,14 +2279,14 @@ def _render_main_area():
         else:
             if ai_tp_pips <= spread_pips:
                 st.warning("利確幅が想定スプレッド以下です。コストを考慮すると不利な可能性があるため、利確幅を見直してください。")
-            st.markdown(f"""<div class="param-box"><b>【注文コピー用パラメータ】</b>（想定スプレッド {spread_pips:.1f} pips）<br>
+            st.markdown(f"""<div class="param-box"><b>【参考パラメータ】</b>（想定スプレッド {spread_pips:.1f} pips）<br>
             ・通貨ペア: <code>{html.escape(selected_label)}</code> | 方向: <code>{"買い" if ai_is_buy else "売り"}</code><br>
             ・新規価格目安: <code>{price_fmt % ai_entry}</code><br>・利確(TP): <code>{price_fmt % ai_tp_price}</code> (+{ai_tp_pips:.1f} pips / 純益概算 +{int(ai_profit_yen):,}円)<br>
             ・損切(SL): <code>{price_fmt % ai_sl_price}</code> (-{ai_sl_pips:.1f} pips / 損失概算 -{int(ai_loss_yen):,}円)<br>
             ・数量: <code>{ai_rec_wan:.2f} 万通貨</code> ({int(ai_rec_wan*10000):,}通貨) | 必要証拠金概算: <code>{int(req_margin_yen):,}円</code></div>""",unsafe_allow_html=True)
             copy_text = (
                 f"通貨ペア: {selected_label}\n方向: {'買い' if ai_is_buy else '売り'}\n"
-                f"新規注文種類: {entry_order_type} ({entry_style})\n新規価格候補: {price_fmt % ai_entry}\n利確(TP): {price_fmt % ai_tp_price} ({ai_tp_pips:.1f} pips)\n"
+                f"参考価格パターン: {entry_style}\n参考価格候補: {price_fmt % ai_entry}\n利確(TP): {price_fmt % ai_tp_price} ({ai_tp_pips:.1f} pips)\n"
                 f"損切(SL): {price_fmt % ai_sl_price} ({ai_sl_pips:.1f} pips)\n"
                 f"数量: {ai_rec_wan:.2f} 万通貨\n必要証拠金概算: {int(req_margin_yen):,}円\n"
                 f"想定損失: {int(ai_loss_yen):,}円\n想定スプレッド: {spread_pips:.1f} pips\n"
@@ -2352,25 +2296,24 @@ def _render_main_area():
             st.code(copy_text, language="text")
 
         if not ai_direction.startswith("WAIT") and not is_risk_exceeded and matsui_quote is not None and (not quote_gap_large or gap_acknowledged):
-            st.markdown("##### 松井証券FXへの転記目安（IFD-OCO）")
+            st.markdown("##### 注文前に確認する参考値")
             st.markdown(
                 f"""<div class="param-box">
-                <b>新規注文</b><br>
-                ・方向: <code>{'買い' if ai_is_buy else '売り'}</code><br>
-                ・注文種類: <code>{entry_order_type}</code><br>
-                ・新規注文価格候補: <code>{price_fmt % ai_entry}</code><br><br>
-                <b>新規注文が成立した後の決済注文（OCO）</b><br>
-                ・利益確定の指値: <code>{price_fmt % ai_tp_price}</code><br>
-                ・損切りの逆指値: <code>{price_fmt % ai_sl_price}</code><br>
-                ・数量: <code>{ai_rec_wan:.2f} 万通貨</code>
+                <b>AI分析の参考値（注文方式は未選択）</b><br>
+                ・方向の参考: <code>{'買い' if ai_is_buy else '売り'}</code><br>
+                ・価格候補: <code>{price_fmt % ai_entry}</code><br>
+                ・利確幅の参考: <code>{price_fmt % ai_tp_price}</code><br>
+                ・損切り幅の参考: <code>{price_fmt % ai_sl_price}</code><br>
+                ・数量の参考: <code>{ai_rec_wan:.2f} 万通貨</code><br>
+                ・実際の注文方式・決済条件は松井証券FXの画面で選択・確認してください。
                 </div>""",
                 unsafe_allow_html=True,
             )
             if quote_position_ok:
-                st.success(f"入力した松井証券FXの現在レート {price_fmt % matsui_quote} に対して、価格位置は選択した注文種類（{entry_order_type}）と整合しています。Bid/Ask差や注文条件は別途確認してください。")
+                st.success(f"入力した現在レート {price_fmt % matsui_quote} と参考価格の位置関係を計算しました。実際の注文方式との適合性は判定していません。")
             else:
-                st.warning(f"入力した現在レート {price_fmt % matsui_quote} に対して、候補価格が選択した注文種類（{entry_order_type}）に適した位置ではありません。現在レートを再確認するか、エントリー方針を変更してください。")
-            st.caption("入力したレートは参考価格で、Bid/Askの別を自動判別していません。成行はスリッページ、逆指値は急変時の価格飛びに注意してください。実際の注文条件は松井証券FXの注文画面で確認してください。")
+                st.warning(f"入力した現在レート {price_fmt % matsui_quote} と参考価格の位置関係に注意してください。実際の注文方式との適合性は判定していません。")
+            st.caption("入力したレートは参考値で、Bid/Askの別を自動判別していません。実際の注文方式・有効期限・決済条件は松井証券FXの注文画面で確認してください。")
 
         st.markdown("##### 📝 トレード結果フィードバック")
         st.caption("結果の記録用です。現在の足と実際の取引条件が一致するとは限らないため、この記録をそのままAIの教師ラベルには使いません。")
@@ -2542,15 +2485,6 @@ def _render_main_area():
             st.warning(f"ニュース取得状態：{news_status}")
             if news_errors:
                 st.caption("接続診断：" + " / ".join(news_errors[:3]))
-        with st.expander("🔔 主要経済指標と為替への影響パターン",expanded=True):
-            st.markdown("""
-            | 経済指標・イベント | 注目ポイント | ドル円への一般的な影響例 |
-            | :--- | :--- | :--- |
-            | **FOMC** | 政策金利・議長発言 | タカ派はドル高要因、ハト派はドル安要因になり得る |
-            | **米雇用統計 (NFP)** | 雇用者数・平均時給 | 予想との差と金利見通しが重要 |
-            | **米CPI** | インフレ率 | 予想との差と金融政策見通しが重要 |
-            | **日銀会合** | 政策金利・総裁会見 | 政策修正は円相場を動かす場合がある |
-            """)
         st.markdown("---")
         st.markdown(f"##### 🌐 `{selected_label}` 関連ニュース（見出し参考判定）")
         if not news_items:
