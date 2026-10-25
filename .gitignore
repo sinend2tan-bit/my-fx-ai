@@ -1,0 +1,7 @@
+# FX Cloud Scan の実行状態。Git にはコミットせず、
+# GitHub Actions のキャッシュ (actions/cache) で実行間に受け渡す。
+scan_state.json
+
+__pycache__/
+*.pyc
+.pytest_cache/
