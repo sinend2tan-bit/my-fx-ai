@@ -42,7 +42,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 16
+MODEL_VERSION = 17
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -1757,6 +1757,36 @@ def timeframe_trend(df):
 
 
 
+def validate_latest_bar(latest_data):
+    """最新確定足のOHLC・価格・時刻を簡易検査。異常時は候補を保留する。"""
+    if latest_data is None or latest_data.empty:
+        return False, "最新の確定足がありません"
+    required = ["Open", "High", "Low", "Close"]
+    if any(column not in latest_data.columns for column in required):
+        return False, "OHLC列が不足しています"
+    try:
+        row = latest_data.iloc[-1]
+        values = {column: safe_float(row[column]) for column in required}
+        if any(value is None or value <= 0 for value in values.values()):
+            return False, "OHLCに欠損値または0以下の価格があります"
+        if values["High"] < max(values["Open"], values["Close"]):
+            return False, "高値が始値または終値を下回っています"
+        if values["Low"] > min(values["Open"], values["Close"]):
+            return False, "安値が始値または終値を上回っています"
+        if values["High"] < values["Low"]:
+            return False, "高値と安値の関係が不正です"
+        index_value = pd.Timestamp(latest_data.index[-1])
+        if index_value.tzinfo is None:
+            return False, "最新足のタイムゾーンが不明です"
+        index_jst = index_value.tz_convert("Asia/Tokyo")
+        now_jst_ts = pd.Timestamp.now(tz="Asia/Tokyo")
+        if index_jst > now_jst_ts + pd.Timedelta(minutes=10):
+            return False, "最新足の時刻が未来になっています"
+        return True, "OHLC・価格・時刻の簡易検査に合格"
+    except Exception as exc:
+        return False, f"最新足の検査に失敗: {type(exc).__name__}"
+
+
 def stale_data_status(age_minutes):
     """古いデータの原因を断定せず、週末・休場の可能性と平日異常を区別する。"""
     if age_minutes is None:
@@ -1857,6 +1887,9 @@ def analyze_pair(name, config):
         "fast_move_detected": False,
         "fast_move_atr_ratio": None,
         "data_age_minutes": None,
+        "data_freshness_status": "unknown",
+        "data_quality_status": "not_checked",
+        "data_quality_reason": "",
         "validation": {},
         "buy_pct": None,
         "sell_pct": None,
@@ -1890,6 +1923,18 @@ def analyze_pair(name, config):
             result["decision"] = "データ鮮度不明・保留"
             return result
 
+        quality_ok, quality_reason = validate_latest_bar(latest_data)
+        result["data_quality_status"] = "pass" if quality_ok else "fail"
+        result["data_quality_reason"] = quality_reason
+        print(
+            f"[DATA QUALITY GATE] pair={name}, status={'PASS' if quality_ok else 'FAIL'}, "
+            f"reason={quality_reason}"
+        )
+        if not quality_ok:
+            result["decision"] = "価格データ品質異常・保留"
+            result["reason"] = quality_reason + "。データ品質を確認できるまで分析候補を出しません。"
+            return result
+
         result["price"] = safe_float(latest_data["Close"].iloc[-1])
         result["data_age_minutes"] = data_age_minutes(hourly)
 
@@ -1897,6 +1942,7 @@ def analyze_pair(name, config):
         # 週末・休場時に過去データから不要な売買候補を作らないための早期終了。
         age = result["data_age_minutes"]
         if age is None:
+            result["data_freshness_status"] = "timestamp_unknown"
             result["decision"] = "データ鮮度不明・保留"
             result["reason"] = (
                 "最新の確定足の時刻を確認できないため、検証計算を行わず保留します。"
@@ -1923,6 +1969,7 @@ def analyze_pair(name, config):
             )
             return result
 
+        result["data_freshness_status"] = "fresh"
         print(
             f"[DATA FRESHNESS GATE] pair={name}, status=PASS, "
             f"age_minutes={age}, max_age_minutes={MAX_DATA_AGE_MINUTES}"
@@ -2115,6 +2162,9 @@ def main():
             "direction": item.get("direction"),
             "price": item.get("price"),
             "data_age_minutes": item.get("data_age_minutes"),
+            "data_freshness_status": item.get("data_freshness_status"),
+            "data_quality_status": item.get("data_quality_status"),
+            "reason": item.get("reason"),
             "buy_pct": item.get("buy_pct"),
             "sell_pct": item.get("sell_pct"),
             "news_status": item.get("news_status"),
@@ -2139,11 +2189,26 @@ def main():
         status = item.get("news_status", "unknown")
         news_status_counts[status] = news_status_counts.get(status, 0) + 1
 
+    # 実行単位の健康診断。実行成功と分析可能性を分けて見える化する。
+    run_health = {
+        "pairs_total": len(pair_results),
+        "fresh_data_pairs": sum(1 for item in pair_results if item.get("data_freshness_status") == "fresh"),
+        "stale_or_unknown_pairs": sum(1 for item in pair_results if item.get("data_freshness_status") != "fresh"),
+        "data_quality_fail_pairs": sum(1 for item in pair_results if item.get("data_quality_status") == "fail"),
+        "validation_pass_pairs": sum(1 for item in pair_results if (item.get("validation") or {}).get("passed") is True),
+        "validation_skipped_or_not_passed_pairs": sum(1 for item in pair_results if (item.get("validation") or {}).get("passed") is not True),
+        "news_unavailable_pairs": sum(1 for item in pair_results if item.get("news_status") not in {
+            "recent_articles_no_risk_keywords", "recent_articles_with_risk_keywords"
+        }),
+        "candidate_pairs": sum(1 for item in pair_results if item.get("decision") == "候補あり（手動確認のみ）"),
+        "execution_note": "スキャン完了は売買検証成功を意味しません。候補数が0でも安全ゲートによる正常な保留の場合があります。",
+    }
+
     state = {
         "schema_version": MODEL_VERSION,
         "scanner_version": f"v{MODEL_VERSION}",
         "last_run_jst": started_at,
-        "mode": "v16_freshness_gate_directional_pnl_gates_walk_forward_news_risk_no_auto_orders",
+        "mode": "v17_data_quality_run_health_freshness_directional_pnl_walk_forward_news_risk_no_auto_orders",
         "interval": "1h",
         "data_freshness_policy": {
             "max_age_minutes": MAX_DATA_AGE_MINUTES,
@@ -2167,6 +2232,11 @@ def main():
             ),
         },
         "news_status_counts": news_status_counts,
+        "run_health": run_health,
+        "data_quality_policy": {
+            "checks": ["OHLC欠損・非正価格", "高値安値と始値終値の整合性", "タイムゾーン不明", "未来時刻"],
+            "notice": "簡易検査であり、価格配信元の正確性や全ての異常を保証するものではありません。",
+        },
         "summary": summary,
         "pairs": pair_results,
         "history": history,
@@ -2185,6 +2255,15 @@ def main():
     print("\n========== FX SCAN SUMMARY ==========")
     print("\n".join(summary))
     print("ニュース取得状況:", news_status_counts)
+    print("実行健康診断:", json.dumps(run_health, ensure_ascii=False))
+    print("通貨ペア別理由:")
+    for item in pair_results:
+        print(
+            f"  - {item.get('name')}: decision={item.get('decision')}; "
+            f"freshness={item.get('data_freshness_status')}; "
+            f"quality={item.get('data_quality_status')}; "
+            f"reason={item.get('reason', '')}"
+        )
     print("結果を", STATE_FILE, "に保存しました。")
     print("=====================================")
 
