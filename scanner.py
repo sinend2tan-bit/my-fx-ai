@@ -30,6 +30,9 @@ FAST_MOVE_ATR_MULTIPLE = 2.5
 # 最新の確定1時間足がこの時間を超えて古い場合は、検証計算を行わず保留する。
 MAX_DATA_AGE_MINUTES = 180
 
+# 方向別の仮想損益を確認する最低件数。件数不足は「良好」とみなさず保留する。
+MIN_DIRECTIONAL_PNL_TRADES = 10
+
 # ニュースを新しいものとみなす時間
 NEWS_MAX_AGE_HOURS = 12
 
@@ -39,7 +42,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 15
+MODEL_VERSION = 16
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -1397,6 +1400,35 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     # 各fold内で非重複かつ決済がfold内に収まる取引だけを合算する。
     total_pnl = summarize_trade_results(simulated_trade_rows)
 
+    # 買い・売りを分けて評価する。片方の成績が悪い場合に、その方向だけ保留できるようにする。
+    directional_pnl = {}
+    for direction, direction_name in ((1, "buy"), (-1, "sell")):
+        direction_trades = [
+            trade for trade in simulated_trade_rows
+            if trade.get("direction") == direction
+        ]
+        direction_summary = summarize_trade_results(direction_trades)
+        directional_pnl[direction_name] = {
+            **direction_summary,
+            "passed": bool(
+                direction_summary["trades"] >= MIN_DIRECTIONAL_PNL_TRADES
+                and direction_summary["net_pips"] > 0
+            ),
+            "minimum_trades": MIN_DIRECTIONAL_PNL_TRADES,
+            "reason": (
+                "方向別の仮想損益条件を満たしました"
+                if direction_summary["trades"] >= MIN_DIRECTIONAL_PNL_TRADES
+                and direction_summary["net_pips"] > 0
+                else "方向別の仮想取引件数不足、または損益がプラスでないため保留"
+            ),
+        }
+        print(
+            f"[DIRECTIONAL PNL GATE] pair={pair_name}, direction={direction_name}, "
+            f"trades={direction_summary['trades']}, net_pips={direction_summary['net_pips']}, "
+            f"minimum_trades={MIN_DIRECTIONAL_PNL_TRADES}, "
+            f"passed={directional_pnl[direction_name]['passed']}"
+        )
+
     # 追加の安定性ゲート：全体損益が一部の期間だけに依存していないか確認する。
     # 3期間中2期間以上がプラス、全体損益がプラス、かつ最低30件の仮想取引を要求。
     # これは概算バックテスト上の保守的な足切りであり、実取引の利益を保証しない。
@@ -1568,6 +1600,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "folds": used_folds,
         "fold_details": fold_details,
         "simulated_pnl": total_pnl,
+        "directional_pnl": directional_pnl,
         "class_counts": {
             "actual": actual_counts,
             "predicted": predicted_counts,
@@ -1724,6 +1757,34 @@ def timeframe_trend(df):
 
 
 
+def stale_data_status(age_minutes):
+    """古いデータの原因を断定せず、週末・休場の可能性と平日異常を区別する。"""
+    if age_minutes is None:
+        return {
+            "status": "timestamp_unknown",
+            "label": "データ時刻不明",
+            "reason": "最新足の時刻を確認できません。",
+        }
+    now = now_jst()
+    if now.weekday() >= 5:
+        return {
+            "status": "possible_market_closure",
+            "label": "週末・市場休場の可能性",
+            "reason": "週末のため価格更新が止まっている可能性があります。市場再開後も更新されない場合は取得元を確認してください。",
+        }
+    if now.weekday() == 0 and now.hour < 8:
+        return {
+            "status": "possible_market_closure",
+            "label": "週明け・市場再開待ちの可能性",
+            "reason": "週明けの市場再開前後である可能性があります。更新が始まらない場合は取得元を確認してください。",
+        }
+    return {
+        "status": "stale_on_open_day",
+        "label": "データ更新遅延・要確認",
+        "reason": "市場が動いている時間帯でも最新足が古い可能性があります。データ取得状況と実行ログを確認してください。",
+    }
+
+
 def data_age_minutes(df):
     """1時間足の開始時刻ではなく、足の確定時刻を基準にデータ経過時間を返す。"""
     if df is None or df.empty:
@@ -1847,10 +1908,13 @@ def analyze_pair(name, config):
             return result
 
         if age > MAX_DATA_AGE_MINUTES:
+            stale_info = stale_data_status(age)
+            result["data_freshness_status"] = stale_info["status"]
             result["decision"] = "データ古い・保留"
             result["reason"] = (
-                f"最新の確定足から約{age:.0f}分経過しているため、検証計算を省略して保留します。"
-                "市場休場時は次の新しい確定足が取得できるまで判断に使用しません。"
+                f"最新の確定足から約{age:.0f}分経過しています。"
+                f"{stale_info['label']}。{stale_info['reason']}"
+                "鮮度制限は安全のため変更せず、検証計算を省略します。"
             )
             print(
                 f"[DATA FRESHNESS GATE] pair={name}, status=FAIL, "
@@ -1882,6 +1946,22 @@ def analyze_pair(name, config):
             "sell_pct": model_result["sell_pct"],
             "neutral_pct": model_result["neutral_pct"],
         })
+
+        # 方向別の仮想損益が未検証・不良なら、その方向の候補を出さず様子見にする。
+        directional_pnl = validation.get("directional_pnl") or {}
+        selected_direction = result.get("direction")
+        selected_key = "buy" if selected_direction == "買い" else "sell" if selected_direction == "売り" else None
+        if selected_key:
+            direction_check = directional_pnl.get(selected_key) or {}
+            if not direction_check.get("passed", False):
+                result["direction"] = "様子見"
+                result["directional_pnl_hold"] = True
+                result["reason"] = (
+                    f"{selected_direction}方向の仮想損益が採用条件を満たしていません。"
+                    "方向別の取引件数不足、または損益がプラスでないため、新規候補を保留します。"
+                )
+            else:
+                result["directional_pnl_hold"] = False
 
         
         # 診断ログ：判定保留や信頼度がNoneになる原因を確認
@@ -1973,8 +2053,9 @@ def analyze_pair(name, config):
             return result
 
         if direction == "様子見":
-            result["decision"] = "様子見"
-            result["reason"] = model_result["reason"]
+            result["decision"] = "方向別検証未達・保留" if result.get("directional_pnl_hold") else "様子見"
+            if not result.get("directional_pnl_hold"):
+                result["reason"] = model_result["reason"]
             return result
 
         result["decision"] = "候補あり（手動確認のみ）"
@@ -2042,6 +2123,7 @@ def main():
             "pnl_stability_ok": validation.get("pnl_stability_ok"),
             "simulated_net_pips": simulated_pnl.get("net_pips"),
             "simulated_trades": simulated_pnl.get("trades"),
+            "directional_pnl": validation.get("directional_pnl"),
         })
 
     run_record = {
@@ -2061,11 +2143,17 @@ def main():
         "schema_version": MODEL_VERSION,
         "scanner_version": f"v{MODEL_VERSION}",
         "last_run_jst": started_at,
-        "mode": "freshness_gate_first_multi_period_validation_news_risk_no_auto_orders",
+        "mode": "v16_freshness_gate_directional_pnl_gates_walk_forward_news_risk_no_auto_orders",
         "interval": "1h",
         "data_freshness_policy": {
             "max_age_minutes": MAX_DATA_AGE_MINUTES,
-            "notice": "古いデータでは時系列検証・売買方向の算出を省略し、判定保留にします。",
+            "notice": "古いデータでは時系列検証・売買方向の算出を省略し、判定保留にします。制限時間は緩めません。",
+            "stale_reason_classification": "週末・休場の可能性と市場稼働日における更新遅延を区別します。原因を確定するものではありません。",
+        },
+        "directional_pnl_policy": {
+            "minimum_trades_per_direction": MIN_DIRECTIONAL_PNL_TRADES,
+            "require_positive_net_pips": True,
+            "notice": "買い・売りを別々に評価し、件数不足または仮想損益がプラスでない方向は候補を保留します。仮想検証であり将来利益を保証しません。",
         },
         "news_policy": {
             "source": "Yahoo Finance",
