@@ -35,7 +35,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 11
+MODEL_VERSION = 12
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -1387,20 +1387,60 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     )
 
     # 既存の精度・基準モデル・方向別再現率の合格条件は緩めない。
-    model_validation_ok = (
-        score >= 0.40
-        and score >= baseline_score
-        and recall_pct["buy"] >= 20.0
-        and recall_pct["sell"] >= 20.0
-    )
+    # 不合格時にどの条件を満たしていないか、ログで具体的に分かるようにする。
+    model_gate_reasons = []
+    if score < 0.40:
+        model_gate_reasons.append(f"balanced_accuracy不足({score:.3f}<0.400)")
+    if score < baseline_score:
+        model_gate_reasons.append(
+            f"基準モデル未満({score:.3f}<{baseline_score:.3f})"
+        )
+    if recall_pct["buy"] < 20.0:
+        model_gate_reasons.append(
+            f"買い再現率不足({recall_pct['buy']:.1f}%<20.0%)"
+        )
+    if recall_pct["sell"] < 20.0:
+        model_gate_reasons.append(
+            f"売り再現率不足({recall_pct['sell']:.1f}%<20.0%)"
+        )
+    model_validation_ok = not model_gate_reasons
+
+    pnl_gate_reasons = []
+    if len(fold_pnl_values) < N_WALK_FORWARD_FOLDS:
+        pnl_gate_reasons.append(
+            f"損益を評価できた期間が不足({len(fold_pnl_values)}/{N_WALK_FORWARD_FOLDS})"
+        )
+    if positive_pnl_folds < required_positive_folds:
+        pnl_gate_reasons.append(
+            f"プラス期間不足({positive_pnl_folds}/{required_positive_folds})"
+        )
+    if total_pnl["trades"] < 30:
+        pnl_gate_reasons.append(
+            f"仮想取引件数不足({total_pnl['trades']}件<30件)"
+        )
+    if total_pnl["net_pips"] <= 0:
+        pnl_gate_reasons.append(
+            f"仮想損益がプラスでない({total_pnl['net_pips']:.2f} pips)"
+        )
+    pnl_stability_ok = not pnl_gate_reasons
     passed = bool(model_validation_ok and pnl_stability_ok)
 
-    if not model_validation_ok:
-        reason = "複数期間の時系列検証条件を満たさない"
+    if not model_validation_ok and not pnl_stability_ok:
+        reason = "モデル検証と仮想損益の安定性条件を満たさない"
+    elif not model_validation_ok:
+        reason = "モデル検証条件を満たさない"
     elif not pnl_stability_ok:
         reason = "仮想損益の期間別安定性条件を満たさない（利益保証ではありません）"
     else:
         reason = "時系列検証と仮想損益の期間別安定性条件を満たしました（実取引成績ではありません）"
+
+    print(
+        f"[VALIDATION GATE DETAILS] pair={pair_name}, "
+        f"model_gate={'PASS' if model_validation_ok else 'FAIL'}, "
+        f"model_reasons={model_gate_reasons or ['none']}, "
+        f"pnl_gate={'PASS' if pnl_stability_ok else 'FAIL'}, "
+        f"pnl_reasons={pnl_gate_reasons or ['none']}"
+    )
 
     print(
         f"[PNL STABILITY GATE] pair={pair_name}, "
@@ -1484,7 +1524,9 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "passed": bool(passed),
         "reason": reason,
         "model_validation_ok": bool(model_validation_ok),
+        "model_gate_reasons": model_gate_reasons,
         "pnl_stability_ok": bool(pnl_stability_ok),
+        "pnl_gate_reasons": pnl_gate_reasons,
         "positive_pnl_folds": int(positive_pnl_folds),
         "total_pnl_trades": int(total_pnl["trades"]),
         "balanced_accuracy": round(float(score), 4),
