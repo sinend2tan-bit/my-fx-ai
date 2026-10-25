@@ -2,6 +2,7 @@
 # 2026-10-25 の版固定 (numpy==2.0.2 等) が Streamlit Cloud の Python 環境で
 # インストールできない可能性が高いため、マージ前の動作していた状態 (版指定なし) に戻す緊急修正。
 # FX Cloud Scan は requirements-scanner.txt (Python 3.11 前提で検証済みの固定版) を使うため、こちらは影響しない。
+# 2026-10-25 22:17 JST: Streamlit Cloud の再デプロイを促すためのトリガーコミット (内容の変更なし)。
 streamlit
 yfinance
 pandas
