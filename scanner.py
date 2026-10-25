@@ -42,7 +42,14 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 18
+MODEL_VERSION = 19
+
+# 仮想検証用の追加コスト（実際の松井証券FXの約定・スワップ値ではありません）。
+# スリッページは往復合計の保守的な仮定。スワップは保有時間・方向・日々の値で変動するため、
+# この定数は比較用の暫定ストレス値です。実際の取引条件を確認してから調整してください。
+SIMULATED_ROUND_TRIP_SLIPPAGE_PIPS = 0.5
+SIMULATED_SWAP_STRESS_COST_PIPS = 0.2
+
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -931,6 +938,7 @@ def bars(ticker, interval="1h", period="60d"):
     )
 
     close_values = feature_df["Close"].to_numpy(dtype=float)
+    open_values = feature_df["Open"].to_numpy(dtype=float)
     high_values = feature_df["High"].to_numpy(dtype=float)
     low_values = feature_df["Low"].to_numpy(dtype=float)
     atr_values = feature_df["ATR"].to_numpy(dtype=float)
@@ -938,7 +946,11 @@ def bars(ticker, interval="1h", period="60d"):
     targets = np.full(len(feature_df), np.nan)
 
     for i in range(len(feature_df) - LOOKAHEAD_BARS):
-        price = close_values[i]
+        # シグナル確定後の次足始値をエントリー基準にする。
+        # 仮想損益と学習ラベルのエントリー時点を一致させる。
+        if i + 1 >= len(feature_df):
+            continue
+        price = open_values[i + 1]
         atr_value = atr_values[i]
 
         if (
@@ -958,6 +970,8 @@ def bars(ticker, interval="1h", period="60d"):
             hit_down = low_values[j] <= lower
 
             if hit_up and hit_down:
+                # 学習ラベルでは足内の到達順が不明なケースを中立扱い。
+                # 仮想損益では予測方向に対して損切り側を優先する。
                 label = 0
                 break
             if hit_up:
@@ -1158,7 +1172,10 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 continue
 
             gross_pips = (exit_price - entry) * direction / pip_size
-            net_pips = gross_pips - float(spread_pips)
+            slippage_cost_pips = float(SIMULATED_ROUND_TRIP_SLIPPAGE_PIPS)
+            swap_stress_cost_pips = float(SIMULATED_SWAP_STRESS_COST_PIPS)
+            total_cost_pips = float(spread_pips) + slippage_cost_pips + swap_stress_cost_pips
+            net_pips = gross_pips - total_cost_pips
             adx_value = safe_float(rows.at[idx, "ADX"]) if "ADX" in rows.columns else None
             atr_ratio_value = safe_float(rows.at[idx, "ATR_Ratio"]) if "ATR_Ratio" in rows.columns else None
             if adx_value is None:
@@ -1173,6 +1190,9 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "direction": direction,
                 "gross_pips": float(gross_pips),
                 "spread_cost_pips": float(spread_pips),
+                "slippage_cost_pips": slippage_cost_pips,
+                "swap_stress_cost_pips": swap_stress_cost_pips,
+                "total_cost_pips": total_cost_pips,
                 "net_pips": float(net_pips),
                 "exit_reason": exit_reason,
                 "adx": adx_value,
@@ -1203,6 +1223,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     all_true = []
     all_pred = []
     all_baseline = []
+    all_probability_rows = []
     fold_details = []
     simulated_trade_rows = []
     pair_config = PAIRS.get(pair_name, {})
@@ -1264,6 +1285,24 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             )
 
             pred = model.predict(test_X)
+            # RandomForestのpredict_probaは校正済み確率ではない。
+            # OOF予測のBrier scoreを記録し、確率値の信頼性を診断する。
+            raw_proba = model.predict_proba(test_X)
+            proba_by_class = {int(c): raw_proba[:, j] for j, c in enumerate(model.classes_)}
+            aligned_proba = np.column_stack([
+                proba_by_class.get(-1, np.zeros(len(test_X))),
+                proba_by_class.get(0, np.zeros(len(test_X))),
+                proba_by_class.get(1, np.zeros(len(test_X))),
+            ])
+            row_brier = []
+            for row_i, actual in enumerate(test_y.to_numpy(dtype=int)):
+                one_hot = np.array([1.0 if actual == cls else 0.0 for cls in (-1, 0, 1)])
+                row_brier.append(float(np.mean((aligned_proba[row_i] - one_hot) ** 2)))
+            fold_brier = float(np.mean(row_brier)) if row_brier else None
+            all_probability_rows.extend([
+                {"actual": int(actual), "probabilities": aligned_proba[i].tolist()}
+                for i, actual in enumerate(test_y.to_numpy(dtype=int))
+            ])
 
             fold_pnl, fold_trades = simulated_pnl(
                 pred,
@@ -1358,6 +1397,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "actual_class_counts": true_counts,
                 "predicted_class_counts": pred_counts,
                 "confusion_matrix": cm,
+                "brier_score_raw_probability_diagnostic": round(fold_brier, 5) if fold_brier is not None else None,
                 "simulated_pnl": fold_pnl,
             }
 
@@ -1378,6 +1418,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 f"confusion_matrix={cm}, "
                 f"sell_to_buy={sell_to_buy_rate:.1f}%, "
                 f"buy_to_sell={buy_to_sell_rate:.1f}%, "
+                f"raw_proba_brier={round(fold_brier, 5) if fold_brier is not None else None}, "
                 f"sim_trades={fold_pnl['trades']}, "
                 f"sim_net_pips={fold_pnl['net_pips']}, "
                 f"sim_win_rate={fold_pnl['win_rate_pct']}, "
@@ -1463,6 +1504,20 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         all_true,
         all_pred,
     )
+    raw_probability_brier = None
+    if all_probability_rows:
+        brier_values = []
+        for item in all_probability_rows:
+            actual = item["actual"]
+            probs = np.asarray(item["probabilities"], dtype=float)
+            one_hot = np.array([1.0 if actual == cls else 0.0 for cls in (-1, 0, 1)])
+            brier_values.append(float(np.mean((probs - one_hot) ** 2)))
+        raw_probability_brier = round(float(np.mean(brier_values)), 5)
+        print(
+            f"[PROBABILITY RELIABILITY DIAGNOSTIC] pair={pair_name}, "
+            f"raw_oof_brier={raw_probability_brier}, "
+            f"note=lower_is_better; raw RandomForest probabilities are NOT calibrated and must not be interpreted as true win probabilities"
+        )
     baseline_score = balanced_accuracy_score(
         all_true,
         all_baseline,
@@ -1640,8 +1695,12 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     spread_all = round(sum(t.get("spread_cost_pips", 0.0) for t in simulated_trade_rows), 2)
     print(
         f"[SIMULATED PNL COST CHECK] pair={pair_name}, gross_pips={gross_all}, "
-        f"spread_cost_pips={spread_all}, net_pips={total_pnl['net_pips']}, "
-        f"note=next-bar-open entry; spread deducted once per simulated trade; ATR barrier exits; excludes slippage/swaps/real fills"
+        f"spread_cost_pips={spread_all}, "
+        f"slippage_cost_pips={round(sum(t.get('slippage_cost_pips', 0.0) for t in simulated_trade_rows), 2)}, "
+        f"swap_stress_cost_pips={round(sum(t.get('swap_stress_cost_pips', 0.0) for t in simulated_trade_rows), 2)}, "
+        f"assumed_slippage_pips_per_trade={SIMULATED_ROUND_TRIP_SLIPPAGE_PIPS}, "
+        f"assumed_swap_stress_pips_per_trade={SIMULATED_SWAP_STRESS_COST_PIPS}, net_pips={total_pnl['net_pips']}, "
+        f"note=next-bar-open entry; spread plus modeled slippage and swap-stress costs deducted; swap value is only a placeholder, not broker data; excludes real fills"
     )
 
     print(
@@ -1652,7 +1711,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         f"avg_pips={total_pnl['avg_pips_per_trade']}, "
         f"max_drawdown_pips={total_pnl['max_drawdown_pips']}, "
         f"spread_pips={spread_pips}, hold_bars={LOOKAHEAD_BARS}, "
-        f"note=next-bar-open entry; non-overlapping ATR-barrier estimate; same-bar ambiguity counted adversely; excludes slippage/swaps/real fills"
+        f"note=next-bar-open entry; non-overlapping ATR-barrier estimate; same-bar ambiguity counted adversely; includes assumed costs only, not actual broker fills/swaps"
     )
 
     print(
@@ -1681,6 +1740,8 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "positive_pnl_folds": int(positive_pnl_folds),
         "total_pnl_trades": int(total_pnl["trades"]),
         "balanced_accuracy": round(float(score), 4),
+        "raw_oof_brier_score_diagnostic": raw_probability_brier,
+        "probability_calibrated": False,
         "baseline_balanced_accuracy": round(
             float(baseline_score), 4
         ),
@@ -1790,7 +1851,7 @@ def analyze(df, validation):
             "sell_pct": round(sell_pct, 1),
             "neutral_pct": round(neutral_pct, 1),
             "reason": (
-                "最新の確定足を使ったモデル推定値です。"
+                "表示値は未校正のRandomForestモデルスコアです。実際の勝率・真の確率ではありません。"
                 "将来の利益を保証するものではありません。"
             ),
         }
@@ -2303,7 +2364,7 @@ def main():
         "schema_version": MODEL_VERSION,
         "scanner_version": f"v{MODEL_VERSION}",
         "last_run_jst": started_at,
-        "mode": "v18_news_health_timezone_feature_diagnostics_previous_run_comparison_data_quality_freshness_directional_pnl_walk_forward_no_auto_orders",
+        "mode": "v19_entry_aligned_labels_cost_stress_probability_diagnostics_news_health_timezone_feature_diagnostics_data_quality_freshness_directional_pnl_walk_forward_no_auto_orders",
         "interval": "1h",
         "data_freshness_policy": {
             "max_age_minutes": MAX_DATA_AGE_MINUTES,
