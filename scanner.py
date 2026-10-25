@@ -1644,6 +1644,7 @@ def timeframe_trend(df):
 
 
 def data_age_minutes(df):
+    """1時間足の開始時刻ではなく、足の確定時刻を基準にデータ経過時間を返す。"""
     if df is None or df.empty:
         print("[DATA AGE DEBUG] df is empty")
         return None
@@ -1662,12 +1663,16 @@ def data_age_minutes(df):
             print("[DATA AGE ERROR] latest_index has no timezone")
             return None
 
+        # Yahoo Financeの1時間足インデックスは通常、足の開始時刻。
+        # data_age_minutes() は1時間足に対してのみ使うため、確定時刻を開始時刻+1時間で計算する。
         last_time = last_time.tz_convert("Asia/Tokyo")
+        confirmed_close_time = last_time + pd.Timedelta(hours=1)
         now = pd.Timestamp.now(tz="Asia/Tokyo")
-        age = (now - last_time).total_seconds() / 60
+        age = (now - confirmed_close_time).total_seconds() / 60
 
         print(
-            f"[DATA AGE DEBUG] latest_confirmed={last_time.isoformat()}, "
+            f"[DATA AGE DEBUG] latest_bar_start={last_time.isoformat()}, "
+            f"latest_confirmed_close={confirmed_close_time.isoformat()}, "
             f"now={now.isoformat()}, age_minutes={age:.1f}"
         )
 
