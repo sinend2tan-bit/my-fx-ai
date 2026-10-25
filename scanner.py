@@ -35,7 +35,7 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
-MODEL_VERSION = 10
+MODEL_VERSION = 11
 
 PAIRS = {
     "米ドル/円 (USD/JPY)": {
@@ -672,7 +672,8 @@ def add_indicators(df):
 
     df["ROC"] = close.pct_change(10)
 
-    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    # inplace=True を避け、pandas の将来互換性に配慮する。
+    df = df.replace([np.inf, -np.inf], np.nan)
     return df
 
 
@@ -796,7 +797,8 @@ def bars(ticker, interval="1h", period="60d"):
         print(
             f"[FEATURE DIAGNOSTIC] pair={ticker}, interval={interval}, "
             f"feature=Vol_Ratio, unique_values={vol_unique}, "
-            f"std={vol_std}"
+            f"std={vol_std}, model_input=False, "
+            f"note=diagnostic_only_not_used_for_training"
         )
 
     feature_df = feature_df.dropna(
