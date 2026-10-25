@@ -1,9 +1,11 @@
-streamlit
-yfinance
-pandas
-numpy
-plotly
-scikit-learn
-requests
-streamlit-autorefresh
-joblib
+# Streamlit アプリ (app.py) 用の依存関係。バージョン固定済み。
+# FX Cloud Scan は requirements-scanner.txt を使う (こちらは使わない)。
+streamlit==1.41.1
+yfinance==0.2.66
+pandas==2.2.3
+numpy==2.0.2
+plotly==5.24.1
+scikit-learn==1.5.2
+requests==2.32.3
+streamlit-autorefresh==1.0.1
+joblib==1.4.2
