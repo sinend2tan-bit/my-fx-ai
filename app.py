@@ -1546,11 +1546,23 @@ def _render_main_area():
     # 定期スキャン：中期トレード向けに1h/4hを選択し、日足・4h・1hの方向を比較。
     st.markdown("### 🔎 中期トレード候補スキャナー")
     st.caption("5通貨ペアをまとめて確認し、数時間〜数日保有向けの候補をランキングします。候補は分析上の参考で、注文可能・利益確実を意味しません。")
+    # iPadで selectbox の検索欄にフォーカスしてキーボードが出るのを避けるため、
+    # 短い候補は radio で直接タップ選択できるようにする。
     scan_control_cols = st.columns([1, 1, 1, 1])
     with scan_control_cols[0]:
-        scan_tf_label = st.selectbox("スキャン時間足", ["1時間足", "4時間足"], key="pair_scan_timeframe", help="中期トレードでは1時間足を基本、4時間足はゆったりした候補探しに使います。")
+        st.markdown("**スキャン時間足**")
+        scan_tf_label = st.radio(
+            "スキャン時間足", ["1時間足", "4時間足"],
+            key="pair_scan_timeframe", horizontal=True, label_visibility="collapsed",
+            help="中期トレードでは1時間足を基本、4時間足はゆったりした候補探しに使います。",
+        )
     with scan_control_cols[1]:
-        scan_interval_minutes = st.selectbox("自動チェック間隔", [15, 30, 60], key="pair_scan_interval_minutes", format_func=lambda x: f"{x}分ごと")
+        st.markdown("**自動チェック間隔**")
+        scan_interval_minutes = st.radio(
+            "自動チェック間隔", [15, 30, 60],
+            key="pair_scan_interval_minutes", horizontal=True,
+            format_func=lambda x: f"{x}分", label_visibility="collapsed",
+        )
     with scan_control_cols[2]:
         st.checkbox("定期スキャンを有効化", key="auto_pair_scan", on_change=save_settings, help="アプリ画面が開いている間だけ動作します。バックグラウンド常時監視ではありません。")
     with scan_control_cols[3]:
@@ -1901,11 +1913,12 @@ def _render_main_area():
         "🤖 AI検証・履歴",
     ]
     # Compact navigation is easier to use on iPad/phone than a row of long, clipped labels.
-    active_section = st.selectbox(
+    active_section = st.radio(
         "表示する画面",
         APP_SECTIONS,
         key="active_app_section_v2",
         label_visibility="collapsed",
+        horizontal=True,
     )
 
     if active_section == APP_SECTIONS[0]:
@@ -1929,7 +1942,12 @@ def _render_main_area():
             bars_count = st.slider("表示本数調整", 30, 300, value=int(st.session_state["chart_bars"]), step=10, key="chart_bars_slider", label_visibility="collapsed")
             st.session_state["chart_bars"] = bars_count
         with qc5:
-            sub_indicator = st.selectbox("サブ指標", ["RSI (14)", "MACD", "なし"], index=0, key="sub_indicator_select", label_visibility="collapsed")
+            st.markdown("**サブ指標**")
+            sub_indicator = st.radio(
+                "サブ指標", ["RSI (14)", "MACD", "なし"],
+                index=0, key="sub_indicator_select",
+                horizontal=True, label_visibility="collapsed",
+            )
         toggle_c1, toggle_c2, toggle_c3, toggle_c4 = st.columns(4)
         with toggle_c1: show_ma = st.checkbox("移動平均線(SMA/EMA)", value=True, key="show_ma_check")
         with toggle_c2: show_bb = st.checkbox("ボリンジャーバンド", value=True, key="show_bb_check")
