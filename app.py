@@ -625,16 +625,138 @@ def _impact_from_text(title, summary=""):
     return "影響度：低", "見出し内の関連語句は限定的です（影響がないという意味ではありません）", "方向判定なし"
 
 
+# Official central-bank feeds, keyed by currency code. These carry official
+# announcements only, not a full economic calendar or real-time newswire.
+CENTRAL_BANK_FEEDS = [
+    ("JPY", "日本銀行（公式）", "https://www.boj.or.jp/rss/whatsnew.xml"),
+    ("USD", "米連邦準備制度（公式）", "https://www.federalreserve.gov/feeds/press_monetary.xml"),
+    ("EUR", "欧州中央銀行（公式）", "https://www.ecb.europa.eu/rss/press.html"),
+    ("GBP", "英イングランド銀行（公式）", "https://www.bankofengland.co.uk/rss/news"),
+    ("AUD", "豪準備銀行（公式）", "https://www.rba.gov.au/rss/rss-cb-media-releases.xml"),
+]
+
+# Macro / monetary-policy terms used to triage official-feed headlines.
+_OFFICIAL_FEED_TERMS = (
+    "金融政策", "政策金利", "物価", "経済", "為替", "日銀", "総裁", "金融",
+    "monetary", "fomc", "interest rate", "inflation", "economic",
+    "federal funds", "policy rate", "bank rate", "cash rate",
+)
+
+_RSS10_NS = "http://purl.org/rss/1.0/"
+_ATOM_NS = "http://www.w3.org/2005/Atom"
+_DC_NS = "http://purl.org/dc/elements/1.1/"
+
+
+def _central_bank_feeds_for_ticker(ticker):
+    """Return the official feeds relevant to the pair's two currencies."""
+    code = str(ticker or "").upper()
+    return [(publisher, url) for currency, publisher, url in CENTRAL_BANK_FEEDS if currency in code]
+
+
+def _feed_node_text(node, names):
+    """First non-empty text among candidate element names (namespace aware)."""
+    for name in names:
+        el = node.find(name)
+        if el is not None and el.text and el.text.strip():
+            return el.text.strip()
+    return ""
+
+
+def _fetch_official_feed_items(publisher, url, errors):
+    """Fetch one official central-bank feed and return triaged headline items.
+
+    Handles RSS 2.0, Atom and RSS 1.0 (RDF) shapes. Headlines are kept only
+    when they contain a macro / monetary-policy related term, so unrelated
+    notices from large official feeds do not crowd out the list.
+    """
+    items = []
+    try:
+        response = requests.get(url, timeout=6, headers={"User-Agent": "Mozilla/5.0 FX-analysis-tool"})
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+    except Exception as exc:
+        errors.append(f"{publisher}: {type(exc).__name__}")
+        return items
+    nodes = root.findall(".//item")
+    if not nodes:
+        nodes = root.findall(f".//{{{_ATOM_NS}}}entry")
+    if not nodes:
+        nodes = root.findall(f".//{{{_RSS10_NS}}}item")
+    for node in nodes:
+        title = _feed_node_text(node, ["title", f"{{{_ATOM_NS}}}title", f"{{{_RSS10_NS}}}title"])
+        if not title:
+            continue
+        # Keep macro / monetary-policy related headlines rather than unrelated notices.
+        lower_title = title.lower()
+        if not any(term in lower_title for term in _OFFICIAL_FEED_TERMS):
+            continue
+        link = _feed_node_text(node, ["link", f"{{{_RSS10_NS}}}link"])
+        if not link:
+            for name in ("link", f"{{{_ATOM_NS}}}link"):
+                el = node.find(name)
+                if el is not None and el.attrib.get("href"):
+                    link = el.attrib["href"]
+                    break
+        if not link:
+            link = "#"
+        raw_date = _feed_node_text(node, ["pubDate", f"{{{_ATOM_NS}}}updated", f"{{{_ATOM_NS}}}published", f"{{{_DC_NS}}}date"])
+        published_ts = None
+        try:
+            parsed_date = pd.to_datetime(raw_date, utc=True, errors="coerce") if raw_date else pd.NaT
+            if not pd.isna(parsed_date):
+                published_ts = float(parsed_date.timestamp())
+                time_str = parsed_date.tz_convert(JST).strftime("%Y/%m/%d %H:%M JST")
+            else:
+                time_str = raw_date[:25] if raw_date else "時刻不明"
+        except Exception:
+            time_str = raw_date[:25] if raw_date else "時刻不明"
+        impact, reason, direction = _impact_from_text(title)
+        items.append({"title": title, "publisher": publisher, "time": time_str,
+                      "published_ts": published_ts, "link": link, "impact": impact, "reason": reason,
+                      "direction": direction, "source": publisher})
+    return items
+
+
+def _merge_news_items(*groups):
+    """Merge headline groups, dropping duplicates and sorting newest first.
+
+    Duplicates are detected by title or by link. Items without a parsed
+    timestamp keep their relative order at the end of the list.
+    """
+    merged = []
+    seen_titles = set()
+    seen_links = set()
+    for group in groups:
+        for item in group:
+            title_key = str(item.get("title", "")).strip().lower()
+            link_key = str(item.get("link", "")).strip()
+            if title_key and title_key in seen_titles:
+                continue
+            if link_key and link_key != "#" and link_key in seen_links:
+                continue
+            if title_key:
+                seen_titles.add(title_key)
+            if link_key and link_key != "#":
+                seen_links.add(link_key)
+            merged.append(item)
+    merged.sort(key=lambda x: (x.get("published_ts") is None, -(x.get("published_ts") or 0.0)))
+    return merged[:12]
+
+
 # News is cached for 15 minutes to reduce repeated requests during ordinary UI reruns.
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_news_and_impact(ticker):
-    """Fetch Yahoo Finance headlines first, then official central-bank RSS as fallback.
+    """Fetch Yahoo Finance headlines plus the pair's official central-bank feeds.
 
-    This is headline keyword triage only, not semantic AI or a directional forecast.
-    Returns source/status metadata so an empty feed is visible to the user.
+    The official feeds for the pair's two currencies are always merged in
+    (not only as a fallback when Yahoo returns nothing), duplicates are
+    removed and the combined list is sorted newest first, capped at 12.
+    This is headline keyword triage only, not semantic AI or a directional
+    forecast. Returns source/status metadata so an empty feed is visible
+    to the user.
     """
-    items = []
     errors = []
+    yahoo_items = []
     try:
         d = yf.Ticker(ticker)
         news = d.news or []
@@ -662,72 +784,30 @@ def fetch_news_and_impact(ticker):
             canonical = content.get("canonicalUrl", {}) if isinstance(content.get("canonicalUrl"), dict) else {}
             link = canonical.get("url") or n.get("link") or "#"
             impact, reason, direction = _impact_from_text(str(title), str(content.get("summary", "")))
-            items.append({"title": str(title), "publisher": str(publisher or "Yahoo Finance"),
-                          "time": time_str, "published_ts": published_ts, "link": str(link), "impact": impact,
-                          "reason": reason, "direction": direction, "source": "Yahoo Finance"})
+            yahoo_items.append({"title": str(title), "publisher": str(publisher or "Yahoo Finance"),
+                                "time": time_str, "published_ts": published_ts, "link": str(link), "impact": impact,
+                                "reason": reason, "direction": direction, "source": "Yahoo Finance"})
     except Exception as exc:
         errors.append(f"Yahoo Finance: {type(exc).__name__}")
 
-    # If Yahoo has no currency headlines, use official central-bank feeds as a fallback.
-    # These are official announcements, not a full economic calendar or real-time newswire.
-    if not items and requests is not None:
-        feeds = [
-            ("日本銀行（公式）", "https://www.boj.or.jp/rss/whatsnew.xml"),
-            ("米連邦準備制度（公式）", "https://www.federalreserve.gov/feeds/press_monetary.xml"),
-        ]
-        for publisher, url in feeds:
-            try:
-                response = requests.get(url, timeout=6, headers={"User-Agent": "Mozilla/5.0 FX-analysis-tool"})
-                response.raise_for_status()
-                root = ET.fromstring(response.content)
-                nodes = root.findall(".//item")
-                if not nodes:
-                    nodes = root.findall(".//{http://www.w3.org/2005/Atom}entry")
-                for node in nodes:
-                    title_node = node.find("title")
-                    if title_node is None:
-                        title_node = node.find("{http://www.w3.org/2005/Atom}title")
-                    title = (title_node.text or "").strip() if title_node is not None else ""
-                    if not title:
-                        continue
-                    # Keep macro / monetary-policy related headlines rather than unrelated notices.
-                    lower_title = title.lower()
-                    terms = ("金融政策", "政策金利", "物価", "経済", "為替", "日銀", "総裁", "金融", "monetary", "fomc", "interest rate", "inflation", "economic", "federal funds", "policy rate")
-                    if not any(term in lower_title for term in terms):
-                        continue
-                    link = "#"
-                    link_node = node.find("link")
-                    if link_node is not None:
-                        link = link_node.attrib.get("href", "#") if link_node.attrib else (link_node.text or "#")
-                    if link == "#":
-                        atom_link = node.find("{http://www.w3.org/2005/Atom}link")
-                        if atom_link is not None:
-                            link = atom_link.attrib.get("href", "#")
-                    date_node = node.find("pubDate") or node.find("{http://www.w3.org/2005/Atom}updated") or node.find("{http://www.w3.org/2005/Atom}published")
-                    raw_date = (date_node.text or "").strip() if date_node is not None else ""
-                    published_ts = None
-                    try:
-                        parsed_date = pd.to_datetime(raw_date, utc=True, errors="coerce") if raw_date else pd.NaT
-                        if not pd.isna(parsed_date):
-                            published_ts = float(parsed_date.timestamp())
-                            time_str = parsed_date.tz_convert(JST).strftime("%Y/%m/%d %H:%M JST")
-                        else:
-                            time_str = raw_date[:25] if raw_date else "時刻不明"
-                    except Exception:
-                        time_str = raw_date[:25] if raw_date else "時刻不明"
-                    impact, reason, direction = _impact_from_text(title)
-                    items.append({"title": title, "publisher": publisher, "time": time_str,
-                                  "published_ts": published_ts, "link": link, "impact": impact, "reason": reason,
-                                  "direction": direction, "source": publisher})
-                if len(items) >= 12:
-                    break
-            except Exception as exc:
-                errors.append(f"{publisher}: {type(exc).__name__}")
-    items = items[:12]
+    # Always merge the official central-bank feeds for this pair's currencies.
+    # These are official announcements, not a full economic calendar or
+    # real-time newswire, so they complement rather than replace Yahoo.
+    official_items = []
+    if requests is not None:
+        for publisher, url in _central_bank_feeds_for_ticker(ticker):
+            official_items.extend(_fetch_official_feed_items(publisher, url, errors))
+
+    items = _merge_news_items(yahoo_items, official_items)
     if items:
-        status = "取得成功（見出しのキーワード分類のみ）"
+        used_sources = []
+        for item in items:
+            src = item.get("source", "")
+            if src and src not in used_sources:
+                used_sources.append(src)
+        status = f"取得成功（{'、'.join(used_sources)}／見出しのキーワード分類のみ）"
     elif requests is None:
-        status = "取得失敗：requests が利用できず、公式RSSへの代替接続もできません"
+        status = "取得失敗：requests が利用できず、公式RSSへの接続もできません"
     else:
         status = "取得できるニュースがありません。ネットワーク、配信元、取得制限を確認してください"
     return {"items": items, "status": status, "errors": errors}
