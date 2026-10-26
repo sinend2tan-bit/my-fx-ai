@@ -2779,10 +2779,11 @@ def _render_main_area():
                                    file_name=f"ai_feature_importances_{ticker.replace('=X','')}.csv",mime="text/csv",key="download_csv_btn")
             top10_imp=feature_importances.nlargest(10).sort_values(ascending=True)
             fig_imp=go.Figure(go.Bar(x=top10_imp.values,y=[FEATURE_LABELS.get(x,x) for x in top10_imp.index],orientation="h"))
+            _imp_max=float(top10_imp.max()) if len(top10_imp) else 0.0
             fig_imp.update_layout(height=340,margin=dict(l=10,r=20,t=10,b=30),template="plotly_dark",xaxis_title="重要度スコア",yaxis=dict(autorange="reversed"),dragmode=False)
-            fig_imp.update_xaxes(fixedrange=True)
+            fig_imp.update_xaxes(fixedrange=True,range=[0,_imp_max*1.08 if _imp_max>0 else 1])
             fig_imp.update_yaxes(fixedrange=True)
-            st.plotly_chart(fig_imp,use_container_width=True,config={"displayModeBar":False,"scrollZoom":False,"doubleClick":False,"responsive":True},key="feature_importance_chart")
+            st.plotly_chart(fig_imp,use_container_width=True,config={"displayModeBar":False,"staticPlot":True,"responsive":True},key="feature_importance_chart")
         st.markdown("---")
         st.markdown("##### 📝 簡易トレードノート（考察・反省メモ）")
         def update_memo_callback(): save_settings()
