@@ -2682,6 +2682,104 @@ def record_forward_predictions(predictions, pair_results):
 # 全体実行・結果保存
 # =========================================================
 
+def write_step_summary(started_at, pair_results, summary_lines,
+                       news_status_counts, run_health, forward_summary):
+    """GitHub Actions のジョブサマリー（GITHUB_STEP_SUMMARY）へ Markdown を追記する。
+
+    Actions 実行時のみ（環境変数 GITHUB_STEP_SUMMARY がある場合のみ）動作し、
+    ローカル実行時は何もしない。表示だけの追加であり、売買判定・検証ゲート・
+    鮮度ゲート・ニュース判定には一切使わない。書き出しに失敗しても例外を
+    外に出さず、スキャン本体に影響しない。
+    """
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+
+    def cell(value):
+        # Markdown の表が崩れないよう、パイプと改行を取り除いて1セルに収める。
+        text = "-" if value is None else str(value)
+        return text.replace("|", "｜").replace("\n", " ").replace("\r", " ")
+
+    try:
+        lines = []
+        lines.append("## FX Cloud Scan 実行サマリー")
+        lines.append("")
+        lines.append(f"- 実行日時（JST）: {cell(started_at)}")
+        lines.append("")
+        lines.append("### ペア別結果")
+        lines.append("")
+        lines.append("| ペア | 判定 | 方向 | 買い% / 売り% | データ鮮度 | ニュース |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for item in pair_results:
+            lines.append(
+                "| {name} | {decision} | {direction} | {buy} / {sell} | {fresh} | {news} |".format(
+                    name=cell(item.get("name")),
+                    decision=cell(item.get("decision")),
+                    direction=cell(item.get("direction")),
+                    buy=cell(item.get("buy_pct")),
+                    sell=cell(item.get("sell_pct")),
+                    fresh=cell(item.get("data_freshness_status")),
+                    news=cell(item.get("news_status")),
+                )
+            )
+        lines.append("")
+        lines.append("### ニュース取得状況")
+        lines.append("")
+        if news_status_counts:
+            for status, count in sorted(news_status_counts.items()):
+                lines.append(f"- {cell(status)}: {count}件")
+        else:
+            lines.append("- 記録なし")
+        lines.append("")
+        lines.append("### フォワード検証（予測の事後測定。売買判定には使用しない）")
+        lines.append("")
+        lines.append(f"- 今回の新規記録: {forward_summary.get('recorded_this_run')}件")
+        lines.append(f"- 今回の評価: {forward_summary.get('evaluated_this_run')}件")
+        lines.append(f"- 未評価（PENDING）: {forward_summary.get('pending_count')}件")
+        lines.append(
+            "- 評価済み累計: {total}件"
+            "（的中 {hit}・不的中 {miss}・未到達 {not_reached}）".format(
+                total=forward_summary.get("evaluated_total"),
+                hit=forward_summary.get("hit"),
+                miss=forward_summary.get("miss"),
+                not_reached=forward_summary.get("not_reached"),
+            )
+        )
+        hit_rate = forward_summary.get("hit_rate_pct")
+        lines.append(
+            "- 的中率: {rate}（定義: HIT / (HIT + MISS)。"
+            "未到達 NOT_REACHED は勝敗なしとして分母に含めない）".format(
+                rate=f"{hit_rate}%" if hit_rate is not None else "-",
+            )
+        )
+        lines.append(
+            f"- 純損益累計: {forward_summary.get('net_pips_total')} pips"
+            "（仮想損益と同じコスト前提で差し引いた概算。実約定成績ではない）"
+        )
+        lines.append(f"- 平均MAE: {forward_summary.get('avg_mae_pips')} pips")
+        lines.append(f"- 記録開始: {forward_summary.get('tracking_since') or '未記録'}")
+        lines.append("")
+        lines.append("### 実行健康診断（主要項目）")
+        lines.append("")
+        lines.append(f"- 対象ペア: {run_health.get('pairs_total')}件")
+        lines.append(f"- データ鮮度OK: {run_health.get('fresh_data_pairs')}件 / 鮮度NG・不明: {run_health.get('stale_or_unknown_pairs')}件")
+        lines.append(f"- データ品質NG: {run_health.get('data_quality_fail_pairs')}件")
+        lines.append(f"- 検証合格: {run_health.get('validation_pass_pairs')}件")
+        lines.append(f"- 候補あり: {run_health.get('candidate_pairs')}件")
+        lines.append("")
+        lines.append("### サマリー詳細")
+        lines.append("")
+        for line in summary_lines:
+            lines.append(f"- {cell(line)}")
+        lines.append("")
+
+        with open(summary_path, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        print("ジョブサマリーへ実行サマリーを書き出しました。")
+    except Exception as exc:
+        print(f"[STEP SUMMARY ERROR] {type(exc).__name__}: {str(exc)[:180]}")
+
+
 def main():
     started_at = iso_now()
     previous_state = load_state()
@@ -2896,6 +2994,13 @@ def main():
     }
 
     save_state(state)
+
+    # GitHub Actions のジョブサマリーへ表示用サマリーを書き出す
+    # （表示のみの追加。書き出し失敗でもスキャン本体に影響しない）。
+    write_step_summary(
+        started_at, pair_results, summary,
+        news_status_counts, run_health, forward_summary,
+    )
 
     print("\n========== FX SCAN SUMMARY ==========")
     print("\n".join(summary))
