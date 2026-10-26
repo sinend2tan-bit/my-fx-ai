@@ -2777,13 +2777,9 @@ def _render_main_area():
                 csv_data=feature_importances.rename(index=lambda x:FEATURE_LABELS.get(x,x)).rename("重要度スコア").rename_axis("指標名").reset_index()
                 st.download_button("📥 重要度CSV",data=csv_data.to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"ai_feature_importances_{ticker.replace('=X','')}.csv",mime="text/csv",key="download_csv_btn")
-            top10_imp=feature_importances.nlargest(10).sort_values(ascending=True)
-            fig_imp=go.Figure(go.Bar(x=top10_imp.values,y=[FEATURE_LABELS.get(x,x) for x in top10_imp.index],orientation="h"))
-            _imp_max=float(top10_imp.max()) if len(top10_imp) else 0.0
-            fig_imp.update_layout(height=340,margin=dict(l=10,r=20,t=10,b=30),template="plotly_dark",xaxis_title="重要度スコア",yaxis=dict(autorange="reversed"),dragmode=False)
-            fig_imp.update_xaxes(fixedrange=True,range=[0,_imp_max*1.08 if _imp_max>0 else 1])
-            fig_imp.update_yaxes(fixedrange=True)
-            st.plotly_chart(fig_imp,use_container_width=True,config={"displayModeBar":False,"staticPlot":True,"responsive":True},key="feature_importance_chart")
+            top10_imp=feature_importances.nlargest(10)
+            imp_chart_df=top10_imp.rename(index=lambda x:FEATURE_LABELS.get(x,x)).rename("重要度スコア").to_frame()
+            st.bar_chart(imp_chart_df,horizontal=True,height=340,x_label="重要度スコア",color="#6366f1")
         st.markdown("---")
         st.markdown("##### 📝 簡易トレードノート（考察・反省メモ）")
         def update_memo_callback(): save_settings()
