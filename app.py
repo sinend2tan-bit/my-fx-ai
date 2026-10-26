@@ -2778,8 +2778,12 @@ def _render_main_area():
                 st.download_button("📥 重要度CSV",data=csv_data.to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"ai_feature_importances_{ticker.replace('=X','')}.csv",mime="text/csv",key="download_csv_btn")
             top10_imp=feature_importances.nlargest(10)
-            imp_chart_df=top10_imp.rename(index=lambda x:FEATURE_LABELS.get(x,x)).rename("重要度スコア").to_frame()
-            st.bar_chart(imp_chart_df,horizontal=True,height=340,x_label="重要度スコア",color="#6366f1")
+            _imp_max=float(top10_imp.max()) if len(top10_imp) else 0.0
+            _bar_rows=[]
+            for _feat,_val in top10_imp.items():
+                _pct=(float(_val)/_imp_max*100) if _imp_max>0 else 0.0
+                _bar_rows.append(f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;"><div style="width:118px;text-align:right;font-size:12px;white-space:nowrap;overflow:hidden;">{FEATURE_LABELS.get(_feat,_feat)}</div><div style="flex:1;background:rgba(255,255,255,0.08);border-radius:4px;"><div style="width:{_pct:.1f}%;background:#6366f1;height:16px;border-radius:4px;"></div></div><div style="width:52px;font-size:12px;">{float(_val):.3f}</div></div>')
+            st.markdown('<div style="padding:6px 2px;">'+"".join(_bar_rows)+'</div><div style="font-size:11px;opacity:0.7;margin-top:2px;">重要度スコア（モデルの特徴量重要度です。勝率ではありません）</div>',unsafe_allow_html=True)
         st.markdown("---")
         st.markdown("##### 📝 簡易トレードノート（考察・反省メモ）")
         def update_memo_callback(): save_settings()
