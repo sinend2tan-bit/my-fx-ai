@@ -1,4 +1,5 @@
 # app.py
+# redeploy trigger 2026-10-26 (reflect PR #7: plain HTML importance bars)
 # Pro FX Analyzer & Signal Pro — 安全性・検証整合性・モバイル表示改善版
 # 価格分析・注文補助専用です。証券口座接続・自動発注は行いません。
 # 予測確率・バックテスト結果は将来の利益や実際の勝率を保証しません。
