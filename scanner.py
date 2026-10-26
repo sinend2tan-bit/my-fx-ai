@@ -2330,6 +2330,25 @@ def normalize_forward_stats(stats):
     return base
 
 
+def _forward_bar_gap_allowed(prev_ts, next_ts):
+    """評価ウィンドウ内の隣り合う足の時刻差が許容範囲かを返す。
+
+    許容するのは次の2つだけ。
+    - ちょうど1時間（通常の連続した1時間足）
+    - 週末の市場休場をまたぐジャンプ: 前の足が金曜（または土曜）で
+      次の足が月曜、かつ差が80時間以内
+      （実データでは金曜21時→月曜0時の約51〜52時間が通常の週末休場）
+    平日の2時間以上の欠けなど、それ以外の差は欠損として扱う。
+    時刻の曜日は各タイムスタンプ自身のタイムゾーンで判定する。
+    """
+    diff = next_ts - prev_ts
+    if diff == pd.Timedelta(hours=1):
+        return True
+    if prev_ts.weekday() in (4, 5) and next_ts.weekday() == 0:
+        return diff <= pd.Timedelta(hours=80)
+    return False
+
+
 def evaluate_forward_prediction(prediction, ohlc_df):
     """PENDING予測1件を、シグナル足の直後8本の実際のOHLCで判定する。
 
@@ -2343,7 +2362,8 @@ def evaluate_forward_prediction(prediction, ohlc_df):
     ストレス）を差し引いた純損益pipsも併記する。実約定成績ではない。
     MAEは決済までの足（決済足を含む）の最大不利変動。
 
-    まだ8本そろっていない、または値が不正な場合は None を返し、判定を次回に回す。
+    まだ8本そろっていない、途中の足が欠けている（週末の市場休場を除く）、
+    または値が不正な場合は None を返し、判定を次回に回す。
     """
     direction = prediction.get("direction")
     sign = 1 if direction == "買い" else -1 if direction == "売り" else 0
@@ -2371,6 +2391,16 @@ def evaluate_forward_prediction(prediction, ohlc_df):
     window = frame[frame.index > signal_time].head(LOOKAHEAD_BARS)
     if len(window) < LOOKAHEAD_BARS:
         return None
+
+    # 足の連続性チェック。bars() 側で欠損行が除かれていると、途中の足が
+    # 欠けたまま残りの行で8本そろってしまうことがある。欠けた足を詰めて
+    # 評価しないよう、シグナル足→最初の評価足と、ウィンドウ内の連続する
+    # 足同士の時刻差を検証し、許容できない欠けがあれば評価せず
+    # PENDING のまま残す（週末の通常の市場休場は欠損とみなさない）。
+    chain = [signal_time] + list(window.index)
+    for prev_ts, next_ts in zip(chain[:-1], chain[1:]):
+        if not _forward_bar_gap_allowed(prev_ts, next_ts):
+            return None
 
     upper = reference + atr_value
     lower = reference - atr_value
@@ -2559,6 +2589,27 @@ def process_forward_verification(previous_state):
     return predictions, stats, evaluated_now
 
 
+def trim_forward_predictions(predictions, max_items=FORWARD_PREDICTIONS_MAX):
+    """予測リストを上限件数に切り詰める。
+
+    未評価（PENDING）の予測は削除しない。超過分は評価済みのものから
+    古い順に削除する。PENDING だけで上限を超える場合は全て保持する
+    （未評価データを失わない方針。その場合リストは上限より長くなる）。
+    リストの時系列順序は維持する。
+    """
+    if len(predictions) <= max_items:
+        return list(predictions)
+    excess = len(predictions) - max_items
+    kept = []
+    for item in predictions:
+        is_pending = isinstance(item, dict) and item.get("status") == "PENDING"
+        if excess > 0 and not is_pending:
+            excess -= 1
+            continue
+        kept.append(item)
+    return kept
+
+
 def record_forward_predictions(predictions, pair_results):
     """今回のスキャンで候補（方向あり）になった予測を記録する。
 
@@ -2660,7 +2711,8 @@ def main():
     forward_recorded_now = 0
     try:
         forward_recorded_now = record_forward_predictions(predictions, pair_results)
-        predictions = predictions[-FORWARD_PREDICTIONS_MAX:]
+        # 切り詰めは未評価（PENDING）を落とさない方式（trim_forward_predictions）。
+        predictions = trim_forward_predictions(predictions)
     except Exception as exc:
         print(
             f"[FORWARD RECORD ERROR] {type(exc).__name__}: {str(exc)[:180]}"

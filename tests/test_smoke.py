@@ -167,6 +167,62 @@ def test_forward_summary_hit_rate_definition():
     assert view["hit_rate_pct"] == 50.0
     assert view["tracking_since"] == "2026-01-05T00:00:00+09:00"
 
+def _forward_frame_at(times, rows):
+    idx = pd.DatetimeIndex(times)
+    return pd.DataFrame(rows, index=idx, columns=["Open", "High", "Low", "Close"])
+
+
+def test_forward_weekday_gap_blocks_evaluation():
+    # 平日の途中に足の欠け（3時間分の抜け）があるウィンドウは評価しない。
+    # 欠けた足を詰めて8本そろえても、PENDING のまま残すのが仕様。
+    signal = "2026-01-05 00:00+00:00"  # 月曜
+    times = [signal,
+             "2026-01-05 01:00+00:00", "2026-01-05 02:00+00:00",
+             # 03:00〜05:00 が欠けている（02:00 の次が 06:00）
+             "2026-01-05 06:00+00:00", "2026-01-05 07:00+00:00",
+             "2026-01-05 08:00+00:00", "2026-01-05 09:00+00:00",
+             "2026-01-05 10:00+00:00", "2026-01-05 11:00+00:00"]
+    rows = [(100.0, 100.2, 99.8, 100.0)] + _flat_bars(8)
+    frame = _forward_frame_at(times, rows)
+    prediction = _forward_prediction(frame)
+    prediction["signal_bar_time"] = signal.replace(" ", "T")
+    assert scanner.evaluate_forward_prediction(prediction, frame) is None
+
+
+def test_forward_weekend_gap_still_evaluates():
+    # 金曜→月曜の通常の週末休場（約51時間）は欠損とみなさず、評価する。
+    signal = "2026-01-02 20:00+00:00"  # 金曜
+    times = [signal,
+             "2026-01-02 21:00+00:00",
+             "2026-01-05 00:00+00:00", "2026-01-05 01:00+00:00",
+             "2026-01-05 02:00+00:00", "2026-01-05 03:00+00:00",
+             "2026-01-05 04:00+00:00", "2026-01-05 05:00+00:00",
+             "2026-01-05 06:00+00:00"]
+    rows = [(100.0, 100.2, 99.8, 100.0)] + _flat_bars(8)
+    frame = _forward_frame_at(times, rows)
+    prediction = _forward_prediction(frame)
+    prediction["signal_bar_time"] = signal.replace(" ", "T")
+    out = scanner.evaluate_forward_prediction(prediction, frame)
+    assert out is not None
+    assert out["status"] == "NOT_REACHED"
+
+
+def test_forward_trim_keeps_all_pending():
+    evaluated = [{"id": f"old{i}", "status": "HIT"} for i in range(4)]
+    pending = [{"id": f"pend{i}", "status": "PENDING"} for i in range(4)]
+    mixed = evaluated + pending
+    kept = scanner.trim_forward_predictions(mixed, max_items=5)
+    # 超過分の3件は評価済みの古い順に落ち、PENDING は全て残る
+    assert [item["id"] for item in kept] == ["old3", "pend0", "pend1", "pend2", "pend3"]
+
+    # PENDING だけで上限を超える場合は全て保持する（未評価を失わない）
+    only_pending = [{"id": f"p{i}", "status": "PENDING"} for i in range(6)]
+    assert len(scanner.trim_forward_predictions(only_pending, max_items=5)) == 6
+
+    # 上限以下ならそのまま
+    assert scanner.trim_forward_predictions(only_pending[:3], max_items=5) == only_pending[:3]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
 
