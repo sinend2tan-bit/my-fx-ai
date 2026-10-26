@@ -42,6 +42,11 @@ NEWS_HOLD_ON_IMPORTANT = True
 # ニュースが確認できない場合も新しい売買候補を保留
 NEWS_HOLD_IF_UNAVAILABLE = True
 
+# フォワード検証で保持する予測レコードの上限。
+# 古い評価済みレコードは切り詰めるが、累積集計（forward_stats）は別に保持するため
+# 切り詰めで累積成績が失われることはない。
+FORWARD_PREDICTIONS_MAX = 200
+
 MODEL_VERSION = 19
 
 # 仮想検証用の追加コスト（実際の松井証券FXの約定・スワップ値ではありません）。
@@ -2040,6 +2045,8 @@ def analyze_pair(name, config):
         "data_quality_status": "not_checked",
         "data_quality_reason": "",
         "validation": {},
+        "signal_bar_time": None,
+        "atr": None,
         "buy_pct": None,
         "sell_pct": None,
         "neutral_pct": None,
@@ -2085,6 +2092,14 @@ def analyze_pair(name, config):
             return result
 
         result["price"] = safe_float(latest_data["Close"].iloc[-1])
+        # フォワード検証の記録用（売買判定には使わない）。
+        # シグナル足＝最新の確定足。その時刻とATRを結果に残す。
+        result["signal_bar_time"] = pd.Timestamp(latest_data.index[-1]).isoformat()
+        result["atr"] = (
+            safe_float(latest_data["ATR"].iloc[-1])
+            if "ATR" in latest_data.columns
+            else None
+        )
         result["data_age_minutes"] = data_age_minutes(hourly)
 
         # 最優先の安全ゲート：古いデータでは重い検証や売買方向の算出をしない。
@@ -2271,6 +2286,399 @@ def analyze_pair(name, config):
 
 
 # =========================================================
+# スキャン予測のフォワード検証
+# =========================================================
+# 過去のスキャンが出した候補（方向あり）を保存し、後の実行で実際の価格と
+# 照合する「測る仕組み」。売買判定・検証ゲート・鮮度ゲートには一切使わない。
+
+
+def forward_prediction_id(ticker, signal_bar_time):
+    """予測の一意ID。同じシグナル足の候補を二重に記録しないために使う。"""
+    return f"{ticker}|{signal_bar_time}"
+
+
+def new_forward_stats():
+    """フォワード検証の累積カウンタ（初期値）。"""
+    return {
+        "evaluated_total": 0,
+        "hit": 0,
+        "miss": 0,
+        "not_reached": 0,
+        "buy_evaluated": 0,
+        "buy_hit": 0,
+        "buy_miss": 0,
+        "sell_evaluated": 0,
+        "sell_hit": 0,
+        "sell_miss": 0,
+        "net_pips_total": 0.0,
+        "mae_pips_total": 0.0,
+    }
+
+
+def normalize_forward_stats(stats):
+    """保存済みの累積カウンタを防御的に読み直す。欠けたキーは0で補う。"""
+    base = new_forward_stats()
+    if not isinstance(stats, dict):
+        return base
+    for key, default in base.items():
+        value = stats.get(key, default)
+        if isinstance(default, float):
+            coerced = safe_float(value)
+            base[key] = float(coerced) if coerced is not None else default
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            base[key] = int(value)
+    return base
+
+
+def _forward_bar_gap_allowed(prev_ts, next_ts):
+    """評価ウィンドウ内の隣り合う足の時刻差が許容範囲かを返す。
+
+    許容するのは次の2つだけ。
+    - ちょうど1時間（通常の連続した1時間足）
+    - 週末の市場休場をまたぐジャンプ: 前の足が金曜（または土曜）で
+      次の足が月曜、かつ差が80時間以内
+      （実データでは金曜21時→月曜0時の約51〜52時間が通常の週末休場）
+    平日の2時間以上の欠けなど、それ以外の差は欠損として扱う。
+    時刻の曜日は各タイムスタンプ自身のタイムゾーンで判定する。
+    """
+    diff = next_ts - prev_ts
+    if diff == pd.Timedelta(hours=1):
+        return True
+    if prev_ts.weekday() in (4, 5) and next_ts.weekday() == 0:
+        return diff <= pd.Timedelta(hours=80)
+    return False
+
+
+def evaluate_forward_prediction(prediction, ohlc_df):
+    """PENDING予測1件を、シグナル足の直後8本の実際のOHLCで判定する。
+
+    判定の物差しは学習ラベル・仮想損益と同じトリプルバリア（基準価格±1ATR、8本）。
+    - 方向に有利なバリアに先に到達: HIT（利確価格で決済）
+    - 不利なバリアに先に到達: MISS（損切り価格で決済）
+    - 同じ足で両方に触れた場合は足内の順序が不明なため、不利側を先として扱う
+      （学習ラベルの中立扱いではなく、仮想損益と同じ保守的な扱い）
+    - どちらも未到達: NOT_REACHED（8本目の終値で決済）
+    損益は既存の仮想損益と同じコスト前提（スプレッド＋スリッページ＋スワップ
+    ストレス）を差し引いた純損益pipsも併記する。実約定成績ではない。
+    MAEは決済までの足（決済足を含む）の最大不利変動。
+
+    まだ8本そろっていない、途中の足が欠けている（週末の市場休場を除く）、
+    または値が不正な場合は None を返し、判定を次回に回す。
+    """
+    direction = prediction.get("direction")
+    sign = 1 if direction == "買い" else -1 if direction == "売り" else 0
+    reference = safe_float(prediction.get("reference_price"))
+    atr_value = safe_float(prediction.get("atr"))
+    pip_size = safe_float(prediction.get("pip_size"))
+    spread_pips = safe_float(prediction.get("spread_pips"), 0.0) or 0.0
+
+    if sign == 0 or reference is None or reference <= 0:
+        return None
+    if atr_value is None or atr_value <= 0 or pip_size is None or pip_size <= 0:
+        return None
+
+    try:
+        signal_time = pd.Timestamp(prediction.get("signal_bar_time"))
+    except Exception:
+        return None
+    if signal_time is None or signal_time.tzinfo is None:
+        return None
+
+    if ohlc_df is None or ohlc_df.empty:
+        return None
+
+    frame = ohlc_df.sort_index()
+    window = frame[frame.index > signal_time].head(LOOKAHEAD_BARS)
+    if len(window) < LOOKAHEAD_BARS:
+        return None
+
+    # 足の連続性チェック。bars() 側で欠損行が除かれていると、途中の足が
+    # 欠けたまま残りの行で8本そろってしまうことがある。欠けた足を詰めて
+    # 評価しないよう、シグナル足→最初の評価足と、ウィンドウ内の連続する
+    # 足同士の時刻差を検証し、許容できない欠けがあれば評価せず
+    # PENDING のまま残す（週末の通常の市場休場は欠損とみなさない）。
+    chain = [signal_time] + list(window.index)
+    for prev_ts, next_ts in zip(chain[:-1], chain[1:]):
+        if not _forward_bar_gap_allowed(prev_ts, next_ts):
+            return None
+
+    upper = reference + atr_value
+    lower = reference - atr_value
+
+    status = "NOT_REACHED"
+    exit_price = safe_float(window["Close"].iloc[-1])
+    exit_bar_offset = LOOKAHEAD_BARS
+    mae_price = 0.0
+
+    for offset, (_, bar) in enumerate(window.iterrows(), start=1):
+        high = safe_float(bar["High"])
+        low = safe_float(bar["Low"])
+        if high is None or low is None:
+            return None
+
+        # 決済までの最大不利変動（決済足を含む）。
+        if sign == 1:
+            mae_price = max(mae_price, reference - low)
+        else:
+            mae_price = max(mae_price, high - reference)
+
+        hit_upper = high >= upper
+        hit_lower = low <= lower
+        favorable_first = hit_upper if sign == 1 else hit_lower
+        adverse_first = hit_lower if sign == 1 else hit_upper
+
+        # 不利側を先に判定する（同一足の両到達はMISS扱い）。
+        if adverse_first:
+            status = "MISS"
+            exit_price = lower if sign == 1 else upper
+            exit_bar_offset = offset
+            break
+        if favorable_first:
+            status = "HIT"
+            exit_price = upper if sign == 1 else lower
+            exit_bar_offset = offset
+            break
+
+    if exit_price is None:
+        return None
+
+    gross_pips = (exit_price - reference) * sign / pip_size
+    cost_pips = (
+        float(spread_pips)
+        + float(SIMULATED_ROUND_TRIP_SLIPPAGE_PIPS)
+        + float(SIMULATED_SWAP_STRESS_COST_PIPS)
+    )
+
+    return {
+        "status": status,
+        "exit_price": float(exit_price),
+        "exit_bar_offset": int(exit_bar_offset),
+        "gross_pips": round(float(gross_pips), 2),
+        "cost_pips": round(float(cost_pips), 2),
+        "net_pips": round(float(gross_pips) - float(cost_pips), 2),
+        "mae_pips": round(float(mae_price) / pip_size, 2),
+        "evaluated_at_jst": iso_now(),
+    }
+
+
+def update_forward_stats(stats, prediction, outcome):
+    """判定済み予測1件を累積カウンタへ反映する。"""
+    stats["evaluated_total"] += 1
+    status = outcome.get("status")
+    if status == "HIT":
+        stats["hit"] += 1
+    elif status == "MISS":
+        stats["miss"] += 1
+    elif status == "NOT_REACHED":
+        stats["not_reached"] += 1
+
+    if prediction.get("direction") == "買い":
+        stats["buy_evaluated"] += 1
+        if status == "HIT":
+            stats["buy_hit"] += 1
+        elif status == "MISS":
+            stats["buy_miss"] += 1
+    elif prediction.get("direction") == "売り":
+        stats["sell_evaluated"] += 1
+        if status == "HIT":
+            stats["sell_hit"] += 1
+        elif status == "MISS":
+            stats["sell_miss"] += 1
+
+    net_pips = safe_float(outcome.get("net_pips"), 0.0) or 0.0
+    mae_pips = safe_float(outcome.get("mae_pips"), 0.0) or 0.0
+    stats["net_pips_total"] = round(float(stats["net_pips_total"]) + float(net_pips), 2)
+    stats["mae_pips_total"] = round(float(stats["mae_pips_total"]) + float(mae_pips), 2)
+    return stats
+
+
+def build_forward_summary(stats, predictions, evaluated_now, recorded_now,
+                          tracking_since=None):
+    """状態ファイルとサマリー表示用の集計ビューを作る。
+
+    的中率は HIT / (HIT + MISS)。NOT_REACHED（どちらにも届かなかった予測）は
+    勝敗が付いていないため分母に入れない。方向別も同じ定義。
+    平均MAEは評価済み全件（NOT_REACHED含む）の平均。
+    """
+    stats = normalize_forward_stats(stats)
+    decided = stats["hit"] + stats["miss"]
+    buy_decided = stats["buy_hit"] + stats["buy_miss"]
+    sell_decided = stats["sell_hit"] + stats["sell_miss"]
+    evaluated = stats["evaluated_total"]
+    pending = sum(
+        1 for item in predictions
+        if isinstance(item, dict) and item.get("status") == "PENDING"
+    )
+    return {
+        **stats,
+        "tracking_since": tracking_since,
+        "hit_rate_pct": round(stats["hit"] / decided * 100, 1) if decided else None,
+        "buy_hit_rate_pct": (
+            round(stats["buy_hit"] / buy_decided * 100, 1) if buy_decided else None
+        ),
+        "sell_hit_rate_pct": (
+            round(stats["sell_hit"] / sell_decided * 100, 1) if sell_decided else None
+        ),
+        "avg_mae_pips": (
+            round(float(stats["mae_pips_total"]) / evaluated, 2) if evaluated else None
+        ),
+        "pending_count": pending,
+        "stored_predictions": len(predictions),
+        "evaluated_this_run": evaluated_now,
+        "recorded_this_run": recorded_now,
+        "definitions": (
+            "的中率=HIT/(HIT+MISS)。NOT_REACHEDは勝敗なしとして分母に含めない。"
+            "損益は基準価格±1ATRのバリア方式で、既存の仮想損益と同じコスト前提を"
+            "差し引いた概算。実約定成績ではない。"
+        ),
+    }
+
+
+def process_forward_verification(previous_state):
+    """保存済み予測のうち評価期間が終わったものを、実際の価格で判定する。
+
+    ペアごとに1時間足を取り直して判定する。失敗しても例外を外に出さず、
+    判定できなかった予測はPENDINGのまま次回に回す。
+    戻り値: (predictions, stats, evaluated_now)
+    """
+    raw_predictions = previous_state.get("predictions", [])
+    if not isinstance(raw_predictions, list):
+        raw_predictions = []
+    predictions = [item for item in raw_predictions if isinstance(item, dict)]
+    stats = normalize_forward_stats(previous_state.get("forward_stats"))
+
+    pending_by_ticker = {}
+    for item in predictions:
+        if item.get("status") == "PENDING" and item.get("ticker"):
+            pending_by_ticker.setdefault(item["ticker"], []).append(item)
+
+    evaluated_now = 0
+    for ticker, pending_items in pending_by_ticker.items():
+        try:
+            frame = bars(ticker, interval="1h", period="180d")
+            if frame is None:
+                continue
+            ohlc = frame.attrs.get("latest_features")
+            if ohlc is None or ohlc.empty:
+                continue
+            for item in pending_items:
+                try:
+                    outcome = evaluate_forward_prediction(item, ohlc)
+                except Exception as exc:
+                    print(
+                        f"[FORWARD VERIFY ERROR] id={item.get('id')}: "
+                        f"{type(exc).__name__}: {str(exc)[:180]}"
+                    )
+                    continue
+                if outcome is None:
+                    continue
+                item.update(outcome)
+                update_forward_stats(stats, item, outcome)
+                evaluated_now += 1
+                print(
+                    f"[FORWARD VERIFY] id={item.get('id')}, "
+                    f"status={outcome['status']}, net_pips={outcome['net_pips']}, "
+                    f"mae_pips={outcome['mae_pips']}"
+                )
+        except Exception as exc:
+            print(
+                f"[FORWARD VERIFY ERROR] ticker={ticker}: "
+                f"{type(exc).__name__}: {str(exc)[:180]}"
+            )
+
+    return predictions, stats, evaluated_now
+
+
+def trim_forward_predictions(predictions, max_items=FORWARD_PREDICTIONS_MAX):
+    """予測リストを上限件数に切り詰める。
+
+    未評価（PENDING）の予測は削除しない。超過分は評価済みのものから
+    古い順に削除する。PENDING だけで上限を超える場合は全て保持する
+    （未評価データを失わない方針。その場合リストは上限より長くなる）。
+    リストの時系列順序は維持する。
+    """
+    if len(predictions) <= max_items:
+        return list(predictions)
+    excess = len(predictions) - max_items
+    kept = []
+    for item in predictions:
+        is_pending = isinstance(item, dict) and item.get("status") == "PENDING"
+        if excess > 0 and not is_pending:
+            excess -= 1
+            continue
+        kept.append(item)
+    return kept
+
+
+def record_forward_predictions(predictions, pair_results):
+    """今回のスキャンで候補（方向あり）になった予測を記録する。
+
+    記録対象は、検証・鮮度・ニュース等の全ゲートを通過して
+    「候補あり（手動確認のみ）」になったものだけ。保留になった方向は
+    ツールが出した予測ではないため記録しない。
+    IDは ticker + シグナル足時刻で、同じ候補の二重記録を防ぐ。
+    戻り値: 新規記録件数
+    """
+    existing_ids = {
+        item.get("id") for item in predictions if isinstance(item, dict)
+    }
+    recorded = 0
+    for item in pair_results:
+        try:
+            if item.get("decision") != "候補あり（手動確認のみ）":
+                continue
+            direction = item.get("direction")
+            if direction not in ("買い", "売り"):
+                continue
+            ticker = item.get("ticker")
+            signal_time = item.get("signal_bar_time")
+            reference_price = safe_float(item.get("price"))
+            atr_value = safe_float(item.get("atr"))
+            if not ticker or not signal_time:
+                continue
+            if reference_price is None or reference_price <= 0:
+                continue
+            if atr_value is None or atr_value <= 0:
+                continue
+
+            pred_id = forward_prediction_id(ticker, signal_time)
+            if pred_id in existing_ids:
+                continue
+
+            config = PAIRS.get(item.get("name"), {})
+            pip_size = safe_float(config.get("pip"), 0.0) or 0.0
+            if pip_size <= 0:
+                continue
+
+            predictions.append({
+                "id": pred_id,
+                "recorded_at_jst": iso_now(),
+                "name": item.get("name"),
+                "ticker": ticker,
+                "direction": direction,
+                "direction_sign": 1 if direction == "買い" else -1,
+                "reference_price": float(reference_price),
+                "atr": float(atr_value),
+                "signal_bar_time": signal_time,
+                "pip_size": float(pip_size),
+                "spread_pips": safe_float(config.get("spread_pips"), 0.0) or 0.0,
+                "status": "PENDING",
+            })
+            existing_ids.add(pred_id)
+            recorded += 1
+            print(
+                f"[FORWARD RECORD] id={pred_id}, direction={direction}, "
+                f"reference={reference_price}, atr={atr_value}"
+            )
+        except Exception as exc:
+            print(
+                f"[FORWARD RECORD ERROR] pair={item.get('name')}: "
+                f"{type(exc).__name__}: {str(exc)[:180]}"
+            )
+    return recorded
+
+
+# =========================================================
 # 全体実行・結果保存
 # =========================================================
 
@@ -2278,9 +2686,57 @@ def main():
     started_at = iso_now()
     previous_state = load_state()
 
+    # フォワード検証（測る仕組みの追加。売買判定には使わない）:
+    # 前回までの予測のうち評価期間が終わったものを、実際の価格で判定する。
+    # 失敗してもスキャン本体を止めない。状態が壊れていても保存済みの値は
+    # 可能な限り保持し、履歴を巻き戻さない。
+    forward_evaluated_now = 0
+    try:
+        predictions, forward_stats, forward_evaluated_now = (
+            process_forward_verification(previous_state)
+        )
+    except Exception as exc:
+        print(
+            f"[FORWARD VERIFY ERROR] {type(exc).__name__}: {str(exc)[:180]}"
+        )
+        raw_predictions = previous_state.get("predictions")
+        predictions = raw_predictions if isinstance(raw_predictions, list) else []
+        forward_stats = normalize_forward_stats(previous_state.get("forward_stats"))
+
     pair_results = []
     for name, config in PAIRS.items():
         pair_results.append(analyze_pair(name, config))
+
+    # 今回の候補をフォワード検証の対象として記録する（判定には使わない）。
+    forward_recorded_now = 0
+    try:
+        forward_recorded_now = record_forward_predictions(predictions, pair_results)
+        # 切り詰めは未評価（PENDING）を落とさない方式（trim_forward_predictions）。
+        predictions = trim_forward_predictions(predictions)
+    except Exception as exc:
+        print(
+            f"[FORWARD RECORD ERROR] {type(exc).__name__}: {str(exc)[:180]}"
+        )
+
+    # 記録の開始日時。キャッシュ消失で状態が作り直されると、この日時が
+    # 新しいものにリセットされるため、「記録が失われた」ことと「成績が悪い」
+    # ことを区別できる。保存済みの値があればそれを引き継ぐ。
+    forward_tracking_since = previous_state.get("forward_tracking_since")
+    if not isinstance(forward_tracking_since, str) or not forward_tracking_since:
+        recorded_times = [
+            item.get("recorded_at_jst")
+            for item in predictions
+            if isinstance(item, dict) and item.get("recorded_at_jst")
+        ]
+        forward_tracking_since = min(recorded_times) if recorded_times else None
+
+    forward_summary = build_forward_summary(
+        forward_stats,
+        predictions,
+        forward_evaluated_now,
+        forward_recorded_now,
+        tracking_since=forward_tracking_since,
+    )
 
     summary = []
     for item in pair_results:
@@ -2294,6 +2750,20 @@ def main():
             f"重要ニュース={item.get('news_risk_detected')} / "
             f"再現率={recall}"
         )
+
+    summary.append(
+        f"フォワード検証（記録開始: {forward_summary['tracking_since'] or '未記録'}）: "
+        f"評価済み累計{forward_summary['evaluated_total']}件"
+        f"（的中{forward_summary['hit']}・不的中{forward_summary['miss']}・"
+        f"未到達{forward_summary['not_reached']}） / "
+        f"的中率={forward_summary['hit_rate_pct']}%"
+        f"（定義: HIT/(HIT+MISS)、未到達は分母外） / "
+        f"純損益累計={forward_summary['net_pips_total']}pips / "
+        f"平均MAE={forward_summary['avg_mae_pips']}pips / "
+        f"未評価={forward_summary['pending_count']}件 / "
+        f"今回判定={forward_summary['evaluated_this_run']}件・"
+        f"今回記録={forward_summary['recorded_this_run']}件"
+    )
 
     history = previous_state.get("history", [])
     if not isinstance(history, list):
@@ -2387,6 +2857,23 @@ def main():
                 "公式経済指標カレンダーの代替ではない。"
             ),
         },
+        "predictions": predictions,
+        "forward_stats": forward_stats,
+        "forward_tracking_since": forward_tracking_since,
+        "forward_verification": forward_summary,
+        "forward_verification_policy": {
+            "lookahead_bars": LOOKAHEAD_BARS,
+            "barrier": "基準価格±1ATR（学習ラベル・仮想損益と同じ物差し）",
+            "same_bar_both_hit": "足内の順序が不明なため不利側を先として扱う",
+            "hit_rate_definition": "HIT/(HIT+MISS)。NOT_REACHEDは分母に含めない",
+            "cost_model": "スプレッド＋スリッページ＋スワップストレス（仮想損益と同じ前提）。実約定成績ではない",
+            "max_stored_predictions": FORWARD_PREDICTIONS_MAX,
+            "notice": (
+                "状態はActionsキャッシュで引き継ぐため、長期間未使用などで"
+                "キャッシュが消えると記録はリセットされる。その場合は"
+                "forward_tracking_since が新しい日時になる。"
+            ),
+        },
         "news_status_counts": news_status_counts,
         "news_health": news_health,
         "previous_run_comparison": previous_comparison,
@@ -2415,6 +2902,7 @@ def main():
     print("ニュース取得状況:", news_status_counts)
     print("ニュース診断詳細:", json.dumps(news_health, ensure_ascii=False))
     print("前回実行との比較:", json.dumps(previous_comparison, ensure_ascii=False))
+    print("フォワード検証:", json.dumps(forward_summary, ensure_ascii=False))
     print("実行健康診断:", json.dumps(run_health, ensure_ascii=False))
     print("通貨ペア別理由:")
     for item in pair_results:
