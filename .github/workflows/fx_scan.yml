@@ -54,3 +54,14 @@ jobs:
         with:
           path: scan_state.json
           key: fx-scan-state-${{ github.run_id }}-${{ github.run_attempt }}
+      # 状態ファイルの控えを成果物として保存する（キャッシュ消失時の復旧用）。
+      # 保存に失敗してもスキャン本体の結果には影響させない。
+      - name: Backup scan state as artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-state-${{ github.run_number }}
+          path: scan_state.json
+          retention-days: 30
+          if-no-files-found: warn
