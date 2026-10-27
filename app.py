@@ -717,6 +717,93 @@ def _fetch_official_feed_items(publisher, url, errors):
     return items
 
 
+# Pair-specific Japanese search terms for Google News RSS. Yahoo Finance
+# headlines are effectively unusable for these FX pairs (yfinance returns
+# zero items and Yahoo's own headline RSS carries months-old leftovers),
+# so the headline layer uses Google News search RSS instead: free, no API
+# key, and fresh (the "when:3d" operator limits results to recent days).
+GOOGLE_NEWS_QUERIES = {
+    "USDJPY=X": "ドル円",
+    "GBPJPY=X": "ポンド円",
+    "EURJPY=X": "ユーロ円",
+    "AUDJPY=X": "豪ドル円",
+    "EURUSD=X": "ユーロドル",
+}
+
+
+def _google_news_query_for_ticker(ticker):
+    """Japanese search term for the pair, with a generic FX fallback."""
+    code = str(ticker or "").upper()
+    if code in GOOGLE_NEWS_QUERIES:
+        return GOOGLE_NEWS_QUERIES[code]
+    base = code.replace("=X", "")
+    return base or "為替"
+
+
+def _fetch_google_news_items(ticker, errors):
+    """Fetch recent headlines for the pair from Google News search RSS.
+
+    Returns items in the same shape as the official-feed items, with
+    source "Googleニュース" and the outlet name kept as publisher. Up to
+    30 raw items are read; the merge step caps the combined list at 12.
+    """
+    from urllib.parse import quote_plus
+
+    items = []
+    query = _google_news_query_for_ticker(ticker)
+    url = (
+        "https://news.google.com/rss/search?q="
+        + quote_plus(f"{query} when:3d")
+        + "&hl=ja&gl=JP&ceid=JP:ja"
+    )
+    try:
+        response = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 FX-analysis-tool"})
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+    except Exception as exc:
+        errors.append(f"Googleニュース: {type(exc).__name__}")
+        return items
+    for node in root.findall(".//item")[:30]:
+        title = _feed_node_text(node, ["title"])
+        if not title:
+            continue
+        publisher = _feed_node_text(node, ["source"]) or "Googleニュース"
+        link = _feed_node_text(node, ["link"]) or "#"
+        raw_date = _feed_node_text(node, ["pubDate"])
+        published_ts = None
+        try:
+            parsed_date = pd.to_datetime(raw_date, utc=True, errors="coerce") if raw_date else pd.NaT
+            if not pd.isna(parsed_date):
+                published_ts = float(parsed_date.timestamp())
+                time_str = parsed_date.tz_convert(JST).strftime("%Y/%m/%d %H:%M JST")
+            else:
+                time_str = raw_date[:25] if raw_date else "時刻不明"
+        except Exception:
+            time_str = raw_date[:25] if raw_date else "時刻不明"
+        impact, reason, direction = _impact_from_text(title)
+        items.append({"title": title, "publisher": publisher, "time": time_str,
+                      "published_ts": published_ts, "link": link, "impact": impact, "reason": reason,
+                      "direction": direction, "source": "Googleニュース"})
+    return items
+
+
+def _news_title_key(item):
+    """Normalized title used for duplicate detection in the merge.
+
+    Google News titles end with a " - <outlet>" suffix; the same story from
+    different outlets (or with the suffix present/absent) should still be
+    treated as one headline, so the suffix matching the item's publisher
+    is stripped before comparing.
+    """
+    title = str(item.get("title", "")).strip()
+    publisher = str(item.get("publisher", "")).strip()
+    if publisher:
+        suffix = f" - {publisher}"
+        if title.lower().endswith(suffix.lower()):
+            title = title[: -len(suffix)].strip()
+    return title.lower()
+
+
 def _merge_news_items(*groups):
     """Merge headline groups, dropping duplicates and sorting newest first.
 
@@ -728,7 +815,7 @@ def _merge_news_items(*groups):
     seen_links = set()
     for group in groups:
         for item in group:
-            title_key = str(item.get("title", "")).strip().lower()
+            title_key = _news_title_key(item)
             link_key = str(item.get("link", "")).strip()
             if title_key and title_key in seen_titles:
                 continue
@@ -746,59 +833,31 @@ def _merge_news_items(*groups):
 # News is cached for 15 minutes to reduce repeated requests during ordinary UI reruns.
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_news_and_impact(ticker):
-    """Fetch Yahoo Finance headlines plus the pair's official central-bank feeds.
+    """Fetch Google News headlines plus the pair's official central-bank feeds.
 
-    The official feeds for the pair's two currencies are always merged in
-    (not only as a fallback when Yahoo returns nothing), duplicates are
-    removed and the combined list is sorted newest first, capped at 12.
+    Yahoo Finance headlines are not used: for these FX pairs yfinance
+    returns zero items and Yahoo's headline RSS serves stale leftovers.
+    Google News search RSS (pair-specific Japanese query, last 3 days)
+    provides the headline layer instead. The official feeds for the
+    pair's two currencies are always merged in, duplicates are removed
+    and the combined list is sorted newest first, capped at 12.
     This is headline keyword triage only, not semantic AI or a directional
     forecast. Returns source/status metadata so an empty feed is visible
     to the user.
     """
     errors = []
-    yahoo_items = []
-    try:
-        d = yf.Ticker(ticker)
-        news = d.news or []
-        for n in news[:12]:
-            content = n.get("content", n) if isinstance(n, dict) else {}
-            title = content.get("title") or n.get("title") or "タイトルなし"
-            publisher = content.get("provider", {}).get("displayName") if isinstance(content.get("provider"), dict) else n.get("publisher", "")
-            pubdate = content.get("pubDate") or n.get("providerPublishTime")
-            published_ts = None
-            try:
-                if isinstance(pubdate, (int, float)):
-                    published_ts = float(pubdate)
-                    time_str = datetime.fromtimestamp(pubdate, tz=JST).strftime("%Y/%m/%d %H:%M JST")
-                elif pubdate:
-                    parsed_date = pd.to_datetime(pubdate, utc=True, errors="coerce")
-                    if not pd.isna(parsed_date):
-                        published_ts = float(parsed_date.timestamp())
-                        time_str = parsed_date.tz_convert(JST).strftime("%Y/%m/%d %H:%M JST")
-                    else:
-                        time_str = str(pubdate)[:25]
-                else:
-                    time_str = "時刻不明"
-            except Exception:
-                time_str = "時刻不明"
-            canonical = content.get("canonicalUrl", {}) if isinstance(content.get("canonicalUrl"), dict) else {}
-            link = canonical.get("url") or n.get("link") or "#"
-            impact, reason, direction = _impact_from_text(str(title), str(content.get("summary", "")))
-            yahoo_items.append({"title": str(title), "publisher": str(publisher or "Yahoo Finance"),
-                                "time": time_str, "published_ts": published_ts, "link": str(link), "impact": impact,
-                                "reason": reason, "direction": direction, "source": "Yahoo Finance"})
-    except Exception as exc:
-        errors.append(f"Yahoo Finance: {type(exc).__name__}")
-
-    # Always merge the official central-bank feeds for this pair's currencies.
-    # These are official announcements, not a full economic calendar or
-    # real-time newswire, so they complement rather than replace Yahoo.
+    headline_items = []
     official_items = []
     if requests is not None:
+        headline_items = _fetch_google_news_items(ticker, errors)
+        # Always merge the official central-bank feeds for this pair's
+        # currencies. These are official announcements, not a full
+        # economic calendar or real-time newswire, so they complement
+        # rather than replace the headline layer.
         for publisher, url in _central_bank_feeds_for_ticker(ticker):
             official_items.extend(_fetch_official_feed_items(publisher, url, errors))
 
-    items = _merge_news_items(yahoo_items, official_items)
+    items = _merge_news_items(headline_items, official_items)
     if items:
         used_sources = []
         for item in items:
@@ -807,7 +866,7 @@ def fetch_news_and_impact(ticker):
                 used_sources.append(src)
         status = f"取得成功（{'、'.join(used_sources)}／見出しのキーワード分類のみ）"
     elif requests is None:
-        status = "取得失敗：requests が利用できず、公式RSSへの接続もできません"
+        status = "取得失敗：requests が利用できず、ニュースRSSへの接続もできません"
     else:
         status = "取得できるニュースがありません。ネットワーク、配信元、取得制限を確認してください"
     return {"items": items, "status": status, "errors": errors}
