@@ -619,23 +619,37 @@ def fetch_central_bank_articles(ticker):
     """中央銀行公式フィード系統。フィード単位で失敗を隔離する。
 
     1つでもフィードを取得できれば系統としては ok とし、失敗した
-    フィードは errors に記録する。
+    フィードは errors に記録する。系統の状態はフィード単位の
+    成否で区別する：全フィード成功なら ok、一部だけ成功なら
+    partial（部分成功）、全フィード失敗なら error。部分成功を
+    系統全体の失敗と表示しないための区別である。
     """
     articles = []
     errors = []
-    ok_any = False
+    feeds_ok = []
+    feeds_failed = []
     for publisher, url in _central_bank_feeds_for_ticker(ticker):
         feed_articles, error = _fetch_central_bank_feed(publisher, url)
         if error:
             errors.append(error)
+            feeds_failed.append(publisher)
         else:
-            ok_any = True
+            feeds_ok.append(publisher)
             articles.extend(feed_articles)
+    if feeds_failed and feeds_ok:
+        status = "partial"
+    elif feeds_failed:
+        status = "error"
+    else:
+        status = "ok"
     return {
         "articles": articles,
         "errors": errors,
-        "ok": ok_any,
+        "ok": bool(feeds_ok),
         "method": "中央銀行フィード",
+        "status": status,
+        "feeds_ok": feeds_ok,
+        "feeds_failed": feeds_failed,
     }
 
 
@@ -747,24 +761,69 @@ def _news_title_key(title, publisher):
     return title.lower()
 
 
+def _backfill_news_article(kept, duplicate):
+    """重複記事から、先行記事に欠けた情報だけを補完する。
+
+    先行記事に有効な値がある項目は上書きしない。特に公開日時が
+    不明（None）の先行記事へ重複記事の有効な日時を取り込むことで、
+    新しい記事が「日時不明・古い記事」として誤って扱われるのを防ぐ。
+    """
+    if kept.get("_published") is None and duplicate.get("_published") is not None:
+        kept["_published"] = duplicate["_published"]
+        kept["published_at"] = (
+            duplicate.get("published_at")
+            or duplicate["_published"].isoformat()
+        )
+    # リンクは url / link どちらのキーでも欠けていれば補う。
+    if not str(kept.get("url") or kept.get("link") or "").strip():
+        link_value = str(
+            duplicate.get("url") or duplicate.get("link") or ""
+        ).strip()
+        if link_value:
+            if "url" in kept or "link" not in kept:
+                kept["url"] = link_value
+            else:
+                kept["link"] = link_value
+    for key in ("publisher", "source"):
+        if not str(kept.get(key) or "").strip() and str(
+            duplicate.get(key) or ""
+        ).strip():
+            kept[key] = duplicate[key]
+
+
 def dedupe_news_articles(articles):
-    """タイトル正規化またはリンクが一致する記事を1件に統合する。"""
+    """タイトル正規化またはリンクが一致する記事を1件に統合する。
+
+    重複と判定された記事は単に捨てず、先行記事に欠けた情報
+    （公開日時・リンク・媒体名など）を重複記事の有効な値で補完する。
+    重複判定キーの仕様自体は変えない。
+    """
     merged = []
-    seen_titles = set()
-    seen_links = set()
+    by_title = {}
+    by_link = {}
     for item in articles:
         if not isinstance(item, dict):
             continue
         title_key = _news_title_key(item.get("title"), item.get("publisher"))
         link_key = str(item.get("url") or item.get("link") or "").strip()
-        if title_key and title_key in seen_titles:
-            continue
-        if link_key and link_key in seen_links:
+        kept = None
+        if title_key and title_key in by_title:
+            kept = by_title[title_key]
+        elif link_key and link_key in by_link:
+            kept = by_link[link_key]
+        if kept is not None:
+            _backfill_news_article(kept, item)
+            # 重複記事側のキーも先行記事に寄せ、3件目以降の重複も
+            # 同じ先行記事へ統合できるようにする。
+            if title_key and title_key not in by_title:
+                by_title[title_key] = kept
+            if link_key and link_key not in by_link:
+                by_link[link_key] = kept
             continue
         if title_key:
-            seen_titles.add(title_key)
+            by_title[title_key] = item
         if link_key:
-            seen_links.add(link_key)
+            by_link[link_key] = item
         merged.append(item)
     return merged
 
@@ -809,14 +868,21 @@ def fetch_news(ticker):
             fetched = fetcher(ticker)
             if not isinstance(fetched, dict):
                 raise TypeError("invalid fetcher result")
+            source_ok = bool(fetched.get("ok"))
             source_results.append({
                 "source": source_name,
                 "articles": fetched.get("articles") or [],
                 "errors": [
                     str(error) for error in (fetched.get("errors") or [])
                 ],
-                "ok": bool(fetched.get("ok")),
+                "ok": source_ok,
                 "method": fetched.get("method"),
+                # 系統が細分状態（中央銀行フィードの partial 等）を返す
+                # 場合はそれを使い、なければ ok から単純に決める。
+                "status": fetched.get("status")
+                or ("ok" if source_ok else "error"),
+                "feeds_ok": fetched.get("feeds_ok"),
+                "feeds_failed": fetched.get("feeds_failed"),
             })
         except Exception as exc:
             source_results.append({
@@ -827,6 +893,9 @@ def fetch_news(ticker):
                 ],
                 "ok": False,
                 "method": None,
+                "status": "error",
+                "feeds_ok": None,
+                "feeds_failed": None,
             })
 
     retrieval_errors = []
@@ -842,7 +911,7 @@ def fetch_news(ticker):
             if isinstance(article, dict)
             and article.get("_published") is not None
         ]
-        result["news_sources"].append({
+        source_entry = {
             "source": entry["source"],
             "article_count": len(entry["articles"]),
             "latest_published_jst": (
@@ -850,7 +919,17 @@ def fetch_news(ticker):
                 if published_values else None
             ),
             "error": "; ".join(entry["errors"]) if entry["errors"] else None,
-        })
+            # 系統の状態（ok / partial / error）。中央銀行フィードの
+            # 部分成功を系統全体の失敗と表示しないために持つ。
+            "status": entry.get("status")
+            or ("ok" if entry["ok"] else "error"),
+        }
+        # 中央銀行フィードはフィード単位の成否も残す。
+        if entry.get("feeds_ok") is not None:
+            source_entry["feeds_ok"] = entry["feeds_ok"]
+        if entry.get("feeds_failed") is not None:
+            source_entry["feeds_failed"] = entry["feeds_failed"]
+        result["news_sources"].append(source_entry)
 
     merged = dedupe_news_articles([
         article
@@ -3302,23 +3381,35 @@ def write_step_summary(started_at, pair_results, summary_lines,
             lines.append("- 記録なし")
         # 系統別の成功・失敗（ペア単位で集計）。系統ごとに失敗を隔離して
         # いるため、1系統の障害が全体の失敗に見えないように分けて出す。
+        # 中央銀行フィードの一部成功は「部分成功」として区別し、系統全体を
+        # 単に失敗とは数えない。status を持たない旧形式の記録は error の
+        # 有無から従来どおり判定する。
         source_tally = {}
         for item in pair_results:
             for entry in item.get("news_sources") or []:
                 if not isinstance(entry, dict):
                     continue
                 tally = source_tally.setdefault(
-                    entry.get("source") or "不明", {"ok": 0, "ng": 0}
+                    entry.get("source") or "不明",
+                    {"ok": 0, "partial": 0, "ng": 0},
                 )
-                if entry.get("error"):
-                    tally["ng"] += 1
-                else:
+                status = entry.get("status") or (
+                    "error" if entry.get("error") else "ok"
+                )
+                if status == "partial":
+                    tally["partial"] += 1
+                elif status == "ok":
                     tally["ok"] += 1
+                else:
+                    tally["ng"] += 1
         if source_tally:
-            parts = [
-                f"{name} 成功{tally['ok']}・失敗{tally['ng']}"
-                for name, tally in sorted(source_tally.items())
-            ]
+            parts = []
+            for name, tally in sorted(source_tally.items()):
+                part = f"{name} 成功{tally['ok']}"
+                if tally["partial"]:
+                    part += f"・部分成功{tally['partial']}"
+                part += f"・失敗{tally['ng']}"
+                parts.append(part)
             lines.append(f"- 取得系統別（ペア数）: {cell('、'.join(parts))}")
         lines.append("")
         lines.append("### フォワード検証（予測の事後測定。売買判定には使用しない）")

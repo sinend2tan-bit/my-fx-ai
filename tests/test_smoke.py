@@ -728,6 +728,194 @@ def test_step_summary_shows_source_tally_and_forward_breakdown(
     assert "確認状態不明（旧形式）" in text
 
 
+# =========================================================
+# 中央銀行フィードの部分成功／重複統合時の情報補完
+# =========================================================
+
+_BOJ_RSS_OK = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<rss version="2.0"><channel>'
+    "<item><title>金融政策の実施について</title>"
+    "<link>https://www.boj.or.jp/example</link>"
+    "<pubDate>Mon, 27 Oct 2026 01:00:00 GMT</pubDate></item>"
+    "</channel></rss>"
+).encode("utf-8")
+
+_FED_RSS_OK = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<rss version="2.0"><channel>'
+    "<item><title>Federal Reserve monetary policy statement</title>"
+    "<link>https://www.federalreserve.gov/example</link>"
+    "<pubDate>Mon, 27 Oct 2026 01:00:00 GMT</pubDate></item>"
+    "</channel></rss>"
+).encode("utf-8")
+
+
+def test_central_bank_partial_success(monkeypatch):
+    # FRBフィードだけ不正な応答でも、系統は「部分成功」になり、
+    # 成功した日銀フィードの記事は使える
+    def fake_fetch(url):
+        if "boj.or.jp" in url:
+            return _BOJ_RSS_OK
+        return b"not xml"
+
+    monkeypatch.setattr(scanner, "_fetch_url_bytes", fake_fetch)
+    fetched = scanner.fetch_central_bank_articles("USDJPY=X")
+    assert fetched["ok"] is True
+    assert fetched["status"] == "partial"
+    assert fetched["feeds_ok"] == ["日本銀行（公式）"]
+    assert fetched["feeds_failed"] == ["米連邦準備制度（公式）"]
+    assert fetched["errors"]
+    assert "米連邦準備制度（公式）" in fetched["errors"][0]
+    assert len(fetched["articles"]) == 1
+
+
+def test_central_bank_all_feeds_ok_status(monkeypatch):
+    def fake_fetch(url):
+        return _BOJ_RSS_OK if "boj.or.jp" in url else _FED_RSS_OK
+
+    monkeypatch.setattr(scanner, "_fetch_url_bytes", fake_fetch)
+    fetched = scanner.fetch_central_bank_articles("USDJPY=X")
+    assert fetched["ok"] is True
+    assert fetched["status"] == "ok"
+    assert fetched["feeds_failed"] == []
+    assert len(fetched["articles"]) == 2
+
+
+def test_central_bank_all_feeds_fail_status(monkeypatch):
+    def fake_fetch(url):
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(scanner, "_fetch_url_bytes", fake_fetch)
+    fetched = scanner.fetch_central_bank_articles("USDJPY=X")
+    assert fetched["ok"] is False
+    assert fetched["status"] == "error"
+    assert fetched["articles"] == []
+    assert len(fetched["feeds_failed"]) == 2
+    assert fetched["feeds_ok"] == []
+
+
+def test_news_sources_show_central_bank_partial(monkeypatch):
+    # fetch_news の系統別記録に、中央銀行フィードの部分成功と
+    # 成功・失敗したフィード名が残る
+    def central(ticker):
+        return {
+            "articles": [_stub_article(_NEUTRAL_TITLE)],
+            "errors": ["米連邦準備制度（公式）: ParseError: broken"],
+            "ok": True,
+            "method": "中央銀行フィード",
+            "status": "partial",
+            "feeds_ok": ["日本銀行（公式）"],
+            "feeds_failed": ["米連邦準備制度（公式）"],
+        }
+
+    _stub_all_sources(monkeypatch, _stub_source(), central, _stub_source())
+    news = scanner.fetch_news("USDJPY=X")
+    by_name = {entry["source"]: entry for entry in news["news_sources"]}
+    entry = by_name["中央銀行フィード"]
+    assert entry["status"] == "partial"
+    assert entry["feeds_ok"] == ["日本銀行（公式）"]
+    assert entry["feeds_failed"] == ["米連邦準備制度（公式）"]
+    # 部分成功でも他系統の記事で通常どおり判定できる
+    assert news["news_status"] == "recent_articles_no_risk_keywords"
+
+
+def test_step_summary_shows_partial_source(tmp_path, monkeypatch):
+    # サマリーで部分成功が単なる「失敗」に数えられない
+    summary_file = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
+    pair_results = [{
+        "name": _PAIR_NAME,
+        "decision": "ニュース確認・判定保留",
+        "direction": "買い",
+        "buy_pct": 60.0,
+        "sell_pct": 20.0,
+        "data_freshness_status": "fresh",
+        "news_status": "recent_articles_no_risk_keywords",
+        "news_sources": [
+            {"source": "中央銀行フィード", "article_count": 1,
+             "latest_published_jst": "2026-01-05T00:00:00+09:00",
+             "error": "米連邦準備制度（公式）: ParseError: broken",
+             "status": "partial",
+             "feeds_ok": ["日本銀行（公式）"],
+             "feeds_failed": ["米連邦準備制度（公式）"]},
+        ],
+    }]
+    forward_summary = scanner.build_forward_summary(
+        scanner.new_forward_stats(), [], 0, 1,
+    )
+    scanner.write_step_summary(
+        "2026-01-05T00:00:00+09:00", pair_results, ["line"],
+        {}, {"pairs_total": 1}, forward_summary,
+    )
+    text = summary_file.read_text(encoding="utf-8")
+    assert "中央銀行フィード 成功0・部分成功1・失敗0" in text
+
+
+def test_dedupe_backfills_missing_published_and_link():
+    recent = scanner.now_jst() - timedelta(hours=1)
+    first = {
+        "title": "同じ見出し", "publisher": "媒体A", "url": "",
+        "published_at": None, "_published": None, "source": "系統1",
+    }
+    dupe = {
+        "title": "同じ見出し - 媒体B", "publisher": "媒体B",
+        "url": "https://example.com/story",
+        "published_at": recent.isoformat(), "_published": recent,
+        "source": "系統2",
+    }
+    merged = scanner.dedupe_news_articles([first, dupe])
+    assert len(merged) == 1
+    assert merged[0]["_published"] == recent
+    assert merged[0]["published_at"] == recent.isoformat()
+    assert merged[0]["url"] == "https://example.com/story"
+
+
+def test_dedupe_does_not_overwrite_valid_fields():
+    # 先行記事に有効な値がある項目は、重複記事の値で上書きしない
+    older = scanner.now_jst() - timedelta(hours=2)
+    newer = scanner.now_jst() - timedelta(hours=1)
+    first = {
+        "title": "同じ見出し", "publisher": "媒体A",
+        "url": "https://example.com/first",
+        "published_at": older.isoformat(), "_published": older,
+        "source": "系統1",
+    }
+    dupe = {
+        "title": "同じ見出し", "publisher": "媒体B",
+        "url": "https://example.com/dupe",
+        "published_at": newer.isoformat(), "_published": newer,
+        "source": "系統2",
+    }
+    merged = scanner.dedupe_news_articles([first, dupe])
+    assert len(merged) == 1
+    assert merged[0]["_published"] == older
+    assert merged[0]["url"] == "https://example.com/first"
+    assert merged[0]["publisher"] == "媒体A"
+
+
+def test_news_backfilled_datetime_counts_as_recent(monkeypatch):
+    # 日時不明の先行記事に、重複記事の有効な日時が補完されると、
+    # その記事は直近記事として数えられる（日時不明のまま切り捨てない）
+    undated = {
+        "title": _NEUTRAL_TITLE, "publisher": "媒体A", "url": "",
+        "published_at": None, "_published": None, "source": "テスト系統",
+    }
+    dated = _stub_article(
+        _NEUTRAL_TITLE, hours_ago=1.0, publisher="媒体B",
+        url="https://example.com/story",
+    )
+    google = _stub_source(articles=[undated])
+    yahoo = _stub_source(articles=[dated])
+    _stub_all_sources(monkeypatch, google, _stub_source(), yahoo)
+    news = scanner.fetch_news("USDJPY=X")
+    assert news["news_article_count"] == 1
+    assert news["news_recent_count"] == 1
+    assert news["news_status"] == "recent_articles_no_risk_keywords"
+    assert news["news_headlines"][0]["published_at"] is not None
+    assert news["news_headlines"][0]["url"] == "https://example.com/story"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
 
