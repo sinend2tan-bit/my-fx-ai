@@ -2,6 +2,9 @@ import json
 import os
 import re
 import tempfile
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -427,29 +430,221 @@ def contains_news_keyword(title):
 
 
 
-def fetch_news(ticker):
-    """
-    Yahoo Financeからニュースを取得する。
-    複数の取得方法を順番に試し、取得失敗を
-    「重要ニュースなし」と誤認しない。
-    """
-    result = {
-        "news_checked_at_jst": iso_now(),
-        "news_status": "unknown",
-        "news_retrieval_status": "unknown",
-        "news_article_count": 0,
-        "news_recent_count": 0,
-        "news_risk_detected": False,
-        "news_risk_reason": "",
-        "news_risk_headlines": [],
-        "news_headlines": [],
-        "news_source": "Yahoo Finance",
-        "news_retrieval_method": None,
-        "news_retrieval_errors": [],
+# ニュース取得は3系統（GoogleニュースRSS・中央銀行公式フィード・
+# Yahoo Finance）。各系統は個別に失敗を隔離し、1系統の障害・
+# タイムアウト・不正な応答で他系統やスキャン全体を止めない。
+# RSS の取得は標準ライブラリ urllib のみを使い、新規依存を増やさない。
+NEWS_HTTP_TIMEOUT_SECONDS = 8
+
+# ペア別キーワード（Googleニュース検索用）。app.py の見出し取得と同じ。
+GOOGLE_NEWS_QUERIES = {
+    "USDJPY=X": "ドル円",
+    "GBPJPY=X": "ポンド円",
+    "EURJPY=X": "ユーロ円",
+    "AUDJPY=X": "豪ドル円",
+    "EURUSD=X": "ユーロドル",
+}
+
+# 中央銀行の公式フィード（通貨コード→フィード）。app.py と同じ集合。
+# 公式発表のみで、経済指標カレンダーや速報ニュースの代替ではない。
+CENTRAL_BANK_FEEDS = [
+    ("JPY", "日本銀行（公式）", "https://www.boj.or.jp/rss/whatsnew.xml"),
+    ("USD", "米連邦準備制度（公式）", "https://www.federalreserve.gov/feeds/press_monetary.xml"),
+    ("EUR", "欧州中央銀行（公式）", "https://www.ecb.europa.eu/rss/press.html"),
+    ("GBP", "英イングランド銀行（公式）", "https://www.bankofengland.co.uk/rss/news"),
+    ("AUD", "豪準備銀行（公式）", "https://www.rba.gov.au/rss/rss-cb-media-releases.xml"),
+]
+
+# 公式フィードの見出しを絞るマクロ・金融政策関連の語句（app.py と同じ）。
+_OFFICIAL_FEED_TERMS = (
+    "金融政策", "政策金利", "物価", "経済", "為替", "日銀", "総裁", "金融",
+    "monetary", "fomc", "interest rate", "inflation", "economic",
+    "federal funds", "policy rate", "bank rate", "cash rate",
+)
+
+_RSS10_NS = "http://purl.org/rss/1.0/"
+_ATOM_NS = "http://www.w3.org/2005/Atom"
+_DC_NS = "http://purl.org/dc/elements/1.1/"
+
+
+def _fetch_url_bytes(url, timeout=NEWS_HTTP_TIMEOUT_SECONDS):
+    """URL を取得して bytes を返す（urllib のみ）。失敗時は例外を送出する。"""
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0 FX-analysis-tool"}
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def _parse_feed_datetime(raw):
+    """RSS/Atom の日時文字列を JST の datetime へ変換する。読めなければ None。"""
+    if not raw:
+        return None
+    try:
+        parsed = pd.to_datetime(raw, utc=True, errors="coerce")
+        if parsed is None or pd.isna(parsed):
+            return None
+        return parsed.tz_convert(JST).to_pydatetime()
+    except Exception:
+        return None
+
+
+def _feed_node_text(node, names):
+    """候補要素名のうち、最初に見つかった空でないテキストを返す（名前空間対応）。"""
+    for name in names:
+        element = node.find(name)
+        if element is not None and element.text and element.text.strip():
+            return element.text.strip()
+    return ""
+
+
+def _make_news_article(title, publisher, url, published, source):
+    """系統間で共通の記事形式（extract_news_fields と同じ形）に正規化する。"""
+    return {
+        "title": str(title).strip(),
+        "publisher": str(publisher or ""),
+        "url": str(url or ""),
+        "published_at": published.isoformat() if published else None,
+        "_published": published,
+        "source": source,
     }
 
+
+def fetch_google_news_articles(ticker):
+    """Googleニュース検索RSS系統。ペア別キーワード＋直近3日で取得する。
+
+    戻り値: {"articles": [...], "errors": [...], "ok": bool, "method": str}
+    失敗しても例外を外に出さず、errors と ok=False で知らせる。
+    """
+    source_name = "Googleニュース"
+    code = str(ticker or "").upper()
+    query = GOOGLE_NEWS_QUERIES.get(code)
+    if query is None:
+        query = code.replace("=X", "") or "為替"
+    url = (
+        "https://news.google.com/rss/search?q="
+        + urllib.parse.quote_plus(f"{query} when:3d")
+        + "&hl=ja&gl=JP&ceid=JP:ja"
+    )
+    try:
+        root = ET.fromstring(_fetch_url_bytes(url))
+    except Exception as exc:
+        return {
+            "articles": [],
+            "errors": [
+                f"{source_name}: {type(exc).__name__}: {str(exc)[:120]}"
+            ],
+            "ok": False,
+            "method": None,
+        }
+
+    articles = []
+    for node in root.findall(".//item")[:30]:
+        title = _feed_node_text(node, ["title"])
+        if not title:
+            continue
+        publisher = _feed_node_text(node, ["source"]) or source_name
+        link = _feed_node_text(node, ["link"])
+        published = _parse_feed_datetime(
+            _feed_node_text(node, ["pubDate"])
+        )
+        articles.append(
+            _make_news_article(title, publisher, link, published, source_name)
+        )
+    return {"articles": articles, "errors": [], "ok": True, "method": source_name}
+
+
+def _central_bank_feeds_for_ticker(ticker):
+    """ペアの2通貨に対応する中央銀行フィードだけを返す。"""
+    code = str(ticker or "").upper()
+    return [
+        (publisher, url)
+        for currency, publisher, url in CENTRAL_BANK_FEEDS
+        if currency in code
+    ]
+
+
+def _fetch_central_bank_feed(publisher, url):
+    """中央銀行フィード1件を取得し、(articles, error) を返す。
+
+    RSS 2.0 / Atom / RSS 1.0（RDF・dc:date）に対応する。見出しは
+    マクロ・金融政策関連の語句を含むものだけに絞る（app.py と同じ）。
+    失敗しても例外を外に出さない。
+    """
+    try:
+        root = ET.fromstring(_fetch_url_bytes(url))
+    except Exception as exc:
+        return [], f"{publisher}: {type(exc).__name__}: {str(exc)[:120]}"
+
+    nodes = root.findall(".//item")
+    if not nodes:
+        nodes = root.findall(f".//{{{_ATOM_NS}}}entry")
+    if not nodes:
+        nodes = root.findall(f".//{{{_RSS10_NS}}}item")
+
+    articles = []
+    for node in nodes:
+        title = _feed_node_text(
+            node,
+            ["title", f"{{{_ATOM_NS}}}title", f"{{{_RSS10_NS}}}title"],
+        )
+        if not title:
+            continue
+        if not any(term in title.lower() for term in _OFFICIAL_FEED_TERMS):
+            continue
+        link = _feed_node_text(node, ["link", f"{{{_RSS10_NS}}}link"])
+        if not link:
+            for name in ("link", f"{{{_ATOM_NS}}}link"):
+                element = node.find(name)
+                if element is not None and element.attrib.get("href"):
+                    link = element.attrib["href"]
+                    break
+        raw_date = _feed_node_text(
+            node,
+            [
+                "pubDate",
+                f"{{{_ATOM_NS}}}updated",
+                f"{{{_ATOM_NS}}}published",
+                f"{{{_DC_NS}}}date",
+            ],
+        )
+        published = _parse_feed_datetime(raw_date)
+        articles.append(
+            _make_news_article(title, publisher, link, published, publisher)
+        )
+    return articles, None
+
+
+def fetch_central_bank_articles(ticker):
+    """中央銀行公式フィード系統。フィード単位で失敗を隔離する。
+
+    1つでもフィードを取得できれば系統としては ok とし、失敗した
+    フィードは errors に記録する。
+    """
+    articles = []
+    errors = []
+    ok_any = False
+    for publisher, url in _central_bank_feeds_for_ticker(ticker):
+        feed_articles, error = _fetch_central_bank_feed(publisher, url)
+        if error:
+            errors.append(error)
+        else:
+            ok_any = True
+            articles.extend(feed_articles)
+    return {
+        "articles": articles,
+        "errors": errors,
+        "ok": ok_any,
+        "method": "中央銀行フィード",
+    }
+
+
+def fetch_yahoo_articles(ticker):
+    """Yahoo Finance系統。yf.Search → Ticker.get_news/news の順に試す。"""
     raw_news = []
-    retrieval_errors = []
+    errors = []
+    method = None
+    completed = False
 
     # 方法1：yf.Search が利用可能なら試す
     search_api = getattr(yf, "Search", None)
@@ -459,16 +654,17 @@ def fetch_news(ticker):
             search_result = search_api(
                 ticker, news_count=10
             )
+            completed = True
             candidate = getattr(
                 search_result, "news", None
             )
 
             if isinstance(candidate, list) and candidate:
                 raw_news = candidate
-                result["news_retrieval_method"] = "yf.Search"
+                method = "yf.Search"
 
         except Exception as exc:
-            retrieval_errors.append(
+            errors.append(
                 "yf.Search: "
                 + type(exc).__name__
                 + ": "
@@ -489,62 +685,25 @@ def fetch_news(ticker):
                 except TypeError:
                     candidate = get_news()
 
-                method = "Ticker.get_news"
+                method_used = "Ticker.get_news"
             else:
                 candidate = ticker_obj.news
-                method = "Ticker.news"
+                method_used = "Ticker.news"
 
+            completed = True
             if isinstance(candidate, list) and candidate:
                 raw_news = candidate
-                result["news_retrieval_method"] = method
+                method = method_used
 
         except Exception as exc:
-            retrieval_errors.append(
+            errors.append(
                 "Ticker news: "
                 + type(exc).__name__
                 + ": "
                 + str(exc)[:120]
             )
 
-    result["news_retrieval_errors"] = retrieval_errors[:3]
-
-    if not raw_news:
-        result["news_status"] = (
-            "error" if retrieval_errors else "empty"
-        )
-        result["news_retrieval_status"] = (
-            "error" if retrieval_errors else "no_articles_returned"
-        )
-
-        if retrieval_errors:
-            result["news_risk_reason"] = (
-                "複数のニュース取得方法でエラーが発生しました。"
-                "重要ニュースがないとは判断できません。"
-            )
-        else:
-            result["news_risk_reason"] = (
-                "ニュース記事が返されませんでした。"
-                "重要ニュースがないとは判断できません。"
-            )
-
-        print(
-            f"[NEWS FETCH] ticker={ticker}, "
-            f"status={result['news_status']}, "
-            f"method=None, "
-            f"errors={len(retrieval_errors)}"
-        )
-        return result
-
-    result["news_retrieval_status"] = "articles_returned"
-    result["news_article_count"] = len(raw_news)
-
-    current_time = now_jst()
-    cutoff = current_time - timedelta(
-        hours=NEWS_MAX_AGE_HOURS
-    )
-
-    recent_articles = []
-
+    articles = []
     for article in raw_news:
         if not isinstance(article, dict):
             continue
@@ -562,7 +721,213 @@ def fetch_news(ticker):
         if not item["title"]:
             continue
 
-        published = item.pop("_published")
+        item["source"] = "Yahoo Finance"
+        articles.append(item)
+
+    return {
+        "articles": articles,
+        "errors": errors,
+        "ok": completed,
+        "method": method,
+    }
+
+
+def _news_title_key(title, publisher):
+    """重複判定用のタイトル正規化（app.py の _news_title_key と同じ）。
+
+    Googleニュース等のタイトル末尾にある「 - 媒体名」を除去してから
+    比較し、同じ記事が媒体違いで重複しないようにする。
+    """
+    title = str(title or "").strip()
+    publisher = str(publisher or "").strip()
+    if publisher:
+        suffix = f" - {publisher}"
+        if title.lower().endswith(suffix.lower()):
+            title = title[: -len(suffix)].strip()
+    return title.lower()
+
+
+def dedupe_news_articles(articles):
+    """タイトル正規化またはリンクが一致する記事を1件に統合する。"""
+    merged = []
+    seen_titles = set()
+    seen_links = set()
+    for item in articles:
+        if not isinstance(item, dict):
+            continue
+        title_key = _news_title_key(item.get("title"), item.get("publisher"))
+        link_key = str(item.get("url") or item.get("link") or "").strip()
+        if title_key and title_key in seen_titles:
+            continue
+        if link_key and link_key in seen_links:
+            continue
+        if title_key:
+            seen_titles.add(title_key)
+        if link_key:
+            seen_links.add(link_key)
+        merged.append(item)
+    return merged
+
+
+# 取得系統は (表示名, 取得関数の名前)。関数名で引くことで、テストから
+# 系統ごとに差し替え（スタブ化）できるようにしている。
+NEWS_SOURCE_FETCHERS = (
+    ("Googleニュース", "fetch_google_news_articles"),
+    ("中央銀行フィード", "fetch_central_bank_articles"),
+    ("Yahoo Finance", "fetch_yahoo_articles"),
+)
+
+
+def fetch_news(ticker):
+    """
+    3系統（GoogleニュースRSS・中央銀行公式フィード・Yahoo Finance）から
+    ニュースを取得する。各系統の失敗は隔離し、取得失敗を
+    「重要ニュースなし」と誤認しない。
+    """
+    result = {
+        "news_checked_at_jst": iso_now(),
+        "news_status": "unknown",
+        "news_retrieval_status": "unknown",
+        "news_article_count": 0,
+        "news_recent_count": 0,
+        "news_risk_detected": False,
+        "news_risk_reason": "",
+        "news_risk_headlines": [],
+        "news_headlines": [],
+        "news_source": "",
+        "news_retrieval_method": None,
+        "news_retrieval_errors": [],
+        "news_sources": [],
+    }
+
+    # 系統ごとに取得する。取得関数自体が例外を出しても、ここで隔離して
+    # その系統だけを失敗として記録し、残りの系統と処理全体は続ける。
+    source_results = []
+    for source_name, func_name in NEWS_SOURCE_FETCHERS:
+        fetcher = globals().get(func_name)
+        try:
+            fetched = fetcher(ticker)
+            if not isinstance(fetched, dict):
+                raise TypeError("invalid fetcher result")
+            source_results.append({
+                "source": source_name,
+                "articles": fetched.get("articles") or [],
+                "errors": [
+                    str(error) for error in (fetched.get("errors") or [])
+                ],
+                "ok": bool(fetched.get("ok")),
+                "method": fetched.get("method"),
+            })
+        except Exception as exc:
+            source_results.append({
+                "source": source_name,
+                "articles": [],
+                "errors": [
+                    f"{source_name}: {type(exc).__name__}: {str(exc)[:120]}"
+                ],
+                "ok": False,
+                "method": None,
+            })
+
+    retrieval_errors = []
+    for entry in source_results:
+        retrieval_errors.extend(entry["errors"])
+    result["news_retrieval_errors"] = retrieval_errors[:6]
+
+    # 系統別の取得状況。取得件数は重複排除前の、その系統が返した件数。
+    for entry in source_results:
+        published_values = [
+            article.get("_published")
+            for article in entry["articles"]
+            if isinstance(article, dict)
+            and article.get("_published") is not None
+        ]
+        result["news_sources"].append({
+            "source": entry["source"],
+            "article_count": len(entry["articles"]),
+            "latest_published_jst": (
+                max(published_values).isoformat()
+                if published_values else None
+            ),
+            "error": "; ".join(entry["errors"]) if entry["errors"] else None,
+        })
+
+    merged = dedupe_news_articles([
+        article
+        for entry in source_results
+        for article in entry["articles"]
+    ])
+    # 見出しの並びを新しい順（日時不明は末尾）に安定させる。
+    merged.sort(
+        key=lambda article: (
+            article.get("_published") is None,
+            -(
+                article["_published"].timestamp()
+                if article.get("_published") is not None else 0.0
+            ),
+        )
+    )
+
+    contributing = [
+        entry["source"] for entry in source_results if entry["articles"]
+    ]
+    result["news_source"] = " / ".join(contributing)
+    methods = [
+        entry["method"] or entry["source"]
+        for entry in source_results
+        if entry["articles"]
+    ]
+    result["news_retrieval_method"] = (
+        ", ".join(methods) if methods else None
+    )
+
+    if not merged:
+        # 全系統が失敗した場合だけ error とする。一部の系統が成功して
+        # 記事が0件だった場合は、取得失敗ではなく empty として区別する。
+        any_source_ok = any(entry["ok"] for entry in source_results)
+        result["news_status"] = (
+            "empty" if any_source_ok else "error"
+        )
+        result["news_retrieval_status"] = (
+            "no_articles_returned" if any_source_ok else "error"
+        )
+
+        if any_source_ok:
+            result["news_risk_reason"] = (
+                "ニュース記事が返されませんでした。"
+                "重要ニュースがないとは判断できません。"
+            )
+        else:
+            result["news_risk_reason"] = (
+                "複数のニュース取得方法でエラーが発生しました。"
+                "重要ニュースがないとは判断できません。"
+            )
+
+        print(
+            f"[NEWS FETCH] ticker={ticker}, "
+            f"status={result['news_status']}, "
+            f"method=None, "
+            f"errors={len(retrieval_errors)}"
+        )
+        return result
+
+    result["news_retrieval_status"] = "articles_returned"
+    result["news_article_count"] = len(merged)
+
+    current_time = now_jst()
+    cutoff = current_time - timedelta(
+        hours=NEWS_MAX_AGE_HOURS
+    )
+
+    recent_articles = []
+
+    for article in merged:
+        item = dict(article)
+
+        if not item.get("title"):
+            continue
+
+        published = item.pop("_published", None)
         result["news_headlines"].append(item)
 
         # 日時が確認できない記事は直近扱いにしない
@@ -2047,6 +2412,9 @@ def analyze_pair(name, config):
         "validation": {},
         "signal_bar_time": None,
         "atr": None,
+        # フォワード検証への記録可否（ニュース以外の全ゲート通過時に True）。
+        # 売買候補の採用判定とは分離した、記録専用のフラグ。
+        "forward_recordable": False,
         "buy_pct": None,
         "sell_pct": None,
         "neutral_pct": None,
@@ -2244,6 +2612,31 @@ def analyze_pair(name, config):
             result["reason"] = "想定スプレッドがATRに対して大きいため保留します。"
             return result
 
+        direction = model_result["direction"]
+
+        # 上位足の方向との食い違い判定（読み取り計算のみ）。
+        # ニュース確認より前に計算し、フォワード検証の記録可否にも使う。
+        # 判定の文言と優先順位（ニュース保留が先）は従来どおり変えない。
+        trend_conflict_reason = None
+        if direction == "買い" and "下降" in trends:
+            trend_conflict_reason = (
+                "上位足に下降トレンドがあるため、新規買い候補を保留します。"
+            )
+        elif direction == "売り" and "上昇" in trends:
+            trend_conflict_reason = (
+                "上位足に上昇トレンドがあるため、新規売り候補を保留します。"
+            )
+
+        # フォワード検証への記録可否。ニュース以外の全ゲート（鮮度・検証・
+        # スプレッド・上位足・方向別）を通過し、方向が買い/売りの場合に
+        # True とする。ニュース保留でも記録対象にするための分離であり、
+        # 売買候補としての採用条件は一切変えない。
+        result["forward_recordable"] = bool(
+            direction in ("買い", "売り")
+            and trend_conflict_reason is None
+            and not result.get("directional_pnl_hold")
+        )
+
         # ニュースの確認結果を候補判定に反映する。
         news_allowed, news_reason = news_allows_candidate(news)
         if not news_allowed:
@@ -2252,15 +2645,9 @@ def analyze_pair(name, config):
             return result
 
         # 上位足の方向と大きく食い違う候補は保留。
-        direction = model_result["direction"]
-        if direction == "買い" and "下降" in trends:
+        if trend_conflict_reason is not None:
             result["decision"] = "上位足と不一致・保留"
-            result["reason"] = "上位足に下降トレンドがあるため、新規買い候補を保留します。"
-            return result
-
-        if direction == "売り" and "上昇" in trends:
-            result["decision"] = "上位足と不一致・保留"
-            result["reason"] = "上位足に上昇トレンドがあるため、新規売り候補を保留します。"
+            result["reason"] = trend_conflict_reason
             return result
 
         if direction == "様子見":
@@ -2297,6 +2684,99 @@ def forward_prediction_id(ticker, signal_bar_time):
     return f"{ticker}|{signal_bar_time}"
 
 
+def _empty_forward_news_buckets():
+    """ニュース確認状態別の累積カウンタ（3区分の初期値）。
+
+    区分は verified（記録時にニュース確認を通過）／unverified（ニュース
+    未確認のまま記録）／unknown（news_verified フィールドが無い旧形式の
+    記録。未確認と断定せず「不明」として分ける）。
+    """
+    sub = {
+        "evaluated_total": 0,
+        "hit": 0,
+        "miss": 0,
+        "not_reached": 0,
+        "net_pips_total": 0.0,
+        "mae_pips_total": 0.0,
+    }
+    return {
+        "verified": dict(sub),
+        "unverified": dict(sub),
+        "unknown": dict(sub),
+    }
+
+
+def forward_news_bucket_key(prediction):
+    """予測レコードのニュース確認状態から集計区分キーを返す。
+
+    news_verified が True/False の場合だけ確認済み/未確認とし、
+    フィールド自体が無い旧形式の記録は unknown（不明）に分ける。
+    """
+    verified = prediction.get("news_verified")
+    if verified is True:
+        return "verified"
+    if verified is False:
+        return "unverified"
+    return "unknown"
+
+
+def compute_forward_stats_by_news_verified(predictions):
+    """保存済みの評価済みレコードから、ニュース確認状態別の累積を再計算する。
+
+    区分別カウンタが状態ファイルにまだ無い初回だけ使う。評価済みでも
+    保持上限（FORWARD_PREDICTIONS_MAX）でリストから切り詰められた記録は
+    再計算に含められない（全体の累積カウンタ側には残っている）。その
+    場合、区分別の合計は全体の累積と一致しないことがある。
+    """
+    buckets = _empty_forward_news_buckets()
+    for item in predictions:
+        if not isinstance(item, dict):
+            continue
+        status = item.get("status")
+        if status not in ("HIT", "MISS", "NOT_REACHED"):
+            continue
+        bucket = buckets[forward_news_bucket_key(item)]
+        bucket["evaluated_total"] += 1
+        if status == "HIT":
+            bucket["hit"] += 1
+        elif status == "MISS":
+            bucket["miss"] += 1
+        else:
+            bucket["not_reached"] += 1
+        bucket["net_pips_total"] = round(
+            float(bucket["net_pips_total"])
+            + (safe_float(item.get("net_pips"), 0.0) or 0.0),
+            2,
+        )
+        bucket["mae_pips_total"] = round(
+            float(bucket["mae_pips_total"])
+            + (safe_float(item.get("mae_pips"), 0.0) or 0.0),
+            2,
+        )
+    return buckets
+
+
+def _normalize_forward_news_buckets(raw):
+    """保存済みの区分別カウンタを防御的に読み直す。"""
+    buckets = _empty_forward_news_buckets()
+    if not isinstance(raw, dict):
+        return buckets
+    for name, bucket in buckets.items():
+        saved = raw.get(name)
+        if not isinstance(saved, dict):
+            continue
+        for key, default in bucket.items():
+            value = saved.get(key, default)
+            if isinstance(default, float):
+                coerced = safe_float(value)
+                bucket[key] = (
+                    float(coerced) if coerced is not None else default
+                )
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                bucket[key] = int(value)
+    return buckets
+
+
 def new_forward_stats():
     """フォワード検証の累積カウンタ（初期値）。"""
     return {
@@ -2312,6 +2792,9 @@ def new_forward_stats():
         "sell_miss": 0,
         "net_pips_total": 0.0,
         "mae_pips_total": 0.0,
+        # ニュース確認状態別の内訳。全体カウンタ（上記）は従来どおり
+        # 全区分の合計であり、形式は壊さない。
+        "by_news_verified": _empty_forward_news_buckets(),
     }
 
 
@@ -2321,6 +2804,9 @@ def normalize_forward_stats(stats):
     if not isinstance(stats, dict):
         return base
     for key, default in base.items():
+        if key == "by_news_verified":
+            base[key] = _normalize_forward_news_buckets(stats.get(key))
+            continue
         value = stats.get(key, default)
         if isinstance(default, float):
             coerced = safe_float(value)
@@ -2489,16 +2975,42 @@ def update_forward_stats(stats, prediction, outcome):
     mae_pips = safe_float(outcome.get("mae_pips"), 0.0) or 0.0
     stats["net_pips_total"] = round(float(stats["net_pips_total"]) + float(net_pips), 2)
     stats["mae_pips_total"] = round(float(stats["mae_pips_total"]) + float(mae_pips), 2)
+
+    # ニュース確認状態別の内訳にも同じ1件を反映する（全体と混同しない）。
+    buckets = stats.get("by_news_verified")
+    if not isinstance(buckets, dict):
+        buckets = _empty_forward_news_buckets()
+        stats["by_news_verified"] = buckets
+    bucket = buckets.setdefault(
+        forward_news_bucket_key(prediction),
+        _empty_forward_news_buckets()["unknown"],
+    )
+    bucket["evaluated_total"] = int(bucket.get("evaluated_total", 0)) + 1
+    if status == "HIT":
+        bucket["hit"] = int(bucket.get("hit", 0)) + 1
+    elif status == "MISS":
+        bucket["miss"] = int(bucket.get("miss", 0)) + 1
+    elif status == "NOT_REACHED":
+        bucket["not_reached"] = int(bucket.get("not_reached", 0)) + 1
+    bucket["net_pips_total"] = round(
+        float(bucket.get("net_pips_total", 0.0)) + float(net_pips), 2
+    )
+    bucket["mae_pips_total"] = round(
+        float(bucket.get("mae_pips_total", 0.0)) + float(mae_pips), 2
+    )
     return stats
 
 
 def build_forward_summary(stats, predictions, evaluated_now, recorded_now,
-                          tracking_since=None):
+                          tracking_since=None, recorded_verified_now=0,
+                          recorded_unverified_now=0):
     """状態ファイルとサマリー表示用の集計ビューを作る。
 
     的中率は HIT / (HIT + MISS)。NOT_REACHED（どちらにも届かなかった予測）は
     勝敗が付いていないため分母に入れない。方向別も同じ定義。
     平均MAEは評価済み全件（NOT_REACHED含む）の平均。
+    ニュース確認状態別の内訳（news_verified_breakdown）も同じ定義で
+    区分ごとに算出し、全体の数値と混同しないように分けて持つ。
     """
     stats = normalize_forward_stats(stats)
     decided = stats["hit"] + stats["miss"]
@@ -2509,6 +3021,23 @@ def build_forward_summary(stats, predictions, evaluated_now, recorded_now,
         1 for item in predictions
         if isinstance(item, dict) and item.get("status") == "PENDING"
     )
+
+    breakdown = {}
+    for name, bucket in stats["by_news_verified"].items():
+        bucket_decided = bucket["hit"] + bucket["miss"]
+        bucket_evaluated = bucket["evaluated_total"]
+        breakdown[name] = {
+            **bucket,
+            "hit_rate_pct": (
+                round(bucket["hit"] / bucket_decided * 100, 1)
+                if bucket_decided else None
+            ),
+            "avg_mae_pips": (
+                round(float(bucket["mae_pips_total"]) / bucket_evaluated, 2)
+                if bucket_evaluated else None
+            ),
+        }
+
     return {
         **stats,
         "tracking_since": tracking_since,
@@ -2522,10 +3051,13 @@ def build_forward_summary(stats, predictions, evaluated_now, recorded_now,
         "avg_mae_pips": (
             round(float(stats["mae_pips_total"]) / evaluated, 2) if evaluated else None
         ),
+        "news_verified_breakdown": breakdown,
         "pending_count": pending,
         "stored_predictions": len(predictions),
         "evaluated_this_run": evaluated_now,
         "recorded_this_run": recorded_now,
+        "recorded_verified_this_run": recorded_verified_now,
+        "recorded_unverified_this_run": recorded_unverified_now,
         "definitions": (
             "的中率=HIT/(HIT+MISS)。NOT_REACHEDは勝敗なしとして分母に含めない。"
             "損益は基準価格±1ATRのバリア方式で、既存の仮想損益と同じコスト前提を"
@@ -2545,7 +3077,19 @@ def process_forward_verification(previous_state):
     if not isinstance(raw_predictions, list):
         raw_predictions = []
     predictions = [item for item in raw_predictions if isinstance(item, dict)]
-    stats = normalize_forward_stats(previous_state.get("forward_stats"))
+    raw_stats = previous_state.get("forward_stats")
+    stats = normalize_forward_stats(raw_stats)
+
+    # ニュース確認状態別の累積がまだ無い状態（この変更より前の形式）では、
+    # 初回だけ保存済みレコードから再計算して初期化する。旧形式の記録は
+    # news_verified フィールドが無いため unknown（不明）区分に入り、
+    # 未確認と断定されることはない。再計算の対象はリスト内に残っている
+    # 評価済み記録のみで、切り詰め済みの分は区分別には含められない
+    # （全体の累積カウンタには含まれている）。
+    if not (isinstance(raw_stats, dict) and "by_news_verified" in raw_stats):
+        stats["by_news_verified"] = (
+            compute_forward_stats_by_news_verified(predictions)
+        )
 
     pending_by_ticker = {}
     for item in predictions:
@@ -2610,22 +3154,34 @@ def trim_forward_predictions(predictions, max_items=FORWARD_PREDICTIONS_MAX):
     return kept
 
 
-def record_forward_predictions(predictions, pair_results):
+def record_forward_predictions(predictions, pair_results, details=None):
     """今回のスキャンで候補（方向あり）になった予測を記録する。
 
-    記録対象は、検証・鮮度・ニュース等の全ゲートを通過して
-    「候補あり（手動確認のみ）」になったものだけ。保留になった方向は
-    ツールが出した予測ではないため記録しない。
-    IDは ticker + シグナル足時刻で、同じ候補の二重記録を防ぐ。
+    記録対象は次のいずれか。
+    - 全ゲートを通過して「候補あり（手動確認のみ）」になったもの
+      （記録時点でニュース確認を通過しているため news_verified=True）
+    - ニュース確認だけを理由に保留されたが、ニュース以外の全ゲートを
+      通過したもの（forward_recordable=True。news_verified=False）
+    ニュース以外のゲート（鮮度・検証等）で保留になった方向は記録しない。
+    記録と売買候補の採用は分離しており、採用条件は従来どおり。
+    IDは ticker + シグナル足時刻で、記録対象が広がっても同じ候補の
+    二重記録を防ぐ。
+    details が渡された場合、内訳（recorded_verified /
+    recorded_unverified）を書き込む。
     戻り値: 新規記録件数
     """
     existing_ids = {
         item.get("id") for item in predictions if isinstance(item, dict)
     }
     recorded = 0
+    recorded_verified = 0
+    recorded_unverified = 0
     for item in pair_results:
         try:
-            if item.get("decision") != "候補あり（手動確認のみ）":
+            is_candidate = (
+                item.get("decision") == "候補あり（手動確認のみ）"
+            )
+            if not is_candidate and not item.get("forward_recordable"):
                 continue
             direction = item.get("direction")
             if direction not in ("買い", "売り"):
@@ -2650,6 +3206,10 @@ def record_forward_predictions(predictions, pair_results):
             if pip_size <= 0:
                 continue
 
+            # 記録時点のニュース確認状態。候補あり＝確認通過（True）。
+            # forward_recordable だけで記録される場合は未確認（False）。
+            news_verified = bool(is_candidate)
+
             predictions.append({
                 "id": pred_id,
                 "recorded_at_jst": iso_now(),
@@ -2663,18 +3223,28 @@ def record_forward_predictions(predictions, pair_results):
                 "pip_size": float(pip_size),
                 "spread_pips": safe_float(config.get("spread_pips"), 0.0) or 0.0,
                 "status": "PENDING",
+                "news_status_at_record": item.get("news_status"),
+                "news_verified": news_verified,
             })
             existing_ids.add(pred_id)
             recorded += 1
+            if news_verified:
+                recorded_verified += 1
+            else:
+                recorded_unverified += 1
             print(
                 f"[FORWARD RECORD] id={pred_id}, direction={direction}, "
-                f"reference={reference_price}, atr={atr_value}"
+                f"reference={reference_price}, atr={atr_value}, "
+                f"news_verified={news_verified}"
             )
         except Exception as exc:
             print(
                 f"[FORWARD RECORD ERROR] pair={item.get('name')}: "
                 f"{type(exc).__name__}: {str(exc)[:180]}"
             )
+    if details is not None:
+        details["recorded_verified"] = recorded_verified
+        details["recorded_unverified"] = recorded_unverified
     return recorded
 
 
@@ -2730,14 +3300,41 @@ def write_step_summary(started_at, pair_results, summary_lines,
                 lines.append(f"- {cell(status)}: {count}件")
         else:
             lines.append("- 記録なし")
+        # 系統別の成功・失敗（ペア単位で集計）。系統ごとに失敗を隔離して
+        # いるため、1系統の障害が全体の失敗に見えないように分けて出す。
+        source_tally = {}
+        for item in pair_results:
+            for entry in item.get("news_sources") or []:
+                if not isinstance(entry, dict):
+                    continue
+                tally = source_tally.setdefault(
+                    entry.get("source") or "不明", {"ok": 0, "ng": 0}
+                )
+                if entry.get("error"):
+                    tally["ng"] += 1
+                else:
+                    tally["ok"] += 1
+        if source_tally:
+            parts = [
+                f"{name} 成功{tally['ok']}・失敗{tally['ng']}"
+                for name, tally in sorted(source_tally.items())
+            ]
+            lines.append(f"- 取得系統別（ペア数）: {cell('、'.join(parts))}")
         lines.append("")
         lines.append("### フォワード検証（予測の事後測定。売買判定には使用しない）")
         lines.append("")
-        lines.append(f"- 今回の新規記録: {forward_summary.get('recorded_this_run')}件")
+        lines.append(
+            "- 今回の新規記録: {total}件"
+            "（ニュース確認済み {verified}件・未確認 {unverified}件）".format(
+                total=forward_summary.get("recorded_this_run"),
+                verified=forward_summary.get("recorded_verified_this_run"),
+                unverified=forward_summary.get("recorded_unverified_this_run"),
+            )
+        )
         lines.append(f"- 今回の評価: {forward_summary.get('evaluated_this_run')}件")
         lines.append(f"- 未評価（PENDING）: {forward_summary.get('pending_count')}件")
         lines.append(
-            "- 評価済み累計: {total}件"
+            "- 評価済み累計（全体）: {total}件"
             "（的中 {hit}・不的中 {miss}・未到達 {not_reached}）".format(
                 total=forward_summary.get("evaluated_total"),
                 hit=forward_summary.get("hit"),
@@ -2747,16 +3344,40 @@ def write_step_summary(started_at, pair_results, summary_lines,
         )
         hit_rate = forward_summary.get("hit_rate_pct")
         lines.append(
-            "- 的中率: {rate}（定義: HIT / (HIT + MISS)。"
+            "- 的中率（全体）: {rate}（定義: HIT / (HIT + MISS)。"
             "未到達 NOT_REACHED は勝敗なしとして分母に含めない）".format(
                 rate=f"{hit_rate}%" if hit_rate is not None else "-",
             )
         )
         lines.append(
-            f"- 純損益累計: {forward_summary.get('net_pips_total')} pips"
+            f"- 純損益累計（全体）: {forward_summary.get('net_pips_total')} pips"
             "（仮想損益と同じコスト前提で差し引いた概算。実約定成績ではない）"
         )
-        lines.append(f"- 平均MAE: {forward_summary.get('avg_mae_pips')} pips")
+        lines.append(f"- 平均MAE（全体）: {forward_summary.get('avg_mae_pips')} pips")
+        # ニュース確認状態別の内訳。確認済み・未確認・旧形式（不明）を
+        # 全体の数値と混同しないよう、区分ごとに分けて出す。
+        breakdown = forward_summary.get("news_verified_breakdown") or {}
+        bucket_labels = (
+            ("verified", "ニュース確認済み"),
+            ("unverified", "ニュース未確認"),
+            ("unknown", "確認状態不明（旧形式）"),
+        )
+        for key, label in bucket_labels:
+            bucket = breakdown.get(key) or {}
+            bucket_rate = bucket.get("hit_rate_pct")
+            lines.append(
+                "- 評価済み累計（{label}）: {total}件"
+                "（的中 {hit}・不的中 {miss}・未到達 {not_reached}）"
+                "／的中率 {rate}／純損益 {net} pips".format(
+                    label=label,
+                    total=bucket.get("evaluated_total"),
+                    hit=bucket.get("hit"),
+                    miss=bucket.get("miss"),
+                    not_reached=bucket.get("not_reached"),
+                    rate=f"{bucket_rate}%" if bucket_rate is not None else "-",
+                    net=bucket.get("net_pips_total"),
+                )
+            )
         lines.append(f"- 記録開始: {forward_summary.get('tracking_since') or '未記録'}")
         lines.append("")
         lines.append("### 実行健康診断（主要項目）")
@@ -2807,8 +3428,11 @@ def main():
 
     # 今回の候補をフォワード検証の対象として記録する（判定には使わない）。
     forward_recorded_now = 0
+    forward_record_details = {}
     try:
-        forward_recorded_now = record_forward_predictions(predictions, pair_results)
+        forward_recorded_now = record_forward_predictions(
+            predictions, pair_results, details=forward_record_details
+        )
         # 切り詰めは未評価（PENDING）を落とさない方式（trim_forward_predictions）。
         predictions = trim_forward_predictions(predictions)
     except Exception as exc:
@@ -2834,6 +3458,10 @@ def main():
         forward_evaluated_now,
         forward_recorded_now,
         tracking_since=forward_tracking_since,
+        recorded_verified_now=forward_record_details.get("recorded_verified", 0),
+        recorded_unverified_now=forward_record_details.get(
+            "recorded_unverified", 0
+        ),
     )
 
     summary = []
@@ -2861,6 +3489,8 @@ def main():
         f"未評価={forward_summary['pending_count']}件 / "
         f"今回判定={forward_summary['evaluated_this_run']}件・"
         f"今回記録={forward_summary['recorded_this_run']}件"
+        f"（ニュース確認済み{forward_summary['recorded_verified_this_run']}件・"
+        f"未確認{forward_summary['recorded_unverified_this_run']}件）"
     )
 
     history = previous_state.get("history", [])
@@ -2945,7 +3575,7 @@ def main():
             "notice": "買い・売りを別々に評価し、件数不足または仮想損益がプラスでない方向は候補を保留します。仮想検証であり将来利益を保証しません。",
         },
         "news_policy": {
-            "source": "Yahoo Finance",
+            "source": "Googleニュース / 中央銀行公式フィード / Yahoo Finance",
             "max_age_hours": NEWS_MAX_AGE_HOURS,
             "hold_on_important_news": NEWS_HOLD_ON_IMPORTANT,
             "hold_if_news_unavailable": NEWS_HOLD_IF_UNAVAILABLE,
@@ -2966,6 +3596,14 @@ def main():
             "hit_rate_definition": "HIT/(HIT+MISS)。NOT_REACHEDは分母に含めない",
             "cost_model": "スプレッド＋スリッページ＋スワップストレス（仮想損益と同じ前提）。実約定成績ではない",
             "max_stored_predictions": FORWARD_PREDICTIONS_MAX,
+            "record_scope": (
+                "候補あり（ニュース確認済み）に加え、ニュース確認だけを理由に"
+                "保留されてもニュース以外の全条件を満たした予測も記録する。"
+                "記録には news_verified（確認済み/未確認）を持たせ、累積統計は"
+                "全体と確認状態別（by_news_verified）を分けて保持する。"
+                "news_verified フィールドが無い旧形式の記録は「不明」区分とし、"
+                "未確認とは断定しない。売買候補の採用条件は従来どおり。"
+            ),
             "notice": (
                 "状態はActionsキャッシュで引き継ぐため、長期間未使用などで"
                 "キャッシュが消えると記録はリセットされる。その場合は"
