@@ -1,0 +1,7 @@
+# FX Simple Scanner (fx_scanner_simple.py) 専用の依存関係。
+# fx_scanner_simple.py が直接 import するのは numpy / pandas / yfinance のみ。
+# アプリ用の requirements.txt（streamlit 等）は簡易スキャンには不要なため分離した。
+# 版は FX Cloud Scan 用（requirements-scanner.txt）と揃えて固定する。
+yfinance==0.2.66
+pandas==2.2.3
+numpy==2.0.2
