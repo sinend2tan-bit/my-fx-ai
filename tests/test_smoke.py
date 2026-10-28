@@ -1004,3 +1004,69 @@ def test_app_restore_legacy_bundle_keeps_pair_scan_outcomes(tmp_path, monkeypatc
     ns["restore_data_backup_bundle"](legacy_bundle)
     saved = json_module.loads((tmp_path / "pair_scan_outcomes.json").read_text(encoding="utf-8"))
     assert saved == current
+
+
+# =========================================================
+# bars() の最小本数しきい値（MIN_FEATURE_BARS）の境界値テスト
+# =========================================================
+
+def _synthetic_ohlc(n, start="2026-06-01 00:00", seed=7):
+    """yf.download の代わりに使う合成OHLC（UTC・1時間間隔の連続足）。"""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    index = pd.date_range(start=start, periods=n, freq="1h", tz="UTC")
+    close = 150.0 + np.cumsum(rng.normal(0, 0.05, size=n))
+    return pd.DataFrame(
+        {
+            "Open": close,
+            "High": close + 0.03,
+            "Low": close - 0.03,
+            "Close": close,
+            "Volume": 0.0,
+        },
+        index=index,
+    )
+
+
+def _stub_download(monkeypatch, frame):
+    monkeypatch.setattr(
+        scanner.yf, "download", lambda *args, **kwargs: frame.copy()
+    )
+
+
+def test_bars_1h_boundary_221_passes(monkeypatch):
+    # 221本 → 末尾の未確定足を除いて 220本 = 最小本数ちょうどで通る。
+    _stub_download(monkeypatch, _synthetic_ohlc(221))
+    assert scanner.bars("USDJPY=X", interval="1h", period="60d") is not None
+
+
+def test_bars_1h_boundary_220_and_219_rejected(monkeypatch, capsys):
+    for n in (220, 219):
+        _stub_download(monkeypatch, _synthetic_ohlc(n))
+        assert scanner.bars("USDJPY=X", interval="1h", period="60d") is None
+    assert "[DATA SHORT]" in capsys.readouterr().out
+
+
+def test_bars_4h_boundary_220_buckets_passes(monkeypatch):
+    # 連続した1時間足 880本 = 完成した4時間足 220本ちょうどで通る。
+    _stub_download(monkeypatch, _synthetic_ohlc(880))
+    assert scanner.bars("USDJPY=X", interval="4h", period="90d") is not None
+
+
+def test_bars_4h_boundary_219_buckets_rejected(monkeypatch, capsys):
+    # 876本 = 完成した4時間足 219本相当。不足がログで明示される。
+    _stub_download(monkeypatch, _synthetic_ohlc(876))
+    assert scanner.bars("USDJPY=X", interval="4h", period="90d") is None
+    assert "[DATA SHORT]" in capsys.readouterr().out
+
+
+def test_bars_4h_postcheck_reports_shortage(monkeypatch, capsys):
+    # 884本あるが2つの4時間区間に欠けがあり、完成した4時間足は219本。
+    # 事前チェックは通るため、加工後チェックで不足が明示されることを確認する。
+    frame = _synthetic_ohlc(884)
+    frame = frame.drop([frame.index[10], frame.index[100]])
+    _stub_download(monkeypatch, frame)
+    assert scanner.bars("USDJPY=X", interval="4h", period="90d") is None
+    out = capsys.readouterr().out
+    assert "[DATA SHORT]" in out and "after processing" in out

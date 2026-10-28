@@ -26,6 +26,10 @@ JST = ZoneInfo("Asia/Tokyo")
 
 STATE_FILE = "scan_state.json"
 LOOKAHEAD_BARS = 8
+# 特徴量計算に必要な最小の足本数（加工後）。最も遅い指標である EMA200 が
+# 有効になるには 200 本が必要で、残りは他の指標とラベル付けの余裕分。
+# bars() の事前チェックも、この値を基準に経路ごとに算出する。
+MIN_FEATURE_BARS = 220
 MIN_TRAIN_ROWS = 180
 N_WALK_FORWARD_FOLDS = 3
 FAST_MOVE_ATR_MULTIPLE = 2.5
@@ -1298,8 +1302,16 @@ def bars(ticker, interval="1h", period="60d"):
     else:
         print(f"[TIMEZONE DIAGNOSTIC] {ticker} {interval}: index has no timezone; no implicit conversion")
 
-    if len(raw) < 221:
-        print(f"[DATA SHORT] {ticker} {interval}: {len(raw)} bars")
+    # 事前チェック（早期打ち切り用）。最終判定は加工後の本数で行う。
+    # 1時間足・日足は末尾の未確定足を1本除外するため +1 本。
+    # 4時間足は、完成した4時間足が MIN_FEATURE_BARS 本そろうには
+    # 最低でもその4倍の1時間足が必要。
+    min_raw_bars = 4 * MIN_FEATURE_BARS if interval == "4h" else MIN_FEATURE_BARS + 1
+    if len(raw) < min_raw_bars:
+        print(
+            f"[DATA SHORT] {ticker} {interval}: {len(raw)} raw bars "
+            f"(minimum {min_raw_bars})"
+        )
         return None
 
     if interval == "4h":
@@ -1349,7 +1361,11 @@ def bars(ticker, interval="1h", period="60d"):
         # 1時間足・日足は従来どおり最後の取得足を除外する。
         raw = raw.iloc[:-1].copy()
 
-    if len(raw) < 220:
+    if len(raw) < MIN_FEATURE_BARS:
+        print(
+            f"[DATA SHORT] {ticker} {interval}: {len(raw)} bars "
+            f"after processing (minimum {MIN_FEATURE_BARS})"
+        )
         return None
 
      # ここで作る指標データは、最新の確定足を含む。
