@@ -1102,3 +1102,17 @@ def test_simple_scanner_requirements_cover_imports():
     assert third_party <= pinned, f"軽量依存に不足: {third_party - pinned}"
     # アプリ専用の重い依存が混ざっていないこと。
     assert not ({"streamlit", "plotly", "scikit-learn", "sklearn"} & pinned)
+
+
+# =========================================================
+# アプリ画面の注記（アプリ内分析とクラウドスキャンは別モデル）の確認
+# =========================================================
+
+def test_app_shows_separate_model_note():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    # タイトル直下の注記が残っていること（誤って消えていないこと）を確認する。
+    assert "【分析モデルについて】" in source
+    assert "異なるモデル・判定基準を使用しています" in source
+    assert "アプリ内分析の精度を直接保証するものではありません" in source
