@@ -930,11 +930,10 @@ def _extract_app_backup_functions(tmp_path):
     import ast
     import json as json_module
     from datetime import datetime, timedelta, timezone
+    from pathlib import Path
 
-    source = (tmp_path / "app.py").read_text(encoding="utf-8") if (tmp_path / "app.py").exists() else None
-    if source is None:
-        from pathlib import Path
-        source = Path("app.py").read_text(encoding="utf-8")
+    # テストの実行場所（chdir 後など）に依存しないよう、このファイルの位置から app.py を引く。
+    source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     wanted = {"load_pair_scan_outcomes", "build_data_backup_bundle", "restore_data_backup_bundle"}
     nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
