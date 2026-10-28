@@ -1070,3 +1070,35 @@ def test_bars_4h_postcheck_reports_shortage(monkeypatch, capsys):
     assert scanner.bars("USDJPY=X", interval="4h", period="90d") is None
     out = capsys.readouterr().out
     assert "[DATA SHORT]" in out and "after processing" in out
+
+
+# =========================================================
+# 簡易スキャンの軽量依存（requirements-scanner-simple.txt）の確認
+# =========================================================
+
+def test_simple_scanner_requirements_cover_imports():
+    import ast
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    tree = ast.parse((root / "fx_scanner_simple.py").read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    third_party = imported - set(sys.stdlib_module_names)
+
+    reqs = (root / "requirements-scanner-simple.txt").read_text(encoding="utf-8")
+    pinned = {
+        line.split("==")[0].strip().lower()
+        for line in reqs.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+
+    # fx_scanner_simple.py の外部依存がすべて軽量依存ファイルに含まれていること。
+    assert third_party <= pinned, f"軽量依存に不足: {third_party - pinned}"
+    # アプリ専用の重い依存が混ざっていないこと。
+    assert not ({"streamlit", "plotly", "scikit-learn", "sklearn"} & pinned)
