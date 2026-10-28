@@ -375,6 +375,16 @@ def save_forecast_history(items):
         st.warning(f"自動予測検証履歴を保存できませんでした: {exc}")
 
 
+def load_pair_scan_outcomes():
+    """Load candidate outcome tracking rows (post-candidate auto scoring)."""
+    try:
+        with open(PAIR_SCAN_OUTCOME_FILE, "r", encoding="utf-8") as f:
+            value = json.load(f)
+        return value if isinstance(value, list) else []
+    except (OSError, ValueError, TypeError):
+        return []
+
+
 def build_data_backup_bundle():
     """Export user settings and local logs; secrets such as webhook URLs are excluded."""
     settings = load_settings().copy()
@@ -389,6 +399,7 @@ def build_data_backup_bundle():
         "entry_tracking": load_entry_tracking(),
         "trade_journal": load_trade_journal(),
         "feedback_history": load_feedback_data(),
+        "pair_scan_outcomes": load_pair_scan_outcomes(),
     }
 
 
@@ -407,6 +418,10 @@ def restore_data_backup_bundle(bundle):
         TRADE_JOURNAL_FILE: bundle.get("trade_journal", []),
         FEEDBACK_FILE: bundle.get("feedback_history", []),
     }
+    # Backups created before pair scan outcomes were added to the bundle do
+    # not have this key; restoring one must not wipe the current file.
+    if "pair_scan_outcomes" in bundle:
+        lists[PAIR_SCAN_OUTCOME_FILE] = bundle.get("pair_scan_outcomes")
     if any(not isinstance(v, list) for v in lists.values()):
         raise ValueError("履歴データの形式が正しくありません。復元を中止しました。")
     # Validate all content before writing any files.
@@ -1363,7 +1378,7 @@ with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", e
         data=json.dumps(_full_backup, ensure_ascii=False, indent=2, default=_json_default).encode("utf-8"),
         file_name=f"ai_fx_full_backup_{datetime.now(JST).strftime('%Y%m%d')}.json",
         mime="application/json", use_container_width=True,
-        help="設定、予測検証履歴、注文候補の検証履歴、実取引記録、フィードバックを保存します。Webhook URLは含めません。",
+        help="設定、予測検証履歴、注文候補の検証履歴、候補後の自動採点、実取引記録、フィードバックを保存します。Webhook URLは含めません。",
     )
     st.caption("端末変更・アプリ更新前に、まとめてバックアップを保存してください。Webhook URLはセキュリティのため保存対象外です。")
     full_backup_upload = st.file_uploader("📤 まとめて保存したバックアップを復元", type=["json"], key="full_data_backup_upload")

@@ -919,3 +919,88 @@ def test_news_backfilled_datetime_counts_as_recent(monkeypatch):
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
 
+
+
+# =========================================================
+# アプリのバックアップ束（app.py から対象関数だけ抽出して検証）
+# app.py は import すると Streamlit アプリが走るため、AST で関数を取り出す。
+# =========================================================
+
+def _extract_app_backup_functions(tmp_path):
+    import ast
+    import json as json_module
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+
+    # テストの実行場所（chdir 後など）に依存しないよう、このファイルの位置から app.py を引く。
+    source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    wanted = {"load_pair_scan_outcomes", "build_data_backup_bundle", "restore_data_backup_bundle"}
+    nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
+    assert {n.name for n in nodes} == wanted
+    namespace = {
+        "json": json_module,
+        "datetime": datetime,
+        "JST": timezone(timedelta(hours=9)),
+        "_json_default": str,
+        "DEFAULT_SETTINGS": {"webhook_url": "", "rr_ratio": 1.5},
+        "SETTINGS_FILE": str(tmp_path / "user_settings.json"),
+        "FORECAST_TRACK_FILE": str(tmp_path / "forecast_outcome_history.json"),
+        "ENTRY_TRACK_FILE": str(tmp_path / "entry_candidate_history.json"),
+        "TRADE_JOURNAL_FILE": str(tmp_path / "actual_trade_journal.json"),
+        "FEEDBACK_FILE": str(tmp_path / "trade_feedback.json"),
+        "PAIR_SCAN_OUTCOME_FILE": str(tmp_path / "pair_scan_outcomes.json"),
+        "load_settings": lambda: {"webhook_url": "https://discord.com/api/webhooks/dummy", "rr_ratio": 1.5},
+        "load_forecast_history": lambda: [{"kind": "forecast"}],
+        "load_entry_tracking": lambda: [{"kind": "entry"}],
+        "load_trade_journal": lambda: [{"kind": "journal"}],
+        "load_feedback_data": lambda: [{"kind": "feedback"}],
+    }
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "app.py", "exec"), namespace)
+    return namespace
+
+
+def test_app_backup_bundle_includes_pair_scan_outcomes(tmp_path, monkeypatch):
+    import json as json_module
+    monkeypatch.chdir(tmp_path)
+    rows = [{"イベントID": "a|1時間足|買い|t1"}, {"イベントID": "b|1時間足|売り|t2"}]
+    (tmp_path / "pair_scan_outcomes.json").write_text(json_module.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    ns = _extract_app_backup_functions(tmp_path)
+    bundle = ns["build_data_backup_bundle"]()
+    assert bundle["pair_scan_outcomes"] == rows
+    # Webhook URL はバックアップに含めない仕様どおり空になる。
+    assert bundle["settings"]["webhook_url"] == ""
+
+
+def test_app_restore_writes_pair_scan_outcomes(tmp_path, monkeypatch):
+    import json as json_module
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    rows = [{"イベントID": "x|1時間足|買い|t9"}]
+    bundle = {
+        "format": "ai_fx_analyzer_backup",
+        "settings": {"rr_ratio": 2.0},
+        "forecast_history": [], "entry_tracking": [], "trade_journal": [], "feedback_history": [],
+        "pair_scan_outcomes": rows,
+    }
+    ns["restore_data_backup_bundle"](bundle)
+    saved = json_module.loads((tmp_path / "pair_scan_outcomes.json").read_text(encoding="utf-8"))
+    assert saved == rows
+
+
+def test_app_restore_legacy_bundle_keeps_pair_scan_outcomes(tmp_path, monkeypatch):
+    # pair_scan_outcomes を含まない旧形式のバックアップを復元しても、
+    # 現在の pair_scan_outcomes.json を空で上書きしない。
+    import json as json_module
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    current = [{"イベントID": "keep-me"}]
+    (tmp_path / "pair_scan_outcomes.json").write_text(json_module.dumps(current, ensure_ascii=False), encoding="utf-8")
+    legacy_bundle = {
+        "format": "ai_fx_analyzer_backup",
+        "settings": {"rr_ratio": 2.0},
+        "forecast_history": [], "entry_tracking": [], "trade_journal": [], "feedback_history": [],
+    }
+    ns["restore_data_backup_bundle"](legacy_bundle)
+    saved = json_module.loads((tmp_path / "pair_scan_outcomes.json").read_text(encoding="utf-8"))
+    assert saved == current
