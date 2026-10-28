@@ -2238,6 +2238,24 @@ def fast_move_detected(df):
 
 
 
+def build_feature_snapshot(latest_data):
+    """シグナル足（最新の確定足）の特徴量を、記録用に辞書化する。
+
+    フォワード検証の記録へ予測時点の材料を残すためだけのもので、
+    売買判定には使わない。値が欠けている特徴量は None にする。
+    """
+    if latest_data is None or latest_data.empty:
+        return None
+    try:
+        row = latest_data.iloc[-1]
+    except Exception:
+        return None
+    snapshot = {}
+    for column in FEATURE_COLUMNS:
+        snapshot[column] = safe_float(row.get(column))
+    return snapshot
+
+
 def analyze(df, validation):
     if df is None or len(df) < MIN_TRAIN_ROWS:
         return {
@@ -2246,6 +2264,7 @@ def analyze(df, validation):
             "sell_pct": None,
             "neutral_pct": None,
             "reason": "学習データ不足",
+            "feature_snapshot": None,
         }
 
     if not validation.get("passed"):
@@ -2255,6 +2274,7 @@ def analyze(df, validation):
             "sell_pct": None,
             "neutral_pct": None,
             "reason": validation.get("reason", "検証条件未達"),
+            "feature_snapshot": None,
         }
 
     latest_data = df.attrs.get("latest_data")
@@ -2265,6 +2285,7 @@ def analyze(df, validation):
             "sell_pct": None,
             "neutral_pct": None,
             "reason": "最新の確定足を確認できません",
+            "feature_snapshot": None,
         }
 
     X = df[FEATURE_COLUMNS]
@@ -2277,6 +2298,7 @@ def analyze(df, validation):
             "sell_pct": None,
             "neutral_pct": None,
             "reason": "学習対象の種類が不足",
+            "feature_snapshot": None,
         }
 
     model = RandomForestClassifier(
@@ -2319,6 +2341,7 @@ def analyze(df, validation):
                 "表示値は未校正のRandomForestモデルスコアです。実際の勝率・真の確率ではありません。"
                 "将来の利益を保証するものではありません。"
             ),
+            "feature_snapshot": build_feature_snapshot(latest_data),
         }
 
     except Exception as exc:
@@ -2327,6 +2350,7 @@ def analyze(df, validation):
             "buy_pct": None,
             "sell_pct": None,
             "neutral_pct": None,
+            "feature_snapshot": None,
             "reason": "モデル分析エラー: " + str(exc)[:200],
         }
 
@@ -2510,6 +2534,7 @@ def analyze_pair(name, config):
         # フォワード検証への記録可否（ニュース以外の全ゲート通過時に True）。
         # 売買候補の採用判定とは分離した、記録専用のフラグ。
         "forward_recordable": False,
+        "feature_snapshot": None,
         "buy_pct": None,
         "sell_pct": None,
         "neutral_pct": None,
@@ -2619,6 +2644,7 @@ def analyze_pair(name, config):
             "buy_pct": model_result["buy_pct"],
             "sell_pct": model_result["sell_pct"],
             "neutral_pct": model_result["neutral_pct"],
+            "feature_snapshot": model_result.get("feature_snapshot"),
         })
 
         # 方向別の仮想損益が未検証・不良なら、その方向の候補を出さず様子見にする。
@@ -3320,6 +3346,10 @@ def record_forward_predictions(predictions, pair_results, details=None):
                 "status": "PENDING",
                 "news_status_at_record": item.get("news_status"),
                 "news_verified": news_verified,
+                # 予測時点の材料（後日の要因分析用）。記録専用で、
+                # 売買判定・検証ゲート・フォワード評価には使わない。
+                "model_version": MODEL_VERSION,
+                "feature_snapshot": item.get("feature_snapshot"),
             })
             existing_ids.add(pred_id)
             recorded += 1

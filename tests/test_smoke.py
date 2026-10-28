@@ -1116,3 +1116,52 @@ def test_app_shows_separate_model_note():
     assert "【分析モデルについて】" in source
     assert "異なるモデル・判定基準を使用しています" in source
     assert "アプリ内分析の精度を直接保証するものではありません" in source
+
+
+def test_build_feature_snapshot_covers_all_feature_columns():
+    row = {column: 1.5 for column in scanner.FEATURE_COLUMNS}
+    row["RSI"] = float("nan")
+    row["ExtraColumn"] = 9.9
+    latest = pd.DataFrame([row])
+    snapshot = scanner.build_feature_snapshot(latest)
+    assert snapshot is not None
+    assert set(snapshot.keys()) == set(scanner.FEATURE_COLUMNS)
+    assert snapshot["Return_1"] == 1.5
+    # 欠けた値は None として残す（後日の分析で欠測が分かるように）
+    assert snapshot["RSI"] is None
+    assert scanner.build_feature_snapshot(None) is None
+    assert scanner.build_feature_snapshot(pd.DataFrame()) is None
+
+
+def test_forward_record_stores_feature_snapshot():
+    predictions = []
+    snapshot = {column: 0.25 for column in scanner.FEATURE_COLUMNS}
+    candidate = {
+        "name": "米ドル/円 (USD/JPY)",
+        "ticker": "USDJPY=X",
+        "decision": "候補あり（手動確認のみ）",
+        "direction": "買い",
+        "price": 100.0,
+        "atr": 1.0,
+        "signal_bar_time": "2026-01-05T00:00:00+00:00",
+        "feature_snapshot": snapshot,
+    }
+    assert scanner.record_forward_predictions(predictions, [candidate]) == 1
+    assert predictions[0]["feature_snapshot"] == snapshot
+    assert predictions[0]["model_version"] == scanner.MODEL_VERSION
+
+
+def test_forward_record_without_snapshot_stays_none():
+    predictions = []
+    candidate = {
+        "name": "米ドル/円 (USD/JPY)",
+        "ticker": "USDJPY=X",
+        "decision": "候補あり（手動確認のみ）",
+        "direction": "売り",
+        "price": 100.0,
+        "atr": 1.0,
+        "signal_bar_time": "2026-01-05T01:00:00+00:00",
+    }
+    assert scanner.record_forward_predictions(predictions, [candidate]) == 1
+    # スナップショットが無い候補でも記録自体は従来どおり行う
+    assert predictions[0]["feature_snapshot"] is None
