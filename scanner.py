@@ -2960,6 +2960,12 @@ def evaluate_forward_prediction(prediction, ohlc_df):
     """PENDING予測1件を、シグナル足の直後8本の実際のOHLCで判定する。
 
     判定の物差しは学習ラベル・仮想損益と同じトリプルバリア（基準価格±1ATR、8本）。
+    基準価格は、学習ラベル・仮想損益のエントリー基準に合わせ、シグナル足の
+    直後の足（評価ウィンドウの1本目）の始値とする。バリア判定の対象は
+    次足自身を含む8本で、学習ラベルの範囲（シグナル後の1〜8本目）と一致する。
+    記録に保存された reference_price（シグナル足の終値）は経緯として保持し、
+    評価の基準には使わない。評価に使った基準価格は、結果の
+    evaluation_reference_price に別途記録する。
     - 方向に有利なバリアに先に到達: HIT（利確価格で決済）
     - 不利なバリアに先に到達: MISS（損切り価格で決済）
     - 同じ足で両方に触れた場合は足内の順序が不明なため、不利側を先として扱う
@@ -3009,8 +3015,17 @@ def evaluate_forward_prediction(prediction, ohlc_df):
         if not _forward_bar_gap_allowed(prev_ts, next_ts):
             return None
 
-    upper = reference + atr_value
-    lower = reference - atr_value
+    # 評価の基準価格は、学習ラベル・仮想損益に合わせて「シグナル足の直後の
+    # 足（評価ウィンドウの1本目）の始値」とする。上の連続性チェックにより、
+    # ウィンドウの1本目が直後の足であることは保証される（週末をまたぐ場合は
+    # 再開後の最初の足）。記録に保存された reference_price（シグナル足の終値）
+    # は経緯として保持し、ここでは使わない。
+    entry_reference = safe_float(window["Open"].iloc[0])
+    if entry_reference is None or entry_reference <= 0:
+        return None
+
+    upper = entry_reference + atr_value
+    lower = entry_reference - atr_value
 
     status = "NOT_REACHED"
     exit_price = safe_float(window["Close"].iloc[-1])
@@ -3023,11 +3038,11 @@ def evaluate_forward_prediction(prediction, ohlc_df):
         if high is None or low is None:
             return None
 
-        # 決済までの最大不利変動（決済足を含む）。
+        # 決済までの最大不利変動（決済足を含む）。基準は次足始値。
         if sign == 1:
-            mae_price = max(mae_price, reference - low)
+            mae_price = max(mae_price, entry_reference - low)
         else:
-            mae_price = max(mae_price, high - reference)
+            mae_price = max(mae_price, high - entry_reference)
 
         hit_upper = high >= upper
         hit_lower = low <= lower
@@ -3049,7 +3064,7 @@ def evaluate_forward_prediction(prediction, ohlc_df):
     if exit_price is None:
         return None
 
-    gross_pips = (exit_price - reference) * sign / pip_size
+    gross_pips = (exit_price - entry_reference) * sign / pip_size
     cost_pips = (
         float(spread_pips)
         + float(SIMULATED_ROUND_TRIP_SLIPPAGE_PIPS)
@@ -3058,6 +3073,10 @@ def evaluate_forward_prediction(prediction, ohlc_df):
 
     return {
         "status": status,
+        # 評価に使った基準価格（次足始値）と、その足の時刻。記録側の
+        # reference_price（シグナル足の終値）は上書きしない。
+        "evaluation_reference_price": float(entry_reference),
+        "entry_bar_time": window.index[0].isoformat(),
         "exit_price": float(exit_price),
         "exit_bar_offset": int(exit_bar_offset),
         "gross_pips": round(float(gross_pips), 2),

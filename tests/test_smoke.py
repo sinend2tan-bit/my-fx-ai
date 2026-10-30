@@ -90,7 +90,9 @@ def test_forward_buy_hit():
     )
     out = scanner.evaluate_forward_prediction(_forward_prediction(frame), frame)
     assert out["status"] == "HIT"
-    assert out["exit_price"] == 101.0
+    # 基準価格は次足始値（100.1）のため、上バリアは 101.1（第1段階の変更）。
+    # 旧基準（シグナル足終値 100.0）では 101.0 だった。
+    assert out["exit_price"] == 101.1
     assert out["gross_pips"] == 100.0
     # コスト（スプレッド0.2＋スリッページ0.5＋スワップストレス0.2）を控除した純損益
     assert out["net_pips"] == 99.1
@@ -126,8 +128,10 @@ def test_forward_not_reached_and_pending_when_short():
     frame = _forward_frame(bars)
     out = scanner.evaluate_forward_prediction(_forward_prediction(frame), frame)
     assert out["status"] == "NOT_REACHED"
-    assert out["gross_pips"] == 30.0
-    assert out["mae_pips"] == 60.0
+    # 損益・MAE は次足始値（100.1）から測る（第1段階の変更）。
+    # 旧基準（シグナル足終値 100.0）では gross 30.0 / mae 60.0 だった。
+    assert out["gross_pips"] == 20.0
+    assert out["mae_pips"] == 70.0
 
     # 評価期間の足が8本そろっていなければ評価しない（PENDINGのまま残す）
     frame = _forward_frame(_flat_bars(5))
