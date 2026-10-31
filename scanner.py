@@ -3597,6 +3597,23 @@ _STATUS_FORWARD_KEYS = (
     "definitions",
 )
 
+# ステータス記録へ転記する run_health のキー（既存の集計値のみ）。
+_STATUS_RUN_HEALTH_KEYS = (
+    "pairs_total",
+    "fresh_data_pairs",
+    "stale_or_unknown_pairs",
+    "data_quality_fail_pairs",
+    "validation_pass_pairs",
+    "validation_skipped_or_not_passed_pairs",
+    "news_unavailable_pairs",
+    "news_retrieval_error_pairs",
+    "news_empty_result_pairs",
+    "news_no_recent_article_pairs",
+    "news_recent_articles_checked_pairs",
+    "candidate_pairs",
+    "execution_note",
+)
+
 
 def build_status_record(started_at, finished_at, pair_results, forward_summary,
                         run_health):
@@ -3650,7 +3667,9 @@ def build_status_record(started_at, finished_at, pair_results, forward_summary,
         },
         "pairs": pairs,
         "forward": forward,
-        "run_health": dict(run_health or {}),
+        "run_health": {
+            key: (run_health or {}).get(key) for key in _STATUS_RUN_HEALTH_KEYS
+        },
     }
 
 

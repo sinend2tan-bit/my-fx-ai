@@ -93,8 +93,18 @@ def _run_health():
         "pairs_total": 2,
         "fresh_data_pairs": 1,
         "stale_or_unknown_pairs": 1,
+        "data_quality_fail_pairs": 0,
         "validation_pass_pairs": 0,
+        "validation_skipped_or_not_passed_pairs": 2,
+        "news_unavailable_pairs": 0,
+        "news_retrieval_error_pairs": 0,
+        "news_empty_result_pairs": 0,
+        "news_no_recent_article_pairs": 0,
+        "news_recent_articles_checked_pairs": 2,
         "candidate_pairs": 0,
+        "execution_note": "note",
+        # 転記対象外のキー（混入しないことを確認する）。
+        "legacy_extra": "do-not-copy",
     }
 
 
@@ -146,6 +156,28 @@ def test_build_status_record_excludes_non_whitelisted_keys():
     assert "fold_details" not in pair["validation"]
     assert "simulated_pnl" not in pair["validation"]
     assert "internal_note" not in record["forward"]
+
+    dumped = json.dumps(record, ensure_ascii=False)
+    assert "do-not-copy" not in dumped
+
+
+def test_build_status_record_run_health_whitelist():
+    record = scanner.build_status_record(
+        "2026-10-31T12:00:00+09:00",
+        "2026-10-31T12:03:00+09:00",
+        [],
+        {},
+        {"pairs_total": 5, "unexpected_key": "do-not-copy"},
+    )
+
+    run_health = record["run_health"]
+    # 転記されるのはホワイトリストのキーだけ。
+    assert set(run_health.keys()) == set(scanner._STATUS_RUN_HEALTH_KEYS)
+    assert "unexpected_key" not in run_health
+    # 存在する値はそのまま転記され、欠けたキーは None で補われる。
+    assert run_health["pairs_total"] == 5
+    assert run_health["candidate_pairs"] is None
+    assert run_health["execution_note"] is None
 
     dumped = json.dumps(record, ensure_ascii=False)
     assert "do-not-copy" not in dumped
