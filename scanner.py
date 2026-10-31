@@ -53,6 +53,9 @@ NEWS_HOLD_IF_UNAVAILABLE = True
 # 古い評価済みレコードは切り詰めるが、累積集計（forward_stats）は別に保持するため
 # 切り詰めで累積成績が失われることはない。
 FORWARD_PREDICTIONS_MAX = 200
+# PENDING のまま滞在した予測を UNEVALUABLE（評価不能）に分類するまでの
+# 猶予。記録日時（recorded_at_jst、無ければ signal_bar_time）からの暦日。
+FORWARD_UNEVALUABLE_AFTER_DAYS = 14
 
 MODEL_VERSION = 19
 
@@ -3143,7 +3146,7 @@ def update_forward_stats(stats, prediction, outcome):
 
 def build_forward_summary(stats, predictions, evaluated_now, recorded_now,
                           tracking_since=None, recorded_verified_now=0,
-                          recorded_unverified_now=0):
+                          recorded_unverified_now=0, unevaluable_now=0):
     """状態ファイルとサマリー表示用の集計ビューを作る。
 
     的中率は HIT / (HIT + MISS)。NOT_REACHED（どちらにも届かなかった予測）は
@@ -3160,6 +3163,10 @@ def build_forward_summary(stats, predictions, evaluated_now, recorded_now,
     pending = sum(
         1 for item in predictions
         if isinstance(item, dict) and item.get("status") == "PENDING"
+    )
+    unevaluable = sum(
+        1 for item in predictions
+        if isinstance(item, dict) and item.get("status") == "UNEVALUABLE"
     )
 
     breakdown = {}
@@ -3193,8 +3200,10 @@ def build_forward_summary(stats, predictions, evaluated_now, recorded_now,
         ),
         "news_verified_breakdown": breakdown,
         "pending_count": pending,
+        "unevaluable_count": unevaluable,
         "stored_predictions": len(predictions),
         "evaluated_this_run": evaluated_now,
+        "unevaluable_this_run": unevaluable_now,
         "recorded_this_run": recorded_now,
         "recorded_verified_this_run": recorded_verified_now,
         "recorded_unverified_this_run": recorded_unverified_now,
@@ -3206,11 +3215,128 @@ def build_forward_summary(stats, predictions, evaluated_now, recorded_now,
     }
 
 
+def _parse_jst_timestamp(value):
+    """ISO文字列をJSTのdatetimeへ変換する。読めなければNone。
+
+    タイムゾーンが無い場合はJSTとして扱う（旧形式の記録への配慮）。
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = pd.Timestamp(value)
+    except Exception:
+        return None
+    if parsed is None or pd.isna(parsed):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.tz_localize(JST).to_pydatetime()
+    return parsed.tz_convert(JST).to_pydatetime()
+
+
+def diagnose_forward_pending(prediction, ohlc_df):
+    """評価できなかったPENDING予測の原因を読み取り専用に切り分ける。
+
+    evaluate_forward_prediction() の前提条件を同じ順序で検査し、
+    (理由コード, 詳細文字列) を返す。評価ロジック自体には手を入れない。
+    この関数は、evaluate が None を返した予測に対してだけ呼ぶこと
+    （評価が成立する予測に呼ぶと、評価が到達しない足の値まで検査する
+    ため、結果が evaluate と食い違うことがある）。
+    理由コード:
+    - invalid_record: 保存値の不正（方向・基準価格・ATR・pip・信号足時刻）
+    - insufficient_bars: シグナル後の足が8本そろっていない、または
+      シグナル足が取得フレームの範囲外
+    - bar_gap: 評価ウィンドウ内に許容できない欠けがある
+    - invalid_values: 評価ウィンドウ内の価格（始値・高値・安値・終値）が不正
+    - unknown_timeout: フレームは取得できたが上記の原因が特定できない
+      まま期限を経過したもの
+    """
+    direction = prediction.get("direction")
+    sign = 1 if direction == "買い" else -1 if direction == "売り" else 0
+    reference = safe_float(prediction.get("reference_price"))
+    atr_value = safe_float(prediction.get("atr"))
+    pip_size = safe_float(prediction.get("pip_size"))
+    if sign == 0:
+        return ("invalid_record", f"方向が不正: {direction!r}")
+    if reference is None or reference <= 0:
+        return ("invalid_record", "reference_price が不正")
+    if atr_value is None or atr_value <= 0:
+        return ("invalid_record", "atr が不正")
+    if pip_size is None or pip_size <= 0:
+        return ("invalid_record", "pip_size が不正")
+    try:
+        signal_time = pd.Timestamp(prediction.get("signal_bar_time"))
+    except Exception:
+        return ("invalid_record", "signal_bar_time が解析できない")
+    if signal_time is None or signal_time.tzinfo is None:
+        return ("invalid_record", "signal_bar_time にタイムゾーンがない")
+
+    if ohlc_df is None or ohlc_df.empty:
+        return ("unknown_timeout", "評価フレームが取得できていない")
+
+    frame = ohlc_df.sort_index()
+    window = frame[frame.index > signal_time].head(LOOKAHEAD_BARS)
+    if len(window) < LOOKAHEAD_BARS:
+        return (
+            "insufficient_bars",
+            f"シグナル後の足が {len(window)} 本しかない",
+        )
+    if signal_time < frame.index[0]:
+        return ("insufficient_bars", "シグナル足が取得フレームの範囲外")
+
+    chain = [signal_time] + list(window.index)
+    for prev_ts, next_ts in zip(chain[:-1], chain[1:]):
+        if not _forward_bar_gap_allowed(prev_ts, next_ts):
+            return (
+                "bar_gap",
+                f"欠け: {prev_ts.isoformat()} → {next_ts.isoformat()}"
+                f"（{next_ts - prev_ts}）",
+            )
+
+    entry_reference = safe_float(window["Open"].iloc[0])
+    if entry_reference is None or entry_reference <= 0:
+        return ("invalid_values", "評価ウィンドウ1本目の始値が不正")
+    for _, bar in window.iterrows():
+        for column in ("Open", "High", "Low", "Close"):
+            if safe_float(bar[column]) is None:
+                return (
+                    "invalid_values",
+                    f"評価ウィンドウ内の {column} が不正",
+                )
+    return ("unknown_timeout", "原因が特定できないまま期限を経過")
+
+
+def _classify_forward_unevaluable_if_stale(prediction, ohlc_df):
+    """14日を経過した未評価予測を UNEVALUABLE に分類する。
+
+    分類した場合 True。分類は status と2つの新規フィールドの追加のみで、
+    元のフィールド（reference_price、atr、feature_snapshot など）は
+    一切変更・削除しない。評価フレームが取得できていない場合は
+    呼び出し側で弾くため、ここでは到達しない前提。
+    """
+    recorded_at = _parse_jst_timestamp(prediction.get("recorded_at_jst"))
+    if recorded_at is None:
+        recorded_at = _parse_jst_timestamp(prediction.get("signal_bar_time"))
+    if recorded_at is None:
+        return False
+    if now_jst() - recorded_at < timedelta(
+        days=FORWARD_UNEVALUABLE_AFTER_DAYS
+    ):
+        return False
+    code, detail = diagnose_forward_pending(prediction, ohlc_df)
+    prediction["status"] = "UNEVALUABLE"
+    prediction["status_changed_at_jst"] = iso_now()
+    prediction["unevaluable_reason"] = {"code": code, "detail": detail}
+    return True
+
+
 def process_forward_verification(previous_state):
     """保存済み予測のうち評価期間が終わったものを、実際の価格で判定する。
 
     ペアごとに1時間足を取り直して判定する。失敗しても例外を外に出さず、
     判定できなかった予測はPENDINGのまま次回に回す。
+    ただし、記録から14日を経過しても評価できない予測は、評価フレームが
+    取得できた場合に限り UNEVALUABLE（評価不能）に分類する。
+    フレーム取得自体が失敗した実行では分類しない。
     戻り値: (predictions, stats, evaluated_now)
     """
     raw_predictions = previous_state.get("predictions", [])
@@ -3255,6 +3381,16 @@ def process_forward_verification(previous_state):
                     )
                     continue
                 if outcome is None:
+                    # 評価できなかった予測の後処理。フレーム取得に成功した
+                    # 実行でのみ、14日経過の分類判定を行う（取得失敗時は
+                    # ここに到達しないため、一時的な取得失敗を恒常的な
+                    # 評価不能と誤判定しない）。例外で evaluate が中断した
+                    # 場合は分類せず、次回に回す。
+                    if _classify_forward_unevaluable_if_stale(item, ohlc):
+                        print(
+                            f"[FORWARD UNEVALUABLE] id={item.get('id')}, "
+                            f"reason={item['unevaluable_reason']['code']}"
+                        )
                     continue
                 item.update(outcome)
                 update_forward_stats(stats, item, outcome)
@@ -3276,9 +3412,10 @@ def process_forward_verification(previous_state):
 def trim_forward_predictions(predictions, max_items=FORWARD_PREDICTIONS_MAX):
     """予測リストを上限件数に切り詰める。
 
-    未評価（PENDING）の予測は削除しない。超過分は評価済みのものから
-    古い順に削除する。PENDING だけで上限を超える場合は全て保持する
-    （未評価データを失わない方針。その場合リストは上限より長くなる）。
+    未評価（PENDING）と評価不能（UNEVALUABLE）の予測は削除しない。
+    超過分は評価済みのものから古い順に削除する。PENDING／UNEVALUABLE
+    だけで上限を超える場合は全て保持する（未評価データを失わない方針。
+    その場合リストは上限より長くなる）。
     リストの時系列順序は維持する。
     """
     if len(predictions) <= max_items:
@@ -3286,8 +3423,11 @@ def trim_forward_predictions(predictions, max_items=FORWARD_PREDICTIONS_MAX):
     excess = len(predictions) - max_items
     kept = []
     for item in predictions:
-        is_pending = isinstance(item, dict) and item.get("status") == "PENDING"
-        if excess > 0 and not is_pending:
+        is_protected = (
+            isinstance(item, dict)
+            and item.get("status") in ("PENDING", "UNEVALUABLE")
+        )
+        if excess > 0 and not is_protected:
             excess -= 1
             continue
         kept.append(item)
@@ -3718,6 +3858,17 @@ def main():
     # 失敗してもスキャン本体を止めない。状態が壊れていても保存済みの値は
     # 可能な限り保持し、履歴を巻き戻さない。
     forward_evaluated_now = 0
+    # 今回 UNEVALUABLE に分類された件数を数えるための事前スナップショット。
+    # process_forward_verification は 3 値タプルを返すため、分類前の
+    # PENDING の ID 集合と照合して今回分を特定する。
+    raw_prev_predictions = previous_state.get("predictions")
+    pending_ids_before = {
+        item.get("id")
+        for item in raw_prev_predictions
+        if isinstance(raw_prev_predictions, list)
+        and isinstance(item, dict)
+        and item.get("status") == "PENDING"
+    }
     try:
         predictions, forward_stats, forward_evaluated_now = (
             process_forward_verification(previous_state)
@@ -3741,7 +3892,8 @@ def main():
         forward_recorded_now = record_forward_predictions(
             predictions, pair_results, details=forward_record_details
         )
-        # 切り詰めは未評価（PENDING）を落とさない方式（trim_forward_predictions）。
+        # 切り詰めは未評価（PENDING）・評価不能（UNEVALUABLE）を落とさない方式
+        # （trim_forward_predictions）。
         predictions = trim_forward_predictions(predictions)
     except Exception as exc:
         print(
@@ -3760,6 +3912,15 @@ def main():
         ]
         forward_tracking_since = min(recorded_times) if recorded_times else None
 
+    # 今回 UNEVALUABLE に分類された件数（切り詰めは UNEVALUABLE を
+    # 保護するため、この時点のリストで数えてよい）。
+    forward_unevaluable_now = sum(
+        1 for item in predictions
+        if isinstance(item, dict)
+        and item.get("status") == "UNEVALUABLE"
+        and item.get("id") in pending_ids_before
+    )
+
     forward_summary = build_forward_summary(
         forward_stats,
         predictions,
@@ -3770,6 +3931,7 @@ def main():
         recorded_unverified_now=forward_record_details.get(
             "recorded_unverified", 0
         ),
+        unevaluable_now=forward_unevaluable_now,
     )
 
     summary = []
@@ -3795,6 +3957,8 @@ def main():
         f"純損益累計={forward_summary['net_pips_total']}pips / "
         f"平均MAE={forward_summary['avg_mae_pips']}pips / "
         f"未評価={forward_summary['pending_count']}件 / "
+        f"評価不能累計={forward_summary['unevaluable_count']}件"
+        f"（今回{forward_summary['unevaluable_this_run']}件） / "
         f"今回判定={forward_summary['evaluated_this_run']}件・"
         f"今回記録={forward_summary['recorded_this_run']}件"
         f"（ニュース確認済み{forward_summary['recorded_verified_this_run']}件・"
