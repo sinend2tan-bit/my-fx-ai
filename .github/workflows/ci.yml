@@ -33,6 +33,7 @@ jobs:
 
       - name: Smoke tests (no network)
         run: python -m pytest tests/ -q
+        
   apptest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
