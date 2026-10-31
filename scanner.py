@@ -3557,6 +3557,158 @@ def write_step_summary(started_at, pair_results, summary_lines,
         print(f"[STEP SUMMARY ERROR] {type(exc).__name__}: {str(exc)[:180]}")
 
 
+STATUS_FILE = "scan_status.json"
+STATUS_SCHEMA_VERSION = 1
+
+# ステータス記録へ転記する validation のキー（既存の集計値のみ）。
+_STATUS_VALIDATION_KEYS = (
+    "passed",
+    "reason",
+    "model_validation_ok",
+    "model_gate_reasons",
+    "pnl_stability_ok",
+    "pnl_gate_reasons",
+    "positive_pnl_folds",
+    "total_pnl_trades",
+    "balanced_accuracy",
+    "baseline_balanced_accuracy",
+    "class_recall_pct",
+)
+
+# ステータス記録へ転記するフォワード集計のキー（forward_summary の既存値のみ）。
+_STATUS_FORWARD_KEYS = (
+    "tracking_since",
+    "evaluated_total",
+    "hit",
+    "miss",
+    "not_reached",
+    "hit_rate_pct",
+    "buy_hit_rate_pct",
+    "sell_hit_rate_pct",
+    "net_pips_total",
+    "avg_mae_pips",
+    "pending_count",
+    "stored_predictions",
+    "evaluated_this_run",
+    "recorded_this_run",
+    "recorded_verified_this_run",
+    "recorded_unverified_this_run",
+    "news_verified_breakdown",
+    "definitions",
+)
+
+# ステータス記録へ転記する run_health のキー（既存の集計値のみ）。
+_STATUS_RUN_HEALTH_KEYS = (
+    "pairs_total",
+    "fresh_data_pairs",
+    "stale_or_unknown_pairs",
+    "data_quality_fail_pairs",
+    "validation_pass_pairs",
+    "validation_skipped_or_not_passed_pairs",
+    "news_unavailable_pairs",
+    "news_retrieval_error_pairs",
+    "news_empty_result_pairs",
+    "news_no_recent_article_pairs",
+    "news_recent_articles_checked_pairs",
+    "candidate_pairs",
+    "execution_note",
+)
+
+
+def build_status_record(started_at, finished_at, pair_results, forward_summary,
+                        run_health):
+    """日次レビュー用のステータス記録を、既存の集計値から組み立てる。
+
+    ジョブサマリー（write_step_summary）と同じ材料を使う記録専用の追加で、
+    新しい計算や判定は一切しない。転記するキーは上記のホワイトリストに
+    限定し、ペア結果や集計に含まれる他の情報（価格の詳細など）は
+    記録しない。実行メタ情報は GitHub Actions の環境変数がある場合のみ
+    取り込む（ローカル実行時は None）。
+    """
+    pairs = []
+    for item in pair_results or []:
+        if not isinstance(item, dict):
+            continue
+        validation = item.get("validation") or {}
+        pairs.append({
+            "name": item.get("name"),
+            "ticker": item.get("ticker"),
+            "decision": item.get("decision"),
+            "direction": item.get("direction"),
+            "validation": {
+                key: validation.get(key) for key in _STATUS_VALIDATION_KEYS
+            },
+            "data_freshness_status": item.get("data_freshness_status"),
+            "data_age_minutes": item.get("data_age_minutes"),
+            "data_quality_status": item.get("data_quality_status"),
+            "news_status": item.get("news_status"),
+        })
+
+    forward = {
+        key: (forward_summary or {}).get(key) for key in _STATUS_FORWARD_KEYS
+    }
+
+    run_number_raw = os.environ.get("GITHUB_RUN_NUMBER")
+    run_number = (
+        int(run_number_raw)
+        if run_number_raw and run_number_raw.isdigit()
+        else None
+    )
+
+    return {
+        "schema_version": STATUS_SCHEMA_VERSION,
+        "generated_at_jst": finished_at,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "run": {
+            "run_id": os.environ.get("GITHUB_RUN_ID"),
+            "run_number": run_number,
+            "commit_sha": os.environ.get("GITHUB_SHA"),
+        },
+        "pairs": pairs,
+        "forward": forward,
+        "run_health": {
+            key: (run_health or {}).get(key) for key in _STATUS_RUN_HEALTH_KEYS
+        },
+    }
+
+
+def write_status_file(record, path=STATUS_FILE):
+    """ステータス記録を JSON ファイルへ書き出す。
+
+    状態ファイル（scan_state.json）とは別ファイルであり、状態の保存・
+    復元には一切関与しない。書き込みは一時ファイル経由の置き換えで
+    行い、途中で失敗しても既存のステータスファイルを壊さない。
+    """
+    target = os.path.abspath(path)
+    tmp_path = target + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=2, default=json_default)
+        f.write("\n")
+    os.replace(tmp_path, target)
+    return target
+
+
+def write_status_safely(started_at, pair_results, forward_summary, run_health):
+    """ステータス記録の生成と書き出しを行い、成否を返す。
+
+    記録専用の追加であり、失敗しても例外を外に出さず、スキャン本体・
+    状態保存・ジョブサマリーに影響させない。
+    """
+    try:
+        record = build_status_record(
+            started_at, iso_now(), pair_results, forward_summary, run_health
+        )
+        write_status_file(record)
+        print(f"[STATUS RECORD] path={STATUS_FILE}")
+        return True
+    except Exception as exc:
+        print(
+            f"[STATUS RECORD WARNING] {type(exc).__name__}: {str(exc)[:180]}"
+        )
+        return False
+
+
 def main():
     started_at = iso_now()
     previous_state = load_state()
@@ -3795,6 +3947,10 @@ def main():
         started_at, pair_results, summary,
         news_status_counts, run_health, forward_summary,
     )
+
+    # 日次レビュー用のステータス記録（scan_status.json）を書き出す。
+    # 記録専用の追加で、失敗してもスキャン本体に影響しない。
+    write_status_safely(started_at, pair_results, forward_summary, run_health)
 
     print("\n========== FX SCAN SUMMARY ==========")
     print("\n".join(summary))
