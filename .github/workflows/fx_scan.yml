@@ -27,6 +27,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          # 認証情報をローカル Git 設定に残さない。公開は最終ステップが GH_TOKEN で独自に行う。
           persist-credentials: false
 
       - name: Set up Python
@@ -112,30 +113,29 @@ jobs:
           # 公開モードの判定。公開中の latest.json の日時が欠落・不正・読み取り不能な
           # 場合は、例外によりこのステップ自体を中止する（安全側に倒し、履歴の
           # 再構築も通常の公開も行わない）。新しい記録の日時が不正な場合も同様。
+          # 四半期の比較は、日時を Asia/Tokyo に変換してから行う。タイムゾーン
+          # 情報のない日時は不正として中止する。
           MODE=$(python3 - "${BRANCH_EXISTS}" status/latest.json "${SRC}" << 'PYEOF'
           import json, sys
-          from datetime import datetime, timezone, timedelta
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          TOKYO = ZoneInfo("Asia/Tokyo")
           branch_exists, prev_path, src_path = sys.argv[1], sys.argv[2], sys.argv[3]
-          def load_generated(path):
+          def load_generated_jst(path):
               with open(path, encoding="utf-8") as f:
                   data = json.load(f)
               value = data.get("generated_at_jst")
               if not isinstance(value, str) or not value:
                   raise ValueError("generated_at_jst missing")
-              datetime.fromisoformat(value.replace("Z", "+00:00"))
-              return value
-          # 四半期判定は JST で行う。generated_at_jst は JST の日時なので、
-          # UTC のままでは四半期の境目で誤判定になるため JST に変換する。
-          def quarter_of(s):
-              dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+              dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
               if dt.tzinfo is None:
-                  dt = dt.replace(tzinfo=timezone(timedelta(hours=9)))
-              else:
-                  dt = dt.astimezone(timezone(timedelta(hours=9)))
+                  raise ValueError("generated_at_jst has no timezone")
+              return dt.astimezone(TOKYO)
+          def quarter_of(dt):
               return (dt.year, (dt.month - 1) // 3)
-          current = load_generated(src_path)
+          current = load_generated_jst(src_path)
           if branch_exists == "1":
-              previous = load_generated(prev_path)
+              previous = load_generated_jst(prev_path)
               print("rebuild" if quarter_of(previous) != quarter_of(current) else "normal")
           else:
               print("first")
