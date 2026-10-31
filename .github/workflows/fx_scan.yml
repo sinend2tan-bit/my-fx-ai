@@ -5,7 +5,8 @@ on:
   schedule:
     - cron: "17 */6 * * *"
 
-# 状態は Git コミットではなく Actions キャッシュで受け渡すため、書き込み権限は不要。
+# 状態は Git コミットではなく Actions キャッシュで受け渡す。
+# 書き込み権限は、ステータス記録を scan-status ブランチへ公開する scan ジョブにだけ与える。
 permissions:
   contents: read
 
@@ -16,12 +17,18 @@ concurrency:
 
 jobs:
   scan:
+    # ステータス公開（最終ステップ）のため、このジョブにだけ contents: write を与える。
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # 認証情報をローカル Git 設定に残さない。公開は最終ステップが GH_TOKEN で独自に行う。
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -65,3 +72,115 @@ jobs:
           path: scan_state.json
           retention-days: 30
           if-no-files-found: warn
+      # ステータス記録（scan_status.json）を専用ブランチ scan-status へ公開する。
+      # 失敗してもスキャン本体・状態キャッシュ保存・Artifact 保存の結果には影響させない。
+      - name: Publish scan status
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          SRC="${GITHUB_WORKSPACE}/scan_status.json"
+          if [ ! -f "${SRC}" ]; then
+            echo "scan_status.json が無いため公開を中止します"
+            exit 1
+          fi
+          PUB_DIR="$(mktemp -d)"
+          cd "${PUB_DIR}"
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # ブランチの有無と、通信・権限エラーを区別する。
+          # git ls-remote --exit-code の終了コード: 0=存在する / 2=存在しない / それ以外=エラー
+          BRANCH_EXISTS=0
+          if git ls-remote --exit-code origin refs/heads/scan-status > /dev/null 2>&1; then
+            BRANCH_EXISTS=1
+          else
+            LS_CODE=$?
+            if [ "${LS_CODE}" -ne 2 ]; then
+              echo "scan-status ブランチの確認に失敗しました（通信・権限エラーの可能性、コード: ${LS_CODE}）。公開を中止します"
+              exit 1
+            fi
+          fi
+          if [ "${BRANCH_EXISTS}" -eq 1 ]; then
+            git fetch -q --depth 1 origin scan-status
+            git checkout -q -b scan-status FETCH_HEAD
+          else
+            git checkout -q --orphan scan-status
+          fi
+          # 公開モードの判定。公開中の latest.json の日時が欠落・不正・読み取り不能な
+          # 場合は、例外によりこのステップ自体を中止する（安全側に倒し、履歴の
+          # 再構築も通常の公開も行わない）。新しい記録の日時が不正な場合も同様。
+          # 四半期の比較は、日時を Asia/Tokyo に変換してから行う。タイムゾーン
+          # 情報のない日時は不正として中止する。
+          MODE=$(python3 - "${BRANCH_EXISTS}" status/latest.json "${SRC}" << 'PYEOF'
+          import json, sys
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          TOKYO = ZoneInfo("Asia/Tokyo")
+          branch_exists, prev_path, src_path = sys.argv[1], sys.argv[2], sys.argv[3]
+          def load_generated_jst(path):
+              with open(path, encoding="utf-8") as f:
+                  data = json.load(f)
+              value = data.get("generated_at_jst")
+              if not isinstance(value, str) or not value:
+                  raise ValueError("generated_at_jst missing")
+              dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+              if dt.tzinfo is None:
+                  raise ValueError("generated_at_jst has no timezone")
+              return dt.astimezone(TOKYO)
+          def quarter_of(dt):
+              return (dt.year, (dt.month - 1) // 3)
+          current = load_generated_jst(src_path)
+          if branch_exists == "1":
+              previous = load_generated_jst(prev_path)
+              print("rebuild" if quarter_of(previous) != quarter_of(current) else "normal")
+          else:
+              print("first")
+          PYEOF
+          )
+          echo "publish mode: ${MODE}"
+          mkdir -p status
+          cp "${SRC}" status/latest.json
+          python3 - "${SRC}" status/history.jsonl << 'PYEOF'
+          import json, sys
+          src, hist = sys.argv[1], sys.argv[2]
+          record = json.load(open(src, encoding="utf-8"))
+          new_line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+          run_id = (record.get("run") or {}).get("run_id")
+          kept = []
+          try:
+              old_lines = open(hist, encoding="utf-8").read().splitlines()
+          except FileNotFoundError:
+              old_lines = []
+          for line in old_lines:
+              if not line.strip():
+                  continue
+              if run_id is not None:
+                  try:
+                      old = json.loads(line)
+                  except Exception:
+                      kept.append(line)
+                      continue
+                  if (old.get("run") or {}).get("run_id") == run_id:
+                      continue
+              kept.append(line)
+          kept.append(new_line)
+          MAX_LINES = 1000
+          if len(kept) > MAX_LINES:
+              kept = kept[-MAX_LINES:]
+          open(hist, "w", encoding="utf-8").write("\n".join(kept) + "\n")
+          PYEOF
+          git add status/latest.json status/history.jsonl
+          if [ "${MODE}" = "rebuild" ]; then
+            # 四半期が変わった回だけ、同じ内容のまま履歴を1コミットに再構築する。
+            # force push の宛先は refs/heads/scan-status のみ。
+            git checkout -q --orphan scan-status-rebuilt
+            git commit -q -m "scan status run ${GITHUB_RUN_NUMBER} (history rebuilt)"
+            git push -q --force origin HEAD:refs/heads/scan-status
+          else
+            git commit -q -m "scan status run ${GITHUB_RUN_NUMBER}"
+            git push origin HEAD:refs/heads/scan-status
+          fi
