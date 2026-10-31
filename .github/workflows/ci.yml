@@ -33,3 +33,25 @@ jobs:
 
       - name: Smoke tests (no network)
         run: python -m pytest tests/ -q
+  apptest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-scanner.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-scanner.txt
+          pip install streamlit==1.66.1 plotly==7.1.0 pytest==8.3.4
+
+      - name: App smoke tests (no network)
+        run: python -m pytest tests/test_app_smoke.py -q
