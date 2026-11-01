@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "generated_at_jst": "2026-11-01T06:32:08.017218+09:00",
-  "started_at": "2026-11-01T06:31:59.450149+09:00",
-  "finished_at": "2026-11-01T06:32:08.017218+09:00",
+  "generated_at_jst": "2026-11-01T14:59:26.553592+09:00",
+  "started_at": "2026-11-01T14:59:17.516603+09:00",
+  "finished_at": "2026-11-01T14:59:26.553592+09:00",
   "run": {
-    "run_id": "41243994157",
-    "run_number": 98,
+    "run_id": "41278960998",
+    "run_number": 99,
     "commit_sha": "ccaff10584c7dd810f65719172135dcfba0bc415"
   },
   "pairs": [
@@ -28,7 +28,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 1532.0,
+      "data_age_minutes": 2039.3,
       "data_quality_status": "pass",
       "news_status": "recent_articles_with_risk_keywords"
     },
@@ -51,7 +51,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 1472.0,
+      "data_age_minutes": 1979.3,
       "data_quality_status": "pass",
       "news_status": "no_recent_articles"
     },
@@ -74,7 +74,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 1472.1,
+      "data_age_minutes": 1979.4,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     },
@@ -97,7 +97,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 1472.1,
+      "data_age_minutes": 1979.4,
       "data_quality_status": "pass",
       "news_status": "recent_articles_with_risk_keywords"
     },
@@ -120,7 +120,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 1472.1,
+      "data_age_minutes": 1979.4,
       "data_quality_status": "pass",
       "news_status": "no_recent_articles"
     }
