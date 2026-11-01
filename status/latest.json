@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "generated_at_jst": "2026-11-01T22:18:39.862099+09:00",
-  "started_at": "2026-11-01T22:18:30.213273+09:00",
-  "finished_at": "2026-11-01T22:18:39.862099+09:00",
+  "generated_at_jst": "2026-11-02T07:00:06.389901+09:00",
+  "started_at": "2026-11-02T06:59:56.757752+09:00",
+  "finished_at": "2026-11-02T07:00:06.389901+09:00",
   "run": {
-    "run_id": "41310589551",
-    "run_number": 100,
+    "run_id": "41354789577",
+    "run_number": 101,
     "commit_sha": "ccaff10584c7dd810f65719172135dcfba0bc415"
   },
   "pairs": [
@@ -28,7 +28,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 2478.5,
+      "data_age_minutes": 3000.0,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     },
@@ -51,7 +51,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 2418.6,
+      "data_age_minutes": 2940.0,
       "data_quality_status": "pass",
       "news_status": "no_recent_articles"
     },
@@ -74,7 +74,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 2418.6,
+      "data_age_minutes": 2940.0,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     },
@@ -97,7 +97,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 2418.6,
+      "data_age_minutes": 2940.1,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     },
@@ -120,9 +120,9 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 2418.7,
+      "data_age_minutes": 2940.1,
       "data_quality_status": "pass",
-      "news_status": "no_recent_articles"
+      "news_status": "recent_articles_no_risk_keywords"
     }
   ],
   "forward": {
@@ -183,11 +183,11 @@
     "data_quality_fail_pairs": 0,
     "validation_pass_pairs": 0,
     "validation_skipped_or_not_passed_pairs": 5,
-    "news_unavailable_pairs": 2,
+    "news_unavailable_pairs": 1,
     "news_retrieval_error_pairs": 0,
     "news_empty_result_pairs": 0,
-    "news_no_recent_article_pairs": 2,
-    "news_recent_articles_checked_pairs": 3,
+    "news_no_recent_article_pairs": 1,
+    "news_recent_articles_checked_pairs": 4,
     "candidate_pairs": 0,
     "execution_note": "スキャン完了は売買検証成功を意味しません。候補数が0でも安全ゲートによる正常な保留の場合があります。"
   }
