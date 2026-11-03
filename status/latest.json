@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "generated_at_jst": "2026-11-03T09:57:10.993512+09:00",
-  "started_at": "2026-11-03T09:56:51.450758+09:00",
-  "finished_at": "2026-11-03T09:57:10.993512+09:00",
+  "generated_at_jst": "2026-11-03T23:10:02.996627+09:00",
+  "started_at": "2026-11-03T23:09:42.842367+09:00",
+  "finished_at": "2026-11-03T23:10:02.996627+09:00",
   "run": {
-    "run_id": "41556342003",
-    "run_number": 104,
+    "run_id": "41650878150",
+    "run_number": 105,
     "commit_sha": "ccaff10584c7dd810f65719172135dcfba0bc415"
   },
   "pairs": [
@@ -19,22 +19,22 @@
         "reason": "モデル検証条件を満たさない",
         "model_validation_ok": false,
         "model_gate_reasons": [
-          "balanced_accuracy不足(0.351<0.400)"
+          "balanced_accuracy不足(0.360<0.400)"
         ],
         "pnl_stability_ok": true,
         "pnl_gate_reasons": [],
-        "positive_pnl_folds": 3,
-        "total_pnl_trades": 371,
-        "balanced_accuracy": 0.3514,
+        "positive_pnl_folds": 2,
+        "total_pnl_trades": 372,
+        "balanced_accuracy": 0.3598,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 37.2,
-          "neutral": 16.8,
-          "buy": 51.4
+          "sell": 37.4,
+          "neutral": 18.6,
+          "buy": 52.0
         }
       },
       "data_freshness_status": "fresh",
-      "data_age_minutes": 176.9,
+      "data_age_minutes": 9.8,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     },
@@ -48,25 +48,25 @@
         "reason": "モデル検証と仮想損益の安定性条件を満たさない",
         "model_validation_ok": false,
         "model_gate_reasons": [
-          "balanced_accuracy不足(0.342<0.400)"
+          "balanced_accuracy不足(0.340<0.400)"
         ],
         "pnl_stability_ok": false,
         "pnl_gate_reasons": [
           "プラス期間不足(1/2)",
-          "仮想損益がプラスでない(-253.66 pips)"
+          "仮想損益がプラスでない(-212.88 pips)"
         ],
         "positive_pnl_folds": 1,
-        "total_pnl_trades": 376,
-        "balanced_accuracy": 0.342,
+        "total_pnl_trades": 377,
+        "balanced_accuracy": 0.3397,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 38.1,
-          "neutral": 13.2,
-          "buy": 51.3
+          "sell": 37.7,
+          "neutral": 12.7,
+          "buy": 51.5
         }
       },
       "data_freshness_status": "fresh",
-      "data_age_minutes": 177.0,
+      "data_age_minutes": 9.8,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     },
@@ -80,22 +80,22 @@
         "reason": "モデル検証条件を満たさない",
         "model_validation_ok": false,
         "model_gate_reasons": [
-          "balanced_accuracy不足(0.359<0.400)"
+          "balanced_accuracy不足(0.363<0.400)"
         ],
         "pnl_stability_ok": true,
         "pnl_gate_reasons": [],
         "positive_pnl_folds": 3,
         "total_pnl_trades": 373,
-        "balanced_accuracy": 0.3588,
+        "balanced_accuracy": 0.3628,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 38.9,
-          "neutral": 16.7,
+          "sell": 37.8,
+          "neutral": 19.1,
           "buy": 52.0
         }
       },
       "data_freshness_status": "fresh",
-      "data_age_minutes": 177.0,
+      "data_age_minutes": 9.9,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     },
@@ -109,26 +109,26 @@
         "reason": "モデル検証と仮想損益の安定性条件を満たさない",
         "model_validation_ok": false,
         "model_gate_reasons": [
-          "balanced_accuracy不足(0.331<0.400)",
-          "基準モデル未満(0.331<0.333)"
+          "balanced_accuracy不足(0.330<0.400)",
+          "基準モデル未満(0.330<0.331)"
         ],
         "pnl_stability_ok": false,
         "pnl_gate_reasons": [
-          "プラス期間不足(1/2)",
-          "仮想損益がプラスでない(-485.18 pips)"
+          "プラス期間不足(0/2)",
+          "仮想損益がプラスでない(-735.27 pips)"
         ],
-        "positive_pnl_folds": 1,
+        "positive_pnl_folds": 0,
         "total_pnl_trades": 367,
-        "balanced_accuracy": 0.3313,
-        "baseline_balanced_accuracy": 0.3331,
+        "balanced_accuracy": 0.3303,
+        "baseline_balanced_accuracy": 0.3312,
         "class_recall_pct": {
-          "sell": 35.6,
-          "neutral": 14.7,
-          "buy": 49.1
+          "sell": 34.4,
+          "neutral": 15.5,
+          "buy": 49.2
         }
       },
       "data_freshness_status": "fresh",
-      "data_age_minutes": 177.1,
+      "data_age_minutes": 10.0,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     },
@@ -147,22 +147,22 @@
         "pnl_stability_ok": false,
         "pnl_gate_reasons": [
           "プラス期間不足(0/2)",
-          "仮想損益がプラスでない(-638.53 pips)"
+          "仮想損益がプラスでない(-770.34 pips)"
         ],
         "positive_pnl_folds": 0,
-        "total_pnl_trades": 381,
-        "balanced_accuracy": 0.3363,
+        "total_pnl_trades": 380,
+        "balanced_accuracy": 0.3365,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 46.4,
+          "sell": 47.4,
           "neutral": 11.1,
-          "buy": 43.4
+          "buy": 42.4
         }
       },
       "data_freshness_status": "fresh",
-      "data_age_minutes": 177.1,
+      "data_age_minutes": 10.0,
       "data_quality_status": "pass",
-      "news_status": "recent_articles_no_risk_keywords"
+      "news_status": "recent_articles_with_risk_keywords"
     }
   ],
   "forward": {
