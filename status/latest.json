@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "generated_at_jst": "2026-11-03T00:47:26.566383+09:00",
-  "started_at": "2026-11-03T00:47:05.885223+09:00",
-  "finished_at": "2026-11-03T00:47:26.566383+09:00",
+  "generated_at_jst": "2026-11-03T09:57:10.993512+09:00",
+  "started_at": "2026-11-03T09:56:51.450758+09:00",
+  "finished_at": "2026-11-03T09:57:10.993512+09:00",
   "run": {
-    "run_id": "41474882947",
-    "run_number": 103,
+    "run_id": "41556342003",
+    "run_number": 104,
     "commit_sha": "ccaff10584c7dd810f65719172135dcfba0bc415"
   },
   "pairs": [
@@ -19,24 +19,24 @@
         "reason": "モデル検証条件を満たさない",
         "model_validation_ok": false,
         "model_gate_reasons": [
-          "balanced_accuracy不足(0.367<0.400)"
+          "balanced_accuracy不足(0.351<0.400)"
         ],
         "pnl_stability_ok": true,
         "pnl_gate_reasons": [],
         "positive_pnl_folds": 3,
-        "total_pnl_trades": 374,
-        "balanced_accuracy": 0.3671,
-        "baseline_balanced_accuracy": 0.3122,
+        "total_pnl_trades": 371,
+        "balanced_accuracy": 0.3514,
+        "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 35.7,
-          "neutral": 19.8,
-          "buy": 54.6
+          "sell": 37.2,
+          "neutral": 16.8,
+          "buy": 51.4
         }
       },
       "data_freshness_status": "fresh",
-      "data_age_minutes": 47.2,
+      "data_age_minutes": 176.9,
       "data_quality_status": "pass",
-      "news_status": "recent_articles_with_risk_keywords"
+      "news_status": "recent_articles_no_risk_keywords"
     },
     {
       "name": "英ポンド/円 (GBP/JPY)",
@@ -48,27 +48,27 @@
         "reason": "モデル検証と仮想損益の安定性条件を満たさない",
         "model_validation_ok": false,
         "model_gate_reasons": [
-          "balanced_accuracy不足(0.336<0.400)"
+          "balanced_accuracy不足(0.342<0.400)"
         ],
         "pnl_stability_ok": false,
         "pnl_gate_reasons": [
           "プラス期間不足(1/2)",
-          "仮想損益がプラスでない(-187.41 pips)"
+          "仮想損益がプラスでない(-253.66 pips)"
         ],
         "positive_pnl_folds": 1,
         "total_pnl_trades": 376,
-        "balanced_accuracy": 0.3364,
+        "balanced_accuracy": 0.342,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 37.7,
-          "neutral": 10.7,
-          "buy": 52.5
+          "sell": 38.1,
+          "neutral": 13.2,
+          "buy": 51.3
         }
       },
       "data_freshness_status": "fresh",
-      "data_age_minutes": 47.2,
+      "data_age_minutes": 177.0,
       "data_quality_status": "pass",
-      "news_status": "recent_articles_with_risk_keywords"
+      "news_status": "recent_articles_no_risk_keywords"
     },
     {
       "name": "ユーロ/円 (EUR/JPY)",
@@ -80,28 +80,61 @@
         "reason": "モデル検証条件を満たさない",
         "model_validation_ok": false,
         "model_gate_reasons": [
-          "balanced_accuracy不足(0.367<0.400)"
+          "balanced_accuracy不足(0.359<0.400)"
         ],
         "pnl_stability_ok": true,
         "pnl_gate_reasons": [],
-        "positive_pnl_folds": 2,
-        "total_pnl_trades": 372,
-        "balanced_accuracy": 0.3673,
+        "positive_pnl_folds": 3,
+        "total_pnl_trades": 373,
+        "balanced_accuracy": 0.3588,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 40.3,
-          "neutral": 19.3,
-          "buy": 50.6
+          "sell": 38.9,
+          "neutral": 16.7,
+          "buy": 52.0
         }
       },
       "data_freshness_status": "fresh",
-      "data_age_minutes": 47.3,
+      "data_age_minutes": 177.0,
       "data_quality_status": "pass",
-      "news_status": "recent_articles_with_risk_keywords"
+      "news_status": "recent_articles_no_risk_keywords"
     },
     {
       "name": "豪ドル/円 (AUD/JPY)",
       "ticker": "AUDJPY=X",
+      "decision": "検証条件未達・保留",
+      "direction": "様子見",
+      "validation": {
+        "passed": false,
+        "reason": "モデル検証と仮想損益の安定性条件を満たさない",
+        "model_validation_ok": false,
+        "model_gate_reasons": [
+          "balanced_accuracy不足(0.331<0.400)",
+          "基準モデル未満(0.331<0.333)"
+        ],
+        "pnl_stability_ok": false,
+        "pnl_gate_reasons": [
+          "プラス期間不足(1/2)",
+          "仮想損益がプラスでない(-485.18 pips)"
+        ],
+        "positive_pnl_folds": 1,
+        "total_pnl_trades": 367,
+        "balanced_accuracy": 0.3313,
+        "baseline_balanced_accuracy": 0.3331,
+        "class_recall_pct": {
+          "sell": 35.6,
+          "neutral": 14.7,
+          "buy": 49.1
+        }
+      },
+      "data_freshness_status": "fresh",
+      "data_age_minutes": 177.1,
+      "data_quality_status": "pass",
+      "news_status": "recent_articles_no_risk_keywords"
+    },
+    {
+      "name": "ユーロ/米ドル (EUR/USD)",
+      "ticker": "EURUSD=X",
       "decision": "検証条件未達・保留",
       "direction": "様子見",
       "validation": {
@@ -114,52 +147,20 @@
         "pnl_stability_ok": false,
         "pnl_gate_reasons": [
           "プラス期間不足(0/2)",
-          "仮想損益がプラスでない(-1173.91 pips)"
+          "仮想損益がプラスでない(-638.53 pips)"
         ],
         "positive_pnl_folds": 0,
-        "total_pnl_trades": 370,
-        "balanced_accuracy": 0.3361,
-        "baseline_balanced_accuracy": 0.3314,
-        "class_recall_pct": {
-          "sell": 36.6,
-          "neutral": 17.6,
-          "buy": 46.7
-        }
-      },
-      "data_freshness_status": "fresh",
-      "data_age_minutes": 47.4,
-      "data_quality_status": "pass",
-      "news_status": "recent_articles_with_risk_keywords"
-    },
-    {
-      "name": "ユーロ/米ドル (EUR/USD)",
-      "ticker": "EURUSD=X",
-      "decision": "検証条件未達・保留",
-      "direction": "様子見",
-      "validation": {
-        "passed": false,
-        "reason": "モデル検証と仮想損益の安定性条件を満たさない",
-        "model_validation_ok": false,
-        "model_gate_reasons": [
-          "balanced_accuracy不足(0.337<0.400)"
-        ],
-        "pnl_stability_ok": false,
-        "pnl_gate_reasons": [
-          "プラス期間不足(0/2)",
-          "仮想損益がプラスでない(-447.19 pips)"
-        ],
-        "positive_pnl_folds": 0,
-        "total_pnl_trades": 382,
-        "balanced_accuracy": 0.3367,
+        "total_pnl_trades": 381,
+        "balanced_accuracy": 0.3363,
         "baseline_balanced_accuracy": 0.3333,
         "class_recall_pct": {
-          "sell": 43.2,
-          "neutral": 12.8,
-          "buy": 45.0
+          "sell": 46.4,
+          "neutral": 11.1,
+          "buy": 43.4
         }
       },
       "data_freshness_status": "fresh",
-      "data_age_minutes": 47.4,
+      "data_age_minutes": 177.1,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     }
