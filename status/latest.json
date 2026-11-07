@@ -1,172 +1,126 @@
 {
   "schema_version": 1,
-  "generated_at_jst": "2026-11-07T04:23:32.034250+09:00",
-  "started_at": "2026-11-07T04:23:06.966110+09:00",
-  "finished_at": "2026-11-07T04:23:32.034250+09:00",
+  "generated_at_jst": "2026-11-07T14:55:59.325092+09:00",
+  "started_at": "2026-11-07T14:55:46.404789+09:00",
+  "finished_at": "2026-11-07T14:55:59.325092+09:00",
   "run": {
-    "run_id": "42279086255",
-    "run_number": 113,
+    "run_id": "42344747064",
+    "run_number": 114,
     "commit_sha": "ccaff10584c7dd810f65719172135dcfba0bc415"
   },
   "pairs": [
     {
       "name": "米ドル/円 (USD/JPY)",
       "ticker": "USDJPY=X",
-      "decision": "検証条件未達・保留",
+      "decision": "データ古い・保留",
       "direction": "様子見",
       "validation": {
-        "passed": false,
-        "reason": "モデル検証と仮想損益の安定性条件を満たさない",
-        "model_validation_ok": false,
-        "model_gate_reasons": [
-          "balanced_accuracy不足(0.367<0.400)"
-        ],
-        "pnl_stability_ok": false,
-        "pnl_gate_reasons": [
-          "プラス期間不足(1/2)",
-          "仮想損益がプラスでない(-595.40 pips)"
-        ],
-        "positive_pnl_folds": 1,
-        "total_pnl_trades": 371,
-        "balanced_accuracy": 0.3671,
-        "baseline_balanced_accuracy": 0.3333,
-        "class_recall_pct": {
-          "sell": 39.2,
-          "neutral": 19.9,
-          "buy": 51.1
-        }
+        "passed": null,
+        "reason": null,
+        "model_validation_ok": null,
+        "model_gate_reasons": null,
+        "pnl_stability_ok": null,
+        "pnl_gate_reasons": null,
+        "positive_pnl_folds": null,
+        "total_pnl_trades": null,
+        "balanced_accuracy": null,
+        "baseline_balanced_accuracy": null,
+        "class_recall_pct": null
       },
-      "data_freshness_status": "fresh",
-      "data_age_minutes": 23.2,
+      "data_freshness_status": "possible_market_closure",
+      "data_age_minutes": 475.8,
       "data_quality_status": "pass",
       "news_status": "recent_articles_with_risk_keywords"
     },
     {
       "name": "英ポンド/円 (GBP/JPY)",
       "ticker": "GBPJPY=X",
-      "decision": "検証条件未達・保留",
+      "decision": "データ古い・保留",
       "direction": "様子見",
       "validation": {
-        "passed": false,
-        "reason": "モデル検証と仮想損益の安定性条件を満たさない",
-        "model_validation_ok": false,
-        "model_gate_reasons": [
-          "balanced_accuracy不足(0.334<0.400)"
-        ],
-        "pnl_stability_ok": false,
-        "pnl_gate_reasons": [
-          "プラス期間不足(1/2)",
-          "仮想損益がプラスでない(-250.74 pips)"
-        ],
-        "positive_pnl_folds": 1,
-        "total_pnl_trades": 377,
-        "balanced_accuracy": 0.3336,
-        "baseline_balanced_accuracy": 0.3333,
-        "class_recall_pct": {
-          "sell": 34.9,
-          "neutral": 11.5,
-          "buy": 53.7
-        }
+        "passed": null,
+        "reason": null,
+        "model_validation_ok": null,
+        "model_gate_reasons": null,
+        "pnl_stability_ok": null,
+        "pnl_gate_reasons": null,
+        "positive_pnl_folds": null,
+        "total_pnl_trades": null,
+        "balanced_accuracy": null,
+        "baseline_balanced_accuracy": null,
+        "class_recall_pct": null
       },
-      "data_freshness_status": "fresh",
-      "data_age_minutes": 23.3,
+      "data_freshness_status": "possible_market_closure",
+      "data_age_minutes": 475.9,
       "data_quality_status": "pass",
-      "news_status": "recent_articles_with_risk_keywords"
+      "news_status": "recent_articles_no_risk_keywords"
     },
     {
       "name": "ユーロ/円 (EUR/JPY)",
       "ticker": "EURJPY=X",
-      "decision": "検証条件未達・保留",
+      "decision": "データ古い・保留",
       "direction": "様子見",
       "validation": {
-        "passed": false,
-        "reason": "モデル検証と仮想損益の安定性条件を満たさない",
-        "model_validation_ok": false,
-        "model_gate_reasons": [
-          "balanced_accuracy不足(0.354<0.400)"
-        ],
-        "pnl_stability_ok": false,
-        "pnl_gate_reasons": [
-          "プラス期間不足(1/2)",
-          "仮想損益がプラスでない(-71.83 pips)"
-        ],
-        "positive_pnl_folds": 1,
-        "total_pnl_trades": 377,
-        "balanced_accuracy": 0.3543,
-        "baseline_balanced_accuracy": 0.3333,
-        "class_recall_pct": {
-          "sell": 41.2,
-          "neutral": 17.6,
-          "buy": 47.5
-        }
+        "passed": null,
+        "reason": null,
+        "model_validation_ok": null,
+        "model_gate_reasons": null,
+        "pnl_stability_ok": null,
+        "pnl_gate_reasons": null,
+        "positive_pnl_folds": null,
+        "total_pnl_trades": null,
+        "balanced_accuracy": null,
+        "baseline_balanced_accuracy": null,
+        "class_recall_pct": null
       },
-      "data_freshness_status": "fresh",
-      "data_age_minutes": 23.3,
+      "data_freshness_status": "possible_market_closure",
+      "data_age_minutes": 475.9,
       "data_quality_status": "pass",
-      "news_status": "recent_articles_with_risk_keywords"
+      "news_status": "recent_articles_no_risk_keywords"
     },
     {
       "name": "豪ドル/円 (AUD/JPY)",
       "ticker": "AUDJPY=X",
-      "decision": "検証条件未達・保留",
+      "decision": "データ古い・保留",
       "direction": "様子見",
       "validation": {
-        "passed": false,
-        "reason": "モデル検証と仮想損益の安定性条件を満たさない",
-        "model_validation_ok": false,
-        "model_gate_reasons": [
-          "balanced_accuracy不足(0.334<0.400)",
-          "基準モデル未満(0.334<0.337)"
-        ],
-        "pnl_stability_ok": false,
-        "pnl_gate_reasons": [
-          "プラス期間不足(0/2)",
-          "仮想損益がプラスでない(-605.29 pips)"
-        ],
-        "positive_pnl_folds": 0,
-        "total_pnl_trades": 371,
-        "balanced_accuracy": 0.3335,
-        "baseline_balanced_accuracy": 0.3368,
-        "class_recall_pct": {
-          "sell": 36.6,
-          "neutral": 15.5,
-          "buy": 47.9
-        }
+        "passed": null,
+        "reason": null,
+        "model_validation_ok": null,
+        "model_gate_reasons": null,
+        "pnl_stability_ok": null,
+        "pnl_gate_reasons": null,
+        "positive_pnl_folds": null,
+        "total_pnl_trades": null,
+        "balanced_accuracy": null,
+        "baseline_balanced_accuracy": null,
+        "class_recall_pct": null
       },
-      "data_freshness_status": "fresh",
-      "data_age_minutes": 23.4,
+      "data_freshness_status": "possible_market_closure",
+      "data_age_minutes": 476.0,
       "data_quality_status": "pass",
       "news_status": "recent_articles_with_risk_keywords"
     },
     {
       "name": "ユーロ/米ドル (EUR/USD)",
       "ticker": "EURUSD=X",
-      "decision": "検証条件未達・保留",
+      "decision": "データ古い・保留",
       "direction": "様子見",
       "validation": {
-        "passed": false,
-        "reason": "モデル検証と仮想損益の安定性条件を満たさない",
-        "model_validation_ok": false,
-        "model_gate_reasons": [
-          "balanced_accuracy不足(0.341<0.400)"
-        ],
-        "pnl_stability_ok": false,
-        "pnl_gate_reasons": [
-          "プラス期間不足(0/2)",
-          "仮想損益がプラスでない(-577.71 pips)"
-        ],
-        "positive_pnl_folds": 0,
-        "total_pnl_trades": 384,
-        "balanced_accuracy": 0.3408,
-        "baseline_balanced_accuracy": 0.3333,
-        "class_recall_pct": {
-          "sell": 50.2,
-          "neutral": 12.1,
-          "buy": 39.9
-        }
+        "passed": null,
+        "reason": null,
+        "model_validation_ok": null,
+        "model_gate_reasons": null,
+        "pnl_stability_ok": null,
+        "pnl_gate_reasons": null,
+        "positive_pnl_folds": null,
+        "total_pnl_trades": null,
+        "balanced_accuracy": null,
+        "baseline_balanced_accuracy": null,
+        "class_recall_pct": null
       },
-      "data_freshness_status": "fresh",
-      "data_age_minutes": 23.5,
+      "data_freshness_status": "possible_market_closure",
+      "data_age_minutes": 476.0,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     }
@@ -224,8 +178,8 @@
   },
   "run_health": {
     "pairs_total": 5,
-    "fresh_data_pairs": 5,
-    "stale_or_unknown_pairs": 0,
+    "fresh_data_pairs": 0,
+    "stale_or_unknown_pairs": 5,
     "data_quality_fail_pairs": 0,
     "validation_pass_pairs": 0,
     "validation_skipped_or_not_passed_pairs": 5,
