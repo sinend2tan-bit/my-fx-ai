@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "generated_at_jst": "2026-11-07T14:55:59.325092+09:00",
-  "started_at": "2026-11-07T14:55:46.404789+09:00",
-  "finished_at": "2026-11-07T14:55:59.325092+09:00",
+  "generated_at_jst": "2026-11-07T21:57:32.648964+09:00",
+  "started_at": "2026-11-07T21:57:23.082733+09:00",
+  "finished_at": "2026-11-07T21:57:32.648964+09:00",
   "run": {
-    "run_id": "42344747064",
-    "run_number": 114,
+    "run_id": "42374708442",
+    "run_number": 115,
     "commit_sha": "ccaff10584c7dd810f65719172135dcfba0bc415"
   },
   "pairs": [
@@ -28,9 +28,9 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 475.8,
+      "data_age_minutes": 897.4,
       "data_quality_status": "pass",
-      "news_status": "recent_articles_with_risk_keywords"
+      "news_status": "recent_articles_no_risk_keywords"
     },
     {
       "name": "英ポンド/円 (GBP/JPY)",
@@ -51,7 +51,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 475.9,
+      "data_age_minutes": 897.4,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     },
@@ -74,7 +74,7 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 475.9,
+      "data_age_minutes": 897.5,
       "data_quality_status": "pass",
       "news_status": "recent_articles_no_risk_keywords"
     },
@@ -97,9 +97,9 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 476.0,
+      "data_age_minutes": 897.5,
       "data_quality_status": "pass",
-      "news_status": "recent_articles_with_risk_keywords"
+      "news_status": "recent_articles_no_risk_keywords"
     },
     {
       "name": "ユーロ/米ドル (EUR/USD)",
@@ -120,9 +120,9 @@
         "class_recall_pct": null
       },
       "data_freshness_status": "possible_market_closure",
-      "data_age_minutes": 476.0,
+      "data_age_minutes": 897.5,
       "data_quality_status": "pass",
-      "news_status": "recent_articles_no_risk_keywords"
+      "news_status": "no_recent_articles"
     }
   ],
   "forward": {
@@ -183,11 +183,11 @@
     "data_quality_fail_pairs": 0,
     "validation_pass_pairs": 0,
     "validation_skipped_or_not_passed_pairs": 5,
-    "news_unavailable_pairs": 0,
+    "news_unavailable_pairs": 1,
     "news_retrieval_error_pairs": 0,
     "news_empty_result_pairs": 0,
-    "news_no_recent_article_pairs": 0,
-    "news_recent_articles_checked_pairs": 5,
+    "news_no_recent_article_pairs": 1,
+    "news_recent_articles_checked_pairs": 4,
     "candidate_pairs": 0,
     "execution_note": "スキャン完了は売買検証成功を意味しません。候補数が0でも安全ゲートによる正常な保留の場合があります。"
   }
