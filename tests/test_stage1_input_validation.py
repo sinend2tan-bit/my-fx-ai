@@ -23,12 +23,15 @@
 - タイムゾーン: 1h の tz-aware index は UTC へ正規化される。tz-naive は
   UTC と推定せず処理を停止する（Scanner 1h/1d、App 1h/1d）。日足は
   段階0で全ペア tz-naive と確認されたため停止対象。
-- 対象外の時間足は変更しない: Scanner 4h / App 4h は従来どおり動作し、
-  data_quality は付かない。
-- モデル版管理: App MODEL_VERSION 7 / Scanner MODEL_VERSION 20。
-  旧版（App version 6）の保存済みモデルは再利用されない。品質ゲートを
+- 対象外の時間足は変更しない: Scanner 4h は従来どおり動作する。
+  App 4h は段階1では従来どおりだったが、段階2（SYN-FX-017）で UTC
+  統一・完全性判定に変更された（tests/test_stage2_4h_aggregation.py）。
+  どちらの段階でも 4h に data_quality は付かない。
+- モデル版管理: App MODEL_VERSION 8（段階1で 6→7、段階2で 7→8）/
+  Scanner MODEL_VERSION 20。
+  旧版（App version 7）の保存済みモデルは再利用されない。品質ゲートを
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
-  評価モデルが使われ、旧ファイルは上書きされない。新版（7）の保存済み
+  評価モデルが使われ、旧ファイルは上書きされない。新版（8）の保存済み
   モデルは従来どおり再利用される。
 - C-1 修正（案A、ChatGPT 決定）: 鮮度除外を品質検証の前に置く。
   DatetimeIndex 確認 → タイムゾーン確認（tz-aware は UTC 正規化、
@@ -487,16 +490,21 @@ def test_app_tz_naive_daily_stops_with_message():
     assert any("タイムゾーン" in w and "停止" in w for w in st.warnings)
 
 
-def test_app_4h_legacy_path_unchanged():
-    # 4時間足は段階1の対象外: tz-naive な1h入力でも段階1のゲートでは
-    # 停止せず、従来のリサンプル処理が維持され、カウンタは付かない。
+def test_app_4h_tz_naive_stops_after_stage2():
+    # 段階1では4時間足は対象外で、tz-naive な1h入力でも停止せず従来の
+    # リサンプル処理が維持されていた。段階2（SYN-FX-017）で4時間足にも
+    # 実行時タイムゾーン検査が適用され、tz-naive は UTC と推定せず
+    # 停止するようになった（新しい期待値は段階2の実装 PR で更新。
+    # 4h の集約そのものの検証は tests/test_stage2_4h_aggregation.py）。
     frame = make_frame(n=2000, seed=11)
     frame.index = frame.index.tz_localize(None)
     ns, st = _app_namespace(lambda: frame.copy())
     out = ns["load_and_process_data"]("USDJPY=X", "90d", "4h")
-    assert out is not None
-    assert "data_quality" not in out.attrs
-    assert st.warnings == []
+    assert out is None
+    assert any("タイムゾーン" in w and "停止" in w for w in st.warnings)
+    reason = ns["get_load_stop_reason"]("USDJPY=X", "4h")
+    assert reason is not None
+    assert reason["code"] == "tz_unavailable"
 
 
 def test_app_daily_legacy_path_keeps_dirty_rows():
@@ -653,22 +661,23 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
     return tmp_path / filename
 
 
-def test_app_model_version_is_7():
-    assert _app_literal("MODEL_VERSION") == 7
+def test_app_model_version_is_8():
+    # 段階1で 6→7、段階2（SYN-FX-017）で 7→8。
+    assert _app_literal("MODEL_VERSION") == 8
 
 
 def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 6, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 7, _tiny_model())
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
     assert result is not None
-    # 学習可能なデータでは品質ゲートを通過し、新版（7）で保存し直される。
+    # 学習可能なデータでは品質ゲートを通過し、新版（8）で保存し直される。
     # 旧版ファイルが再利用されていれば、この保存は起きない。
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 7
+    assert saved["version"] == 8
     assert saved["model"].n_estimators == 260  # 新規学習した候補モデル
 
 
@@ -677,7 +686,7 @@ def test_app_gate_failure_no_fallback_to_old_model(tmp_path, monkeypatch):
     # 旧版モデルは単一クラスだけを返す物にする。再利用（フォールバック）
     # されれば特徴量重要度が全て 0 になるため、混入を検出できる。
     path = _save_model_file(
-        ns, tmp_path, monkeypatch, 6, _tiny_model(single_class=True)
+        ns, tmp_path, monkeypatch, 7, _tiny_model(single_class=True)
     )
     before = path.read_bytes()
     result = ns["analyze_signal_with_backtest"](
@@ -694,13 +703,13 @@ def test_app_gate_failure_no_fallback_to_old_model(tmp_path, monkeypatch):
 
 def test_app_current_version_model_reused(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 7, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
     before = path.read_bytes()
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
     assert result is not None
-    # 新版（7）で鮮度内の保存済みモデルは従来どおり再利用され、
+    # 新版（8）で鮮度内の保存済みモデルは従来どおり再利用され、
     # ファイルは書き換わらない（再利用の仕組み自体は壊していない）。
     assert path.read_bytes() == before
 
