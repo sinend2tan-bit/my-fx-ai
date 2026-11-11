@@ -21,14 +21,21 @@
   - 抽出した各関数のソース断片 SHA-256 と AST dump の SHA-256 は
     EXTRACTION_INFO に記録し、レポートへ残す。
 - ネットワークは fail-closed: autouse fixture が socket / DNS / urllib の
-  入口を遮断し、接続試行を記録する。ガード自体の動作確認テスト
-  （test_network_guard_blocks_and_records）と、suite 終了時に試行 0 件を
-  確認するテスト（test_network_no_attempts_during_suite）を置く。
+  入口を遮断し、接続試行を記録する。遮断対象は接続系（connect /
+  connect_ex / create_connection）、送信系（send / sendall / sendto /
+  sendmsg / sendmsg_af / sendfile)、名前解決系（getaddrinfo /
+  gethostbyname / gethostbyname_ex / gethostbyaddr / getnameinfo)、
+  urllib（urlopen / urlretrieve)。requests / http.client は内部で
+  socket.create_connection と getaddrinfo を使うため、これらで遮断される。
+  ガード自体の動作確認テスト（test_network_guard_blocks_*）と、suite
+  終了時に試行 0 件を確認するテスト
+  （test_network_no_attempts_during_suite）を置く。
 """
 
 import ast
 import hashlib
 import inspect
+import io
 import json
 import os
 import socket
@@ -57,31 +64,71 @@ START = pd.Timestamp("2026-01-05 00:00", tz=UTC)  # Monday
 NETWORK_ATTEMPTS = []
 
 
+_GUARD_MESSAGE = "network access blocked by synthetic-test guard"
+
+
+def _record_and_block(kind, detail):
+    NETWORK_ATTEMPTS.append((kind, detail))
+    raise OSError(_GUARD_MESSAGE)
+
+
 class _GuardedSocket(socket.socket):
-    """接続系メソッドだけを遮断する socket。生成自体は許可する。"""
+    """接続系・送信系メソッドを遮断する socket。生成自体は許可する。
+
+    送信系（send / sendall / sendto / sendmsg / sendmsg_af / sendfile）も
+    実 syscall の前に例外で止める。connect が遮断されるため通常は接続済み
+    ソケット自体が作れないが、継承 fd 等の想定外経路でも送信できないよう
+    多層に遮断する。
+    """
 
     def connect(self, address):
-        NETWORK_ATTEMPTS.append(("socket.connect", repr(address)))
-        raise OSError("network access blocked by synthetic-test guard")
+        _record_and_block("socket.connect", repr(address))
 
     def connect_ex(self, address):
-        NETWORK_ATTEMPTS.append(("socket.connect_ex", repr(address)))
-        raise OSError("network access blocked by synthetic-test guard")
+        _record_and_block("socket.connect_ex", repr(address))
+
+    def send(self, data, flags=0):
+        _record_and_block("socket.send", repr(len(data)))
+
+    def sendall(self, data, flags=0):
+        _record_and_block("socket.sendall", repr(len(data)))
+
+    def sendto(self, data, *args):
+        address = args[-1] if args else None
+        _record_and_block("socket.sendto", repr(address))
+
+    def sendmsg(self, buffers, ancdata=(), flags=0):
+        _record_and_block("socket.sendmsg", repr(len(buffers)))
+
+    def sendmsg_af(self, af, buffers, ancdata=(), flags=0):
+        _record_and_block("socket.sendmsg_af", repr(af))
+
+    def sendfile(self, file, offset=0, count=None):
+        _record_and_block("socket.sendfile", repr(offset))
 
 
 def _blocked_create_connection(address, *args, **kwargs):
-    NETWORK_ATTEMPTS.append(("socket.create_connection", repr(address)))
-    raise OSError("network access blocked by synthetic-test guard")
+    _record_and_block("socket.create_connection", repr(address))
 
 
 def _blocked_getaddrinfo(host, *args, **kwargs):
-    NETWORK_ATTEMPTS.append(("socket.getaddrinfo", repr(host)))
-    raise OSError("network access blocked by synthetic-test guard")
+    _record_and_block("socket.getaddrinfo", repr(host))
+
+
+def _blocked_gethostbyaddr(ip_address, *args, **kwargs):
+    _record_and_block("socket.gethostbyaddr", repr(ip_address))
+
+
+def _blocked_getnameinfo(sockaddr, *args, **kwargs):
+    _record_and_block("socket.getnameinfo", repr(sockaddr))
 
 
 def _blocked_urlopen(url, *args, **kwargs):
-    NETWORK_ATTEMPTS.append(("urllib.request.urlopen", repr(url)))
-    raise OSError("network access blocked by synthetic-test guard")
+    _record_and_block("urllib.request.urlopen", repr(url))
+
+
+def _blocked_urlretrieve(url, *args, **kwargs):
+    _record_and_block("urllib.request.urlretrieve", repr(url))
 
 
 @pytest.fixture(autouse=True)
@@ -91,7 +138,10 @@ def _network_guard(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", _blocked_getaddrinfo)
     monkeypatch.setattr(socket, "gethostbyname", _blocked_getaddrinfo)
     monkeypatch.setattr(socket, "gethostbyname_ex", _blocked_getaddrinfo)
+    monkeypatch.setattr(socket, "gethostbyaddr", _blocked_gethostbyaddr)
+    monkeypatch.setattr(socket, "getnameinfo", _blocked_getnameinfo)
     monkeypatch.setattr(urllib.request, "urlopen", _blocked_urlopen)
+    monkeypatch.setattr(urllib.request, "urlretrieve", _blocked_urlretrieve)
     yield
 
 
@@ -102,6 +152,66 @@ def test_network_guard_blocks_and_records():
     with pytest.raises(OSError):
         socket.getaddrinfo("example.com", 443)
     assert len(NETWORK_ATTEMPTS) >= 2
+    NETWORK_ATTEMPTS.clear()  # 自己確認の試行は証跡から除く
+
+
+def test_network_guard_blocks_send_paths():
+    """ガード自体の動作確認: 送信系メソッドは実送信前に失敗し記録される。
+
+    ここで発生させる試行はガード検証専用であり、記録は検証後に消去する
+    （suite 本体の「試行 0 件」の証跡には含めない）。
+    """
+    start = len(NETWORK_ATTEMPTS)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        with pytest.raises(OSError):
+            sock.send(b"x")
+        with pytest.raises(OSError):
+            sock.sendall(b"x")
+        with pytest.raises(OSError):
+            sock.sendto(b"x", ("127.0.0.1", 9))
+        with pytest.raises(OSError):
+            sock.sendmsg([b"x"])
+        with pytest.raises(OSError):
+            sock.sendmsg_af(socket.AF_INET, [b"x"])
+        with pytest.raises(OSError):
+            sock.sendfile(io.BytesIO(b"x"))
+    finally:
+        sock.close()
+    kinds = [kind for kind, _ in NETWORK_ATTEMPTS[start:]]
+    assert kinds == [
+        "socket.send",
+        "socket.sendall",
+        "socket.sendto",
+        "socket.sendmsg",
+        "socket.sendmsg_af",
+        "socket.sendfile",
+    ]
+    NETWORK_ATTEMPTS.clear()  # 自己確認の試行は証跡から除く
+
+
+def test_network_guard_blocks_additional_entry_points():
+    """ガード自体の動作確認: 逆引き・名前情報・urlretrieve も失敗し記録される。
+
+    記録は検証後に消去する（suite 本体の証跡には含めない）。
+    """
+    start = len(NETWORK_ATTEMPTS)
+    with pytest.raises(OSError):
+        socket.gethostbyaddr("127.0.0.1")
+    with pytest.raises(OSError):
+        socket.getnameinfo(("127.0.0.1", 9), 0)
+    with pytest.raises(OSError):
+        urllib.request.urlopen("http://127.0.0.1/")
+    with pytest.raises(OSError):
+        urllib.request.urlretrieve("http://127.0.0.1/", "/tmp/never-downloaded")
+    kinds = [kind for kind, _ in NETWORK_ATTEMPTS[start:]]
+    assert kinds == [
+        "socket.gethostbyaddr",
+        "socket.getnameinfo",
+        "urllib.request.urlopen",
+        "urllib.request.urlretrieve",
+    ]
+    assert not os.path.exists("/tmp/never-downloaded")
     NETWORK_ATTEMPTS.clear()  # 自己確認の試行は証跡から除く
 
 
