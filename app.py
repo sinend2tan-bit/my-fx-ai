@@ -977,15 +977,19 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             # タイムゾーンの安全処理を適用する。日足は段階0で全ペア
             # tz-naive と確認されており、根拠が得られるまで下記の
             # タイムゾーンチェックで分析・ラベル処理を停止する。
-            # 処理順序は承認済み修正仕様書の手順 (0)〜(4):
-            # (0) timestamp 不正 → (1) 欠損・非有限値 → (2) 重複 timestamp
-            # (keep="last") → (3) OHLC 整合性 → (4) 特徴量計算による除外。
-            # 各行は最初に該当した理由で一度だけ計上する。
-            # input_rows は、末尾の未確定足（従来処理で iloc[:-1] により
-            # 分析対象から外れる最新足）を除いた行数とする。未確定足の
-            # 除外は鮮度のための既存処理であり、データ品質の除外理由では
-            # ないため C-1 には計上しない（この起点により、2つの検算式は
-            # 常に成立する）。
+            # 1時間足の処理順序は、ChatGPT 決定（案A）により鮮度除外を
+            # 品質検証の前に置く: DatetimeIndex の確認 → タイムゾーンの
+            # 確認（tz-aware は UTC へ正規化、tz-naive は停止）→ 有効
+            # timestamp の最大値（最新 timestamp）群の鮮度除外 →
+            # input_rows の確定 → (0) timestamp 不正 → (1) 欠損・非有限値
+            # → (2) 重複 timestamp (keep="last") → (3) OHLC 整合性
+            # → (4) 特徴量計算による除外。NaT 行は鮮度除外に含めず、
+            # (0) で dropped_invalid_timestamp として計上する。
+            # input_rows は、最新 timestamp 群の鮮度除外後に品質検証
+            # パイプラインへ入る行数とする。鮮度除外はデータ品質の
+            # 除外理由ではないため C-1 の品質カウンタには計上しない。
+            # 日足は従来挙動を維持する（処理順序・input_rows の定義とも
+            # 従来どおり）。各行は最初に該当した理由で一度だけ計上する。
             data_quality = {
                 "input_rows": 0,
                 "dropped_invalid_timestamp": 0,
@@ -999,31 +1003,52 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
                 "dropped_label_other": 0,
                 "trainable_rows": 0,
             }
-            # (0) timestamp の不正行を除外する。index が日時でない場合は
-            # 時刻を確定できないため処理を停止する。
+            # index が日時でない場合は時刻を確定できないため処理を停止する。
             if not isinstance(df.index, pd.DatetimeIndex):
                 return None, {
                     "code": "timestamp_format_unconfirmed",
                     "message": "価格データの時刻形式を確認できないため、分析を停止しました。",
                 }
-            downloaded_rows = len(df)
-            valid_timestamp = df.index.notna()
-            data_quality["dropped_invalid_timestamp"] = int((~valid_timestamp).sum())
-            df = df.loc[valid_timestamp].copy()
             # タイムゾーンの安全処理: 本番環境の yfinance の版が未確認で
             # あることを前提に、実行時に index の型とタイムゾーンを検査
             # する。tz-aware は UTC へ正規化する。タイムゾーンを確定
             # できない場合は処理を停止し、理由を表示する（UTC と推定して
             # 処理を続けることはしない）。
-            if df.index.tz is None:
-                return None, {
-                    "code": "tz_unavailable",
-                    "message": (
-                        "価格データの時刻にタイムゾーン情報がないため、分析を停止しました。"
-                        "UTCと推定して処理することはありません。配信元の時刻仕様を確認してください。"
-                    ),
-                }
-            df.index = df.index.tz_convert("UTC")
+            tz_unavailable_reason = {
+                "code": "tz_unavailable",
+                "message": (
+                    "価格データの時刻にタイムゾーン情報がないため、分析を停止しました。"
+                    "UTCと推定して処理することはありません。配信元の時刻仕様を確認してください。"
+                ),
+            }
+            if interval == "1h":
+                if df.index.tz is None:
+                    return None, tz_unavailable_reason
+                df.index = df.index.tz_convert("UTC")
+                # 鮮度除外: 有効 timestamp の最大値（最新 timestamp）に
+                # 属する行をすべて除外する（未確定の最新足。複数行ある
+                # 場合はその群全体）。NaT 行はここでは除外せず、次の
+                # (0) で計上する。
+                valid_timestamp = df.index.notna()
+                if valid_timestamp.any():
+                    latest_timestamp = df.index[valid_timestamp].max()
+                    freshness_rows = valid_timestamp & (df.index == latest_timestamp)
+                    df = df.loc[~freshness_rows].copy()
+                # input_rows は、鮮度除外後に品質検証パイプラインへ
+                # 入る行数（NaT 行を含む）。
+                data_quality["input_rows"] = len(df)
+            else:
+                downloaded_rows = len(df)
+            # (0) timestamp の不正行（NaT）を除外する。
+            valid_timestamp = df.index.notna()
+            data_quality["dropped_invalid_timestamp"] = int((~valid_timestamp).sum())
+            df = df.loc[valid_timestamp].copy()
+            if interval == "1d":
+                # 日足は従来挙動を維持する（タイムゾーンチェックは
+                # timestamp 検証の後に行う）。
+                if df.index.tz is None:
+                    return None, tz_unavailable_reason
+                df.index = df.index.tz_convert("UTC")
             # (1) 欠損・非有限値の行を除外する。
             df = df.apply(pd.to_numeric, errors="coerce")
             rows_before = len(df)
@@ -1047,7 +1072,10 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             ).to_numpy()
             data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
             df = df.loc[ohlc_ok].copy()
-            data_quality["input_rows"] = downloaded_rows - 1
+            if interval == "1d":
+                # 日足の input_rows は従来定義のまま（ダウンロード行数から
+                # 末尾の未確定足ぶんを除いた行数）。
+                data_quality["input_rows"] = downloaded_rows - 1
         else:
             df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
         if interval == "4h":
@@ -1055,7 +1083,9 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             if "Volume" in df: agg["Volume"] = "sum"
             df = df.resample("4h").agg(agg).dropna(subset=required)
         # Discard the newest bar because it may still be forming.
-        if len(df) > 2:
+        # 1時間足は品質検証の前で最新 timestamp 群を鮮度除外済みのため、
+        # ここでは除外しない（案A）。その他の時間足は従来どおり。
+        if interval != "1h" and len(df) > 2:
             df = df.iloc[:-1]
         if len(df) < 80:
             return None, None

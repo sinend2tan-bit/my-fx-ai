@@ -1296,14 +1296,17 @@ def bars(ticker, interval="1h", period="60d"):
     raw = raw[["Open", "High", "Low", "Close", "Volume"]].copy()
 
     # 段階1（SYN-FX-016）: 1時間足のみ、入力検証と C-1 カウンタを適用する。
-    # 処理順序は承認済み修正仕様書の手順 (0)〜(4):
-    # (0) timestamp 不正 → (1) 欠損・非有限値 → (2) 重複 timestamp (keep="last")
-    # → (3) OHLC 整合性 → (4) 特徴量計算による除外。
-    # 各行は最初に該当した理由で一度だけ計上する。
-    # input_rows は、末尾の未確定足（従来処理で iloc[:-1] により分析対象から
-    # 外れる最新足）を除いた行数とする。未確定足の除外は鮮度のための既存処理
-    # であり、データ品質の除外理由ではないため C-1 には計上しない（この起点
-    # により、2つの検算式は常に成立する）。
+    # 処理順序は承認済み修正仕様書と ChatGPT 決定（案A）の手順:
+    # まず DatetimeIndex の確認とタイムゾーンの確認（tz-aware は UTC へ
+    # 正規化、tz-naive は停止）を行い、有効 timestamp の最大値（最新
+    # timestamp）に属する行群を鮮度理由で除外する。NaT 行は鮮度除外に
+    # 含めない。input_rows は、この鮮度除外の後に品質検証パイプラインへ
+    # 入る行数（NaT 行を含む）とする。鮮度除外はデータ品質の除外理由
+    # ではないため C-1 の品質カウンタには計上しない。
+    # その後の品質検証の順序は (0) timestamp 不正 → (1) 欠損・非有限値
+    # → (2) 重複 timestamp (keep="last") → (3) OHLC 整合性
+    # → (4) 特徴量計算による除外。各行は最初に該当した理由で一度だけ
+    # 計上し、2つの検算式が意味的にも成立するようにする。
     data_quality = None
     if interval == "1h":
         data_quality = {
@@ -1319,15 +1322,34 @@ def bars(ticker, interval="1h", period="60d"):
             "dropped_label_other": 0,
             "trainable_rows": 0,
         }
-        # (0) timestamp の不正行を除外する。index が日時でない場合は時刻を
-        # 確定できないため、この足の処理を停止する。
+        # index が日時でない場合は時刻を確定できないため、この足の処理を
+        # 停止する。
         if not isinstance(raw.index, pd.DatetimeIndex):
             print(
                 f"[DATA ERROR] {ticker} {interval}: "
                 "index is not a DatetimeIndex; cannot establish timestamps"
             )
             return None
-        data_quality["input_rows"] = len(raw) - 1
+        # タイムゾーンの確認: tz-aware は UTC へ正規化する。tz-naive は
+        # UTC と推定せず、この足の分析・ラベル処理を停止する。
+        if raw.index.tz is None:
+            print(
+                f"[TIMEZONE STOP] {ticker} {interval}: index has no timezone; "
+                "analysis and label processing halted (no implicit UTC assumption)"
+            )
+            return None
+        raw.index = raw.index.tz_convert("UTC")
+        # 鮮度除外: 有効 timestamp の最大値（最新 timestamp）に属する行を
+        # すべて除外する（未確定の最新足。複数行ある場合はその群全体）。
+        # NaT 行はここでは除外せず、次の (0) で計上する。
+        valid_timestamp = raw.index.notna()
+        if valid_timestamp.any():
+            latest_timestamp = raw.index[valid_timestamp].max()
+            freshness_rows = valid_timestamp & (raw.index == latest_timestamp)
+            raw = raw.loc[~freshness_rows].copy()
+        # input_rows は、鮮度除外後に品質検証パイプラインへ入る行数。
+        data_quality["input_rows"] = len(raw)
+        # (0) timestamp の不正行（NaT）を除外する。
         valid_timestamp = raw.index.notna()
         data_quality["dropped_invalid_timestamp"] = int((~valid_timestamp).sum())
         raw = raw.loc[valid_timestamp].copy()
@@ -1378,10 +1400,17 @@ def bars(ticker, interval="1h", period="60d"):
         return None
 
     # 事前チェック（早期打ち切り用）。最終判定は加工後の本数で行う。
-    # 1時間足・日足は末尾の未確定足を1本除外するため +1 本。
+    # 日足は末尾の未確定足を1本除外するため +1 本。1時間足は最新
+    # timestamp 群を入力検証の前に鮮度除外済みのため +1 本は不要
+    # （鮮度除外前の本数基準では従来と同一の境界になる）。
     # 4時間足は、完成した4時間足が MIN_FEATURE_BARS 本そろうには
     # 最低でもその4倍の1時間足が必要。
-    min_raw_bars = 4 * MIN_FEATURE_BARS if interval == "4h" else MIN_FEATURE_BARS + 1
+    if interval == "4h":
+        min_raw_bars = 4 * MIN_FEATURE_BARS
+    elif interval == "1h":
+        min_raw_bars = MIN_FEATURE_BARS
+    else:
+        min_raw_bars = MIN_FEATURE_BARS + 1
     if len(raw) < min_raw_bars:
         print(
             f"[DATA SHORT] {ticker} {interval}: {len(raw)} raw bars "
@@ -1432,8 +1461,12 @@ def bars(ticker, interval="1h", period="60d"):
             ((raw.index + pd.Timedelta(hours=4)) <= cutoff)
             & (complete_counts == 4)
         ].copy()
+    elif interval == "1h":
+        # 1時間足は最新 timestamp 群を入力検証の前に鮮度除外済みのため、
+        # ここでは追加で末尾行を除外しない。
+        pass
     else:
-        # 1時間足・日足は従来どおり最後の取得足を除外する。
+        # 日足などは従来どおり最後の取得足を除外する。
         raw = raw.iloc[:-1].copy()
 
     if len(raw) < MIN_FEATURE_BARS:

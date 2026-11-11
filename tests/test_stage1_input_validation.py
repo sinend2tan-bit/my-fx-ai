@@ -5,10 +5,11 @@
 ソケット接続はガードで禁止する）。
 
 確認すること:
-- Scanner（1時間足のみ）: 処理順序 (0) timestamp 不正 → (1) 欠損・非有限値
-  → (2) 重複 timestamp (keep="last") → (3) OHLC 整合性 → (4) 特徴量計算
-  による除外。各行は最初に該当した理由で一度だけ計上され、C-1 の2つの
-  検算式が成立する。
+- Scanner（1時間足のみ）: 処理順序は、DatetimeIndex 確認 → タイム
+  ゾーン確認・UTC 正規化 → 最新 timestamp 群の鮮度除外 → (0) timestamp
+  不正 → (1) 欠損・非有限値 → (2) 重複 timestamp (keep="last")
+  → (3) OHLC 整合性 → (4) 特徴量計算による除外。各行は最初に該当した
+  理由で一度だけ計上され、C-1 の2つの検算式が成立する。
 - OHLC 検証条件: High >= max(Open, Close)、Low <= min(Open, Close)、
   High >= Low、価格が有限値かつ正値。等号（High == max(Open, Close) 等）
   は有効。
@@ -29,10 +30,15 @@
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
   評価モデルが使われ、旧ファイルは上書きされない。新版（7）の保存済み
   モデルは従来どおり再利用される。
-- 追加レビュー対応（項目2）: 最終取得行が正常 / NaN / ±Inf / OHLC不正 /
-  重複 timestamp / NaT の6ケースについて、両実装のカウンタ計上を
-  特性テストとして固定する（現行挙動の記録。帰属のずれの分析と
-  処理順序の変更案は PR 本文に記載し、ChatGPT の確認待ち）。
+- C-1 修正（案A、ChatGPT 決定）: 鮮度除外を品質検証の前に置く。
+  DatetimeIndex 確認 → タイムゾーン確認（tz-aware は UTC 正規化、
+  tz-naive は停止）→ 最新 timestamp 群の鮮度除外 → input_rows 確定
+  → (0) timestamp 不正 → (1) 欠損・非有限値 → (2) 重複 timestamp
+  → (3) OHLC 整合性 → (4) 特徴量計算による除外。最終取得行の各
+  ケース（正常 / NaN / +Inf / -Inf / OHLC不正 / 最新 timestamp の
+  複数行 / NaT / 最新より前の重複）で、検算式が意味的にも成立し、
+  学習対象行数が実際の処理結果と一致すること、最新足の品質不正が
+  有効な直前確定足を追加で除外しないことを確認する。
 - 追加レビュー対応（項目1）: App の停止理由はキャッシュ対象のコアが
   戻り値で返し、公開ラッパーがキャッシュの外側で記録・表示する。
   停止理由の記録・区別・解除をここで確認し、キャッシュミス／ヒット
@@ -625,20 +631,26 @@ def test_app_current_version_model_reused(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 追加レビュー対応（項目2）: 最終取得行の6ケースの特性テスト
+# C-1 修正（案A）: 鮮度除外を品質検証の前に置く処理順序のケース検証
 #
-# 現行実装の実測挙動をそのまま固定する特性テスト（仕様変更の実装ではない）。
-# 現行実装は品質検証 (0)〜(3) をダウンロード全行に対して行い、その後に
-# 最新の残存行を iloc[:-1] で鮮度除外する。input_rows はダウンロード
-# 行数 − 1（鮮度除外ぶんの固定の控除）。
-# - 最終行が正常な場合と、最終行が重複 timestamp の場合は、控除と
-#   鮮度除外の対応が一致し、検算は意味的にも成立する。
-# - 最終行が NaN / ±Inf / OHLC不正 / NaT の場合は、その行が品質側の
-#   カウンタに計上され、鮮度除外は別の（有効な）最新確定足に移る。
-#   その確定足はどのカウンタにも計上されない。検算式は件数の相殺で
-#   成立するが、行単位の帰属は入れ替わっている（2026-11-12 実測）。
-# この帰属のずれを解消する処理順序の変更案は PR 本文に提案として記載し、
-# ChatGPT の確認待ちとする（本テストは現行挙動の記録である）。
+# ChatGPT 決定（案A採用、2026-11-12）に基づく実装後の挙動を固定する。
+# 旧実装は品質検証 (0)〜(3) をダウンロード全行に対して行い、その後に
+# 最新の残存行を iloc[:-1] で鮮度除外していたため、最終行が不正な
+# 場合に「不正行が品質カウンタに計上され、鮮度除外が有効な直前確定足
+# に移って、その確定足が無記録で失われる」という帰属の入れ替わりが
+# あった（数値上の検算は成立するが意味的には不整合）。
+# 案Aの実装では、最新 timestamp 群（複数行ある場合は群全体）を品質
+# 検証の前に鮮度除外し、input_rows を「鮮度除外後に品質検証へ入る
+# 行数」とするため:
+# - 最新足が NaN / ±Inf / OHLC不正でも、その行は品質カウンタに
+#   混入せず、有効な直前確定足は追加で除外されない。
+# - 最新 timestamp の複数行は群全体が鮮度除外され、重複としては
+#   計上されない。
+# - NaT 行は鮮度除外に含めず、dropped_invalid_timestamp に計上する。
+# - 最新より前の重複 timestamp は従来どおり keep="last" で処理する。
+# - 検算式は全ケースで意味的にも成立し、学習対象行数は実際の処理
+#   結果（Scanner は戻り値の行数、App は Target が付いた行数）と一致
+#   する。正常系の期待値は案A導入前と同一（出力は変わらない）。
 # ---------------------------------------------------------------------------
 
 def _last_row_case_frames():
@@ -654,6 +666,10 @@ def _last_row_case_frames():
     cases["inf"] = f
 
     f = make_frame()
+    f.iloc[-1, f.columns.get_loc("Low")] = -np.inf
+    cases["neginf"] = f
+
+    f = make_frame()
     f.iloc[-1, f.columns.get_loc("High")] = f.iloc[-1]["Low"] - 0.5
     cases["ohlc_invalid"] = f
 
@@ -664,6 +680,23 @@ def _last_row_case_frames():
     dup.iloc[0, cl] = float(dup.iloc[0]["Close"]) + 0.03
     dup.iloc[0, hi] = max(float(dup.iloc[0]["High"]), float(dup.iloc[0]["Close"]))
     cases["duplicate"] = pd.concat([f, dup])
+
+    # 最新 timestamp に複数行があり、うち1行が NaN。群全体が鮮度除外
+    # され、NaN 行も品質カウンタには混入しない。
+    f = make_frame()
+    dup = f.iloc[[-1]].copy()
+    dup.iloc[0, dup.columns.get_loc("Close")] = np.nan
+    cases["latest_multi"] = pd.concat([f, dup])
+
+    # 最新 timestamp より前に重複 timestamp がある。鮮度除外の対象では
+    # なく、品質パイプラインで keep="last" により処理される。
+    f = make_frame()
+    dup = f.iloc[[350]].copy()
+    cl = dup.columns.get_loc("Close")
+    hi = dup.columns.get_loc("High")
+    dup.iloc[0, cl] = float(dup.iloc[0]["Close"]) + 0.03
+    dup.iloc[0, hi] = max(float(dup.iloc[0]["High"]), float(dup.iloc[0]["Close"]))
+    cases["dup_early"] = pd.concat([f.iloc[:351], dup, f.iloc[351:]])
 
     f = make_frame()
     nat_row = f.iloc[[10]].copy()
@@ -682,25 +715,42 @@ def _assert_counter_profile(dq, expected):
 
 
 # Scanner: 特徴量除外 19 件（指標の立ち上がり）を前提とした実測値。
+# 案Aでは最新 timestamp 群が鮮度除外されるため、最新足の品質不正は
+# 品質カウンタに現れず、直前確定足も残る（feature_rows は正常系と同数）。
 _SCANNER_LAST_ROW_EXPECTED = {
     "normal": {"input_rows": 499, "dropped_invalid_timestamp": 0,
                "dropped_missing_or_nonfinite": 0, "dropped_duplicate_timestamp": 0,
                "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
                "feature_rows": 480, "trainable_rows": 472},
     "nan": {"input_rows": 499, "dropped_invalid_timestamp": 0,
-            "dropped_missing_or_nonfinite": 1, "dropped_duplicate_timestamp": 0,
+            "dropped_missing_or_nonfinite": 0, "dropped_duplicate_timestamp": 0,
             "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
-            "feature_rows": 479, "trainable_rows": 471},
+            "feature_rows": 480, "trainable_rows": 472},
     "inf": {"input_rows": 499, "dropped_invalid_timestamp": 0,
-            "dropped_missing_or_nonfinite": 1, "dropped_duplicate_timestamp": 0,
+            "dropped_missing_or_nonfinite": 0, "dropped_duplicate_timestamp": 0,
             "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
-            "feature_rows": 479, "trainable_rows": 471},
+            "feature_rows": 480, "trainable_rows": 472},
+    "neginf": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+               "dropped_missing_or_nonfinite": 0,
+               "dropped_duplicate_timestamp": 0, "dropped_invalid_ohlc": 0,
+               "dropped_feature_nan": 19, "feature_rows": 480,
+               "trainable_rows": 472},
     "ohlc_invalid": {"input_rows": 499, "dropped_invalid_timestamp": 0,
                      "dropped_missing_or_nonfinite": 0,
-                     "dropped_duplicate_timestamp": 0, "dropped_invalid_ohlc": 1,
-                     "dropped_feature_nan": 19, "feature_rows": 479,
-                     "trainable_rows": 471},
-    "duplicate": {"input_rows": 500, "dropped_invalid_timestamp": 0,
+                     "dropped_duplicate_timestamp": 0, "dropped_invalid_ohlc": 0,
+                     "dropped_feature_nan": 19, "feature_rows": 480,
+                     "trainable_rows": 472},
+    "duplicate": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+                  "dropped_missing_or_nonfinite": 0,
+                  "dropped_duplicate_timestamp": 0, "dropped_invalid_ohlc": 0,
+                  "dropped_feature_nan": 19, "feature_rows": 480,
+                  "trainable_rows": 472},
+    "latest_multi": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+                     "dropped_missing_or_nonfinite": 0,
+                     "dropped_duplicate_timestamp": 0,
+                     "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
+                     "feature_rows": 480, "trainable_rows": 472},
+    "dup_early": {"input_rows": 500, "dropped_invalid_timestamp": 0,
                   "dropped_missing_or_nonfinite": 0,
                   "dropped_duplicate_timestamp": 1, "dropped_invalid_ohlc": 0,
                   "dropped_feature_nan": 19, "feature_rows": 480,
@@ -739,7 +789,10 @@ def _check_app_last_row_case(case):
     out = ns["load_and_process_data"]("USDJPY=X", "60d", "1h")
     assert out is not None
     assert st.warnings == []
-    _assert_counter_profile(out.attrs["data_quality"], _APP_LAST_ROW_EXPECTED[case])
+    dq = out.attrs["data_quality"]
+    _assert_counter_profile(dq, _APP_LAST_ROW_EXPECTED[case])
+    # 学習対象行数は、実際にラベルが付いた行数と一致する。
+    assert int(out["Target"].notna().sum()) == dq["trainable_rows"]
 
 
 def test_scanner_last_row_normal(monkeypatch):
@@ -754,12 +807,24 @@ def test_scanner_last_row_inf(monkeypatch):
     _check_scanner_last_row_case(monkeypatch, "inf")
 
 
+def test_scanner_last_row_neginf(monkeypatch):
+    _check_scanner_last_row_case(monkeypatch, "neginf")
+
+
 def test_scanner_last_row_ohlc_invalid(monkeypatch):
     _check_scanner_last_row_case(monkeypatch, "ohlc_invalid")
 
 
 def test_scanner_last_row_duplicate(monkeypatch):
     _check_scanner_last_row_case(monkeypatch, "duplicate")
+
+
+def test_scanner_last_row_latest_multi(monkeypatch):
+    _check_scanner_last_row_case(monkeypatch, "latest_multi")
+
+
+def test_scanner_last_row_dup_early(monkeypatch):
+    _check_scanner_last_row_case(monkeypatch, "dup_early")
 
 
 def test_scanner_last_row_nat(monkeypatch):
@@ -778,6 +843,10 @@ def test_app_last_row_inf():
     _check_app_last_row_case("inf")
 
 
+def test_app_last_row_neginf():
+    _check_app_last_row_case("neginf")
+
+
 def test_app_last_row_ohlc_invalid():
     _check_app_last_row_case("ohlc_invalid")
 
@@ -786,8 +855,71 @@ def test_app_last_row_duplicate():
     _check_app_last_row_case("duplicate")
 
 
+def test_app_last_row_latest_multi():
+    _check_app_last_row_case("latest_multi")
+
+
+def test_app_last_row_dup_early():
+    _check_app_last_row_case("dup_early")
+
+
 def test_app_last_row_nat():
     _check_app_last_row_case("nat")
+
+
+def test_scanner_invalid_latest_bar_keeps_previous_bar(monkeypatch):
+    # 案Aの要点: 最新足が品質不正でも、有効な直前確定足が追加で
+    # 除外されない（旧実装では鮮度除外が直前確定足に移っていた）。
+    for case in ("nan", "inf", "neginf", "ohlc_invalid"):
+        frame = _last_row_case_frames()[case]
+        stub_scanner_download(monkeypatch, frame)
+        out = scanner.bars("USDJPY=X", interval="1h", period="180d")
+        assert out is not None
+        # 直前確定足は特徴量フレームに残る。
+        assert frame.index[-2] in out.attrs["latest_features"].index
+        # 最新 timestamp は鮮度除外され、特徴量フレームには残らない。
+        assert frame.index[-1] not in out.attrs["latest_features"].index
+
+
+def test_app_invalid_latest_bar_keeps_previous_bar():
+    for case in ("nan", "inf", "neginf", "ohlc_invalid"):
+        frame = _last_row_case_frames()[case]
+        ns, st = _app_namespace(lambda f=frame: f.copy())
+        out = ns["load_and_process_data"]("USDJPY=X", "60d", "1h")
+        assert out is not None
+        assert st.warnings == []
+        assert frame.index[-2] in out.index
+        assert frame.index[-1] not in out.index
+
+
+def test_scanner_min_bars_boundary_unchanged(monkeypatch):
+    # 行数境界は案A導入前と同一: ダウンロード MIN_FEATURE_BARS+1 本
+    # （= 221 本）で処理され、MIN_FEATURE_BARS 本（= 220 本）では停止
+    # する。鮮度除外を前倒しした分、事前チェックの +1 本は不要になる。
+    frame = make_frame(n=scanner.MIN_FEATURE_BARS)
+    stub_scanner_download(monkeypatch, frame)
+    assert scanner.bars("USDJPY=X", interval="1h", period="180d") is None
+    frame = make_frame(n=scanner.MIN_FEATURE_BARS + 1)
+    stub_scanner_download(monkeypatch, frame)
+    out = scanner.bars("USDJPY=X", interval="1h", period="180d")
+    assert out is not None
+    dq = out.attrs["data_quality"]
+    assert dq["input_rows"] == scanner.MIN_FEATURE_BARS
+    assert dq["trainable_rows"] == len(out)
+    assert_checksums(dq)
+
+
+def test_app_min_bars_boundary_unchanged():
+    # App の境界も従来どおり: ダウンロード 80 本では停止し、81 本で
+    # 処理される（鮮度除外後の 80 本が下限判定にかかる）。
+    frame = make_frame(n=80)
+    ns, _st = _app_namespace(lambda f=frame: f.copy())
+    assert ns["load_and_process_data"]("USDJPY=X", "60d", "1h") is None
+    frame = make_frame(n=81)
+    ns, _st = _app_namespace(lambda f=frame: f.copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "60d", "1h")
+    assert out is not None
+    assert out.attrs["data_quality"]["input_rows"] == 80
 
 
 # ---------------------------------------------------------------------------
