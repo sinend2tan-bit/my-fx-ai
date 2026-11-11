@@ -1150,7 +1150,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             except Exception:
                 model = None
 
-        # Retrain with all eligible labelled rows. Feedback reweights only matching training rows.
+        # Retrain with all eligible labelled rows. Only class-balancing sample weights are used; trade outcome feedback is stored separately and is not used in model fitting.
         if model is None or force_retrain:
             candidate_model = RandomForestClassifier(
                 n_estimators=260, max_depth=7, min_samples_leaf=8,
