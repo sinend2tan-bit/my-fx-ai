@@ -88,7 +88,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 6
+MODEL_VERSION = 7
 
 st.markdown("""
 <style>
@@ -941,7 +941,81 @@ def load_and_process_data(ticker, period, interval, label=""):
         if df.empty or not set(required).issubset(df.columns):
             return None
         df = df[required + (["Volume"] if "Volume" in df.columns else [])].copy()
-        df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
+        data_quality = None
+        if interval in ("1h", "1d"):
+            # 段階1（SYN-FX-016）: 1時間足の入力検証・C-1 カウンタと、
+            # タイムゾーンの安全処理を適用する。日足は段階0で全ペア
+            # tz-naive と確認されており、根拠が得られるまで下記の
+            # タイムゾーンチェックで分析・ラベル処理を停止する。
+            # 処理順序は承認済み修正仕様書の手順 (0)〜(4):
+            # (0) timestamp 不正 → (1) 欠損・非有限値 → (2) 重複 timestamp
+            # (keep="last") → (3) OHLC 整合性 → (4) 特徴量計算による除外。
+            # 各行は最初に該当した理由で一度だけ計上する。
+            # input_rows は、末尾の未確定足（従来処理で iloc[:-1] により
+            # 分析対象から外れる最新足）を除いた行数とする。未確定足の
+            # 除外は鮮度のための既存処理であり、データ品質の除外理由では
+            # ないため C-1 には計上しない（この起点により、2つの検算式は
+            # 常に成立する）。
+            data_quality = {
+                "input_rows": 0,
+                "dropped_invalid_timestamp": 0,
+                "dropped_missing_or_nonfinite": 0,
+                "dropped_duplicate_timestamp": 0,
+                "dropped_invalid_ohlc": 0,
+                "dropped_feature_nan": 0,
+                "feature_rows": 0,
+                "dropped_label_discontinuous": 0,
+                "dropped_label_insufficient_future": 0,
+                "dropped_label_other": 0,
+                "trainable_rows": 0,
+            }
+            # (0) timestamp の不正行を除外する。index が日時でない場合は
+            # 時刻を確定できないため処理を停止する。
+            if not isinstance(df.index, pd.DatetimeIndex):
+                st.warning("価格データの時刻形式を確認できないため、分析を停止しました。")
+                return None
+            downloaded_rows = len(df)
+            valid_timestamp = df.index.notna()
+            data_quality["dropped_invalid_timestamp"] = int((~valid_timestamp).sum())
+            df = df.loc[valid_timestamp].copy()
+            # タイムゾーンの安全処理: 本番環境の yfinance の版が未確認で
+            # あることを前提に、実行時に index の型とタイムゾーンを検査
+            # する。tz-aware は UTC へ正規化する。タイムゾーンを確定
+            # できない場合は処理を停止し、理由を表示する（UTC と推定して
+            # 処理を続けることはしない）。
+            if df.index.tz is None:
+                st.warning(
+                    "価格データの時刻にタイムゾーン情報がないため、分析を停止しました。"
+                    "UTCと推定して処理することはありません。配信元の時刻仕様を確認してください。"
+                )
+                return None
+            df.index = df.index.tz_convert("UTC")
+            # (1) 欠損・非有限値の行を除外する。
+            df = df.apply(pd.to_numeric, errors="coerce")
+            rows_before = len(df)
+            df = df.dropna(subset=required)
+            finite_ok = np.isfinite(df[required].to_numpy(dtype=float)).all(axis=1)
+            df = df.loc[finite_ok].copy()
+            data_quality["dropped_missing_or_nonfinite"] = int(rows_before - len(df))
+            # (2) 重複 timestamp を keep="last" で整理する。
+            rows_before = len(df)
+            df = df[~df.index.duplicated(keep="last")].sort_index()
+            data_quality["dropped_duplicate_timestamp"] = int(rows_before - len(df))
+            # (3) OHLC 整合性を検証する。keep="last" で残った行が不正な
+            # 場合は古い重複行へ戻らず、その timestamp 自体を除外する。
+            oc_max = df[["Open", "Close"]].max(axis=1)
+            oc_min = df[["Open", "Close"]].min(axis=1)
+            ohlc_ok = (
+                (df["High"] >= oc_max)
+                & (df["Low"] <= oc_min)
+                & (df["High"] >= df["Low"])
+                & (df[required] > 0).all(axis=1)
+            ).to_numpy()
+            data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
+            df = df.loc[ohlc_ok].copy()
+            data_quality["input_rows"] = downloaded_rows - 1
+        else:
+            df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
         if interval == "4h":
             agg = {"Open":"first","High":"max","Low":"min","Close":"last"}
             if "Volume" in df: agg["Volume"] = "sum"
@@ -1029,7 +1103,27 @@ def load_and_process_data(ticker, period, interval, label=""):
             target[i] = label
         df["Target"] = target
         df = df.replace([np.inf, -np.inf], np.nan)
-        return df.dropna(subset=FEATURE_COLUMNS + ["Close", "ATR"])
+        result = df.dropna(subset=FEATURE_COLUMNS + ["Close", "ATR"])
+        if data_quality is not None:
+            # (4) 特徴量計算による除外と、ラベル判定段階の計上。
+            # ラベル判定段階は段階1では現行判定の記録のみ（ラベル定義・
+            # 8本窓の定義は変更しない）。App の現行ラベル計算は対象行に
+            # 必ずラベルを付けるため、不連続・その他の理由でラベルが
+            # 無効になる行は存在せず、末尾の未来窓不足の行だけが
+            # ラベルなしで残る。
+            data_quality["dropped_feature_nan"] = int(len(df) - len(result))
+            data_quality["feature_rows"] = int(len(result))
+            data_quality["dropped_label_discontinuous"] = 0
+            data_quality["dropped_label_insufficient_future"] = int(
+                result["Target"].isna().sum()
+            )
+            data_quality["dropped_label_other"] = 0
+            data_quality["trainable_rows"] = int(
+                data_quality["feature_rows"]
+                - data_quality["dropped_label_insufficient_future"]
+            )
+            result.attrs["data_quality"] = data_quality
+        return result
     except Exception:
         return None
 
@@ -1431,6 +1525,21 @@ def _render_main_area():
     last_bar_index = pd.Timestamp(data.index[-1])
     last_bar_jst = safe_to_tokyo_tz(data).index[-1].strftime("%Y-%m-%d %H:%M:%S")
     st.markdown(f'<div class="update-time">最終確定足の時刻: <b>{last_bar_jst} JST</b> (最新の未確定足は除外。取得時刻とは異なります)</div>', unsafe_allow_html=True)
+    # 段階1（016）: 1時間足の入力検証カウンタ（C-1）をデータ情報の近くに表示する。
+    _data_quality = data.attrs.get("data_quality") if hasattr(data, "attrs") else None
+    if _data_quality:
+        st.caption(
+            "データ品質（入力検証）: "
+            f"入力 {_data_quality['input_rows']}件 / "
+            f"除外 時刻不正 {_data_quality['dropped_invalid_timestamp']}件・"
+            f"欠損/非有限 {_data_quality['dropped_missing_or_nonfinite']}件・"
+            f"重複時刻 {_data_quality['dropped_duplicate_timestamp']}件・"
+            f"OHLC不整合 {_data_quality['dropped_invalid_ohlc']}件・"
+            f"特徴量不足 {_data_quality['dropped_feature_nan']}件 / "
+            f"特徴量行 {_data_quality['feature_rows']}件 / "
+            f"ラベルなし（未来窓不足） {_data_quality['dropped_label_insufficient_future']}件 / "
+            f"学習対象 {_data_quality['trainable_rows']}件"
+        )
     # Timeframe-aware freshness check. Yahoo timestamps can be delayed and are not Matsui live quotes.
     data_is_stale = False
     freshness_check_ok = False

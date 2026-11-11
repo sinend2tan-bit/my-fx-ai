@@ -57,7 +57,7 @@ FORWARD_PREDICTIONS_MAX = 200
 # 猶予。記録日時（recorded_at_jst、無ければ signal_bar_time）からの暦日。
 FORWARD_UNEVALUABLE_AFTER_DAYS = 14
 
-MODEL_VERSION = 19
+MODEL_VERSION = 20
 
 # 仮想検証用の追加コスト（実際の松井証券FXの約定・スワップ値ではありません）。
 # スリッページは往復合計の保守的な仮定。スワップは保有時間・方向・日々の値で変動するため、
@@ -1294,16 +1294,88 @@ def bars(ticker, interval="1h", period="60d"):
         raw["Volume"] = 0.0
 
     raw = raw[["Open", "High", "Low", "Close", "Volume"]].copy()
+
+    # 段階1（SYN-FX-016）: 1時間足のみ、入力検証と C-1 カウンタを適用する。
+    # 処理順序は承認済み修正仕様書の手順 (0)〜(4):
+    # (0) timestamp 不正 → (1) 欠損・非有限値 → (2) 重複 timestamp (keep="last")
+    # → (3) OHLC 整合性 → (4) 特徴量計算による除外。
+    # 各行は最初に該当した理由で一度だけ計上する。
+    # input_rows は、末尾の未確定足（従来処理で iloc[:-1] により分析対象から
+    # 外れる最新足）を除いた行数とする。未確定足の除外は鮮度のための既存処理
+    # であり、データ品質の除外理由ではないため C-1 には計上しない（この起点
+    # により、2つの検算式は常に成立する）。
+    data_quality = None
+    if interval == "1h":
+        data_quality = {
+            "input_rows": 0,
+            "dropped_invalid_timestamp": 0,
+            "dropped_missing_or_nonfinite": 0,
+            "dropped_duplicate_timestamp": 0,
+            "dropped_invalid_ohlc": 0,
+            "dropped_feature_nan": 0,
+            "feature_rows": 0,
+            "dropped_label_discontinuous": 0,
+            "dropped_label_insufficient_future": 0,
+            "dropped_label_other": 0,
+            "trainable_rows": 0,
+        }
+        # (0) timestamp の不正行を除外する。index が日時でない場合は時刻を
+        # 確定できないため、この足の処理を停止する。
+        if not isinstance(raw.index, pd.DatetimeIndex):
+            print(
+                f"[DATA ERROR] {ticker} {interval}: "
+                "index is not a DatetimeIndex; cannot establish timestamps"
+            )
+            return None
+        data_quality["input_rows"] = len(raw) - 1
+        valid_timestamp = raw.index.notna()
+        data_quality["dropped_invalid_timestamp"] = int((~valid_timestamp).sum())
+        raw = raw.loc[valid_timestamp].copy()
+
     raw = raw.apply(pd.to_numeric, errors="coerce")
-    raw = raw.dropna(subset=required)
-    raw = raw[~raw.index.duplicated(keep="last")].sort_index()
+    if data_quality is not None:
+        # (1) 欠損・非有限値の行を除外する。
+        rows_before = len(raw)
+        raw = raw.dropna(subset=required)
+        finite_ok = np.isfinite(raw[required].to_numpy(dtype=float)).all(axis=1)
+        raw = raw.loc[finite_ok].copy()
+        data_quality["dropped_missing_or_nonfinite"] = int(rows_before - len(raw))
+        # (2) 重複 timestamp を keep="last" で整理する。
+        rows_before = len(raw)
+        raw = raw[~raw.index.duplicated(keep="last")].sort_index()
+        data_quality["dropped_duplicate_timestamp"] = int(rows_before - len(raw))
+        # (3) OHLC 整合性を検証する。keep="last" で残った行が不正な場合は
+        # 古い重複行へ戻らず、その timestamp 自体を除外する。
+        oc_max = raw[["Open", "Close"]].max(axis=1)
+        oc_min = raw[["Open", "Close"]].min(axis=1)
+        ohlc_ok = (
+            (raw["High"] >= oc_max)
+            & (raw["Low"] <= oc_min)
+            & (raw["High"] >= raw["Low"])
+            & (raw[required] > 0).all(axis=1)
+        ).to_numpy()
+        data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
+        raw = raw.loc[ohlc_ok].copy()
+    else:
+        raw = raw.dropna(subset=required)
+        raw = raw[~raw.index.duplicated(keep="last")].sort_index()
 
     # timezone-aware timestamps are converted to UTC for a consistent internal index.
-    # Naive timestamps are not silently assigned a timezone; hourly freshness checks will hold them.
+    # Naive timestamps are never silently assigned a timezone. For non-4h
+    # intervals the timezone cannot be established from a naive index, so
+    # analysis/label processing is halted (stage 0 measured every 1d index as
+    # tz-naive). The 4h path keeps its existing behavior in the branch below
+    # (4h changes are stage 2 scope).
     if raw.index.tz is not None:
         raw.index = raw.index.tz_convert("UTC")
-    else:
+    elif interval == "4h":
         print(f"[TIMEZONE DIAGNOSTIC] {ticker} {interval}: index has no timezone; no implicit conversion")
+    else:
+        print(
+            f"[TIMEZONE STOP] {ticker} {interval}: index has no timezone; "
+            "analysis and label processing halted (no implicit UTC assumption)"
+        )
+        return None
 
     # 事前チェック（早期打ち切り用）。最終判定は加工後の本数で行う。
     # 1時間足・日足は末尾の未確定足を1本除外するため +1 本。
@@ -1372,6 +1444,7 @@ def bars(ticker, interval="1h", period="60d"):
         return None
 
      # ここで作る指標データは、最新の確定足を含む。
+    rows_before_features = len(raw) if data_quality is not None else None
     feature_df = add_indicators(raw)
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
@@ -1389,6 +1462,13 @@ def bars(ticker, interval="1h", period="60d"):
     feature_df = feature_df.dropna(
         subset=FEATURE_COLUMNS + ["ATR", "Close"]
     )
+
+    if data_quality is not None:
+        # (4) 特徴量計算による除外。
+        data_quality["dropped_feature_nan"] = int(
+            rows_before_features - len(feature_df)
+        )
+        data_quality["feature_rows"] = int(len(feature_df))
 
     if feature_df.empty:
         print(f"[FEATURE EMPTY] {ticker} {interval}")
@@ -1482,6 +1562,42 @@ def bars(ticker, interval="1h", period="60d"):
         )
         return None
 
+    if data_quality is not None:
+        # ラベル判定段階の計上（段階1では現行判定の記録のみ。ラベル定義・
+        # 8本窓の定義は変更しない）。現行コードに不連続を理由とするラベル
+        # 除外は存在しないため、B-2 の連続性規則を扱う段階3までは
+        # dropped_label_discontinuous は 0 である。
+        # - insufficient_future: ラベルループの対象にならなかった系列末尾の行。
+        # - other: ループ対象だが基準価格・ATR が無効でラベルが付かなかった行。
+        looped_rows = max(0, len(feature_df) - LOOKAHEAD_BARS)
+        data_quality["dropped_label_discontinuous"] = 0
+        data_quality["dropped_label_insufficient_future"] = int(
+            len(feature_df) - looped_rows
+        )
+        data_quality["dropped_label_other"] = int(
+            np.isnan(targets[:looped_rows]).sum()
+        )
+        data_quality["trainable_rows"] = int(len(training_df))
+        input_check = data_quality["input_rows"] - (
+            data_quality["dropped_invalid_timestamp"]
+            + data_quality["dropped_missing_or_nonfinite"]
+            + data_quality["dropped_duplicate_timestamp"]
+            + data_quality["dropped_invalid_ohlc"]
+            + data_quality["dropped_feature_nan"]
+        )
+        label_check = data_quality["feature_rows"] - (
+            data_quality["dropped_label_discontinuous"]
+            + data_quality["dropped_label_insufficient_future"]
+            + data_quality["dropped_label_other"]
+        )
+        if (
+            input_check != data_quality["feature_rows"]
+            or label_check != data_quality["trainable_rows"]
+        ):
+            print(
+                f"[DATA QUALITY WARNING] {ticker} {interval}: "
+                f"C-1 counter checksum mismatch: {data_quality}"
+            )
 
     training_df["Target"] = training_df["Target"].astype(int)
 
@@ -1490,6 +1606,8 @@ def bars(ticker, interval="1h", period="60d"):
     training_df.attrs["latest_index"] = latest_index
     training_df.attrs["latest_history"] = feature_df.tail(3).copy()
     training_df.attrs["latest_features"] = feature_df.copy()
+    if data_quality is not None:
+        training_df.attrs["data_quality"] = data_quality
 
 
     constant_features = [
@@ -2531,6 +2649,7 @@ def analyze_pair(name, config):
         "data_freshness_status": "unknown",
         "data_quality_status": "not_checked",
         "data_quality_reason": "",
+        "data_quality": None,
         "validation": {},
         "signal_bar_time": None,
         "atr": None,
@@ -2563,6 +2682,9 @@ def analyze_pair(name, config):
             result["reason"] = "1時間足データ不足または取得失敗"
             result["decision"] = "データ不足・保留"
             return result
+
+        # 段階1（016）: 1時間足の入力検証カウンタ（C-1）を status 記録へ渡す。
+        result["data_quality"] = hourly.attrs.get("data_quality")
 
         latest_data = hourly.attrs.get("latest_data")
         if latest_data is None or latest_data.empty:
@@ -3781,6 +3903,7 @@ def build_status_record(started_at, finished_at, pair_results, forward_summary,
             "data_freshness_status": item.get("data_freshness_status"),
             "data_age_minutes": item.get("data_age_minutes"),
             "data_quality_status": item.get("data_quality_status"),
+            "data_quality": item.get("data_quality"),
             "news_status": item.get("news_status"),
         })
 
@@ -4034,7 +4157,7 @@ def main():
         "schema_version": MODEL_VERSION,
         "scanner_version": f"v{MODEL_VERSION}",
         "last_run_jst": started_at,
-        "mode": "v19_entry_aligned_labels_cost_stress_probability_diagnostics_news_health_timezone_feature_diagnostics_data_quality_freshness_directional_pnl_walk_forward_no_auto_orders",
+        "mode": "v20_entry_aligned_labels_cost_stress_probability_diagnostics_news_health_timezone_feature_diagnostics_data_quality_freshness_directional_pnl_walk_forward_no_auto_orders",
         "interval": "1h",
         "data_freshness_policy": {
             "max_age_minutes": MAX_DATA_AGE_MINUTES,
