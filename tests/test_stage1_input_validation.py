@@ -29,6 +29,14 @@
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
   評価モデルが使われ、旧ファイルは上書きされない。新版（7）の保存済み
   モデルは従来どおり再利用される。
+- 追加レビュー対応（項目2）: 最終取得行が正常 / NaN / ±Inf / OHLC不正 /
+  重複 timestamp / NaT の6ケースについて、両実装のカウンタ計上を
+  特性テストとして固定する（現行挙動の記録。帰属のずれの分析と
+  処理順序の変更案は PR 本文に記載し、ChatGPT の確認待ち）。
+- 追加レビュー対応（項目1）: App の停止理由はキャッシュ対象のコアが
+  戻り値で返し、公開ラッパーがキャッシュの外側で記録・表示する。
+  停止理由の記録・区別・解除をここで確認し、キャッシュミス／ヒット
+  時の表示は tests/test_stage1_app_cache.py（AppTest）で確認する。
 """
 
 import ast
@@ -354,8 +362,16 @@ def _app_namespace(frame_factory):
         "FEATURE_COLUMNS": _app_literal("FEATURE_COLUMNS"),
         "DEFAULT_SPREAD_PIPS": _app_literal("DEFAULT_SPREAD_PIPS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
+        # 停止理由の記録はテストごとに新しい空のレジストリを使う。
+        "_LOAD_STOP_REASONS": {},
+        "_LOAD_STOP_WARNED": set(),
     }
-    for fname in ("flatten_yf_df", "load_and_process_data"):
+    for fname in (
+        "flatten_yf_df",
+        "_load_and_process_data_cached",
+        "get_load_stop_reason",
+        "load_and_process_data",
+    ):
         code = compile(
             ast.Module(body=[_extract_function(fname)], type_ignores=[]),
             "app_extract",
@@ -606,3 +622,232 @@ def test_app_current_version_model_reused(tmp_path, monkeypatch):
     # 新版（7）で鮮度内の保存済みモデルは従来どおり再利用され、
     # ファイルは書き換わらない（再利用の仕組み自体は壊していない）。
     assert path.read_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# 追加レビュー対応（項目2）: 最終取得行の6ケースの特性テスト
+#
+# 現行実装の実測挙動をそのまま固定する特性テスト（仕様変更の実装ではない）。
+# 現行実装は品質検証 (0)〜(3) をダウンロード全行に対して行い、その後に
+# 最新の残存行を iloc[:-1] で鮮度除外する。input_rows はダウンロード
+# 行数 − 1（鮮度除外ぶんの固定の控除）。
+# - 最終行が正常な場合と、最終行が重複 timestamp の場合は、控除と
+#   鮮度除外の対応が一致し、検算は意味的にも成立する。
+# - 最終行が NaN / ±Inf / OHLC不正 / NaT の場合は、その行が品質側の
+#   カウンタに計上され、鮮度除外は別の（有効な）最新確定足に移る。
+#   その確定足はどのカウンタにも計上されない。検算式は件数の相殺で
+#   成立するが、行単位の帰属は入れ替わっている（2026-11-12 実測）。
+# この帰属のずれを解消する処理順序の変更案は PR 本文に提案として記載し、
+# ChatGPT の確認待ちとする（本テストは現行挙動の記録である）。
+# ---------------------------------------------------------------------------
+
+def _last_row_case_frames():
+    cases = {}
+    cases["normal"] = make_frame()
+
+    f = make_frame()
+    f.iloc[-1, f.columns.get_loc("Close")] = np.nan
+    cases["nan"] = f
+
+    f = make_frame()
+    f.iloc[-1, f.columns.get_loc("High")] = np.inf
+    cases["inf"] = f
+
+    f = make_frame()
+    f.iloc[-1, f.columns.get_loc("High")] = f.iloc[-1]["Low"] - 0.5
+    cases["ohlc_invalid"] = f
+
+    f = make_frame()
+    dup = f.iloc[[-1]].copy()
+    cl = dup.columns.get_loc("Close")
+    hi = dup.columns.get_loc("High")
+    dup.iloc[0, cl] = float(dup.iloc[0]["Close"]) + 0.03
+    dup.iloc[0, hi] = max(float(dup.iloc[0]["High"]), float(dup.iloc[0]["Close"]))
+    cases["duplicate"] = pd.concat([f, dup])
+
+    f = make_frame()
+    nat_row = f.iloc[[10]].copy()
+    nat_row.index = pd.DatetimeIndex([pd.NaT])
+    cases["nat"] = pd.concat([f, nat_row])
+    return cases
+
+
+def _assert_counter_profile(dq, expected):
+    for key, value in expected.items():
+        assert dq[key] == value, f"{key}: expected {value}, got {dq[key]}"
+    assert dq["dropped_label_discontinuous"] == 0
+    assert dq["dropped_label_other"] == 0
+    assert dq["dropped_label_insufficient_future"] == 8
+    assert_checksums(dq)
+
+
+# Scanner: 特徴量除外 19 件（指標の立ち上がり）を前提とした実測値。
+_SCANNER_LAST_ROW_EXPECTED = {
+    "normal": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+               "dropped_missing_or_nonfinite": 0, "dropped_duplicate_timestamp": 0,
+               "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
+               "feature_rows": 480, "trainable_rows": 472},
+    "nan": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+            "dropped_missing_or_nonfinite": 1, "dropped_duplicate_timestamp": 0,
+            "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
+            "feature_rows": 479, "trainable_rows": 471},
+    "inf": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+            "dropped_missing_or_nonfinite": 1, "dropped_duplicate_timestamp": 0,
+            "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
+            "feature_rows": 479, "trainable_rows": 471},
+    "ohlc_invalid": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+                     "dropped_missing_or_nonfinite": 0,
+                     "dropped_duplicate_timestamp": 0, "dropped_invalid_ohlc": 1,
+                     "dropped_feature_nan": 19, "feature_rows": 479,
+                     "trainable_rows": 471},
+    "duplicate": {"input_rows": 500, "dropped_invalid_timestamp": 0,
+                  "dropped_missing_or_nonfinite": 0,
+                  "dropped_duplicate_timestamp": 1, "dropped_invalid_ohlc": 0,
+                  "dropped_feature_nan": 19, "feature_rows": 480,
+                  "trainable_rows": 472},
+    "nat": {"input_rows": 500, "dropped_invalid_timestamp": 1,
+            "dropped_missing_or_nonfinite": 0, "dropped_duplicate_timestamp": 0,
+            "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
+            "feature_rows": 480, "trainable_rows": 472},
+}
+
+# App: 特徴量除外 15 件（17特徴量の立ち上がり）を前提とした実測値。
+_APP_LAST_ROW_EXPECTED = {
+    case: {
+        **profile,
+        "dropped_feature_nan": 15,
+        "feature_rows": profile["feature_rows"] + 4,
+        "trainable_rows": profile["trainable_rows"] + 4,
+    }
+    for case, profile in _SCANNER_LAST_ROW_EXPECTED.items()
+}
+
+
+def _check_scanner_last_row_case(monkeypatch, case):
+    frame = _last_row_case_frames()[case]
+    stub_scanner_download(monkeypatch, frame)
+    out = scanner.bars("USDJPY=X", interval="1h", period="180d")
+    assert out is not None
+    dq = out.attrs["data_quality"]
+    _assert_counter_profile(dq, _SCANNER_LAST_ROW_EXPECTED[case])
+    assert dq["trainable_rows"] == len(out)
+
+
+def _check_app_last_row_case(case):
+    frame = _last_row_case_frames()[case]
+    ns, st = _app_namespace(lambda: frame.copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "60d", "1h")
+    assert out is not None
+    assert st.warnings == []
+    _assert_counter_profile(out.attrs["data_quality"], _APP_LAST_ROW_EXPECTED[case])
+
+
+def test_scanner_last_row_normal(monkeypatch):
+    _check_scanner_last_row_case(monkeypatch, "normal")
+
+
+def test_scanner_last_row_nan(monkeypatch):
+    _check_scanner_last_row_case(monkeypatch, "nan")
+
+
+def test_scanner_last_row_inf(monkeypatch):
+    _check_scanner_last_row_case(monkeypatch, "inf")
+
+
+def test_scanner_last_row_ohlc_invalid(monkeypatch):
+    _check_scanner_last_row_case(monkeypatch, "ohlc_invalid")
+
+
+def test_scanner_last_row_duplicate(monkeypatch):
+    _check_scanner_last_row_case(monkeypatch, "duplicate")
+
+
+def test_scanner_last_row_nat(monkeypatch):
+    _check_scanner_last_row_case(monkeypatch, "nat")
+
+
+def test_app_last_row_normal():
+    _check_app_last_row_case("normal")
+
+
+def test_app_last_row_nan():
+    _check_app_last_row_case("nan")
+
+
+def test_app_last_row_inf():
+    _check_app_last_row_case("inf")
+
+
+def test_app_last_row_ohlc_invalid():
+    _check_app_last_row_case("ohlc_invalid")
+
+
+def test_app_last_row_duplicate():
+    _check_app_last_row_case("duplicate")
+
+
+def test_app_last_row_nat():
+    _check_app_last_row_case("nat")
+
+
+# ---------------------------------------------------------------------------
+# 追加レビュー対応（項目1）: 停止理由の記録とキャッシュ外表示（単体）
+#
+# キャッシュ対象のコアは停止理由を戻り値で返し、公開ラッパーが
+# キャッシュの外側で記録・表示する。キャッシュヒット時の表示の実測は
+# tests/test_stage1_app_cache.py（AppTest）側で行う。ここでは抽出により
+# 次を確認する: 停止理由が理由コード付きで記録されること、取得失敗では
+# 記録も警告も出ないこと（停止との区別）、成功時に記録が消えること、
+# 同一描画内では同じ理由の警告が重複表示されないこと。
+# ---------------------------------------------------------------------------
+
+def test_app_stop_reason_recorded_for_tz_naive_daily():
+    frame = make_frame()
+    frame.index = frame.index.tz_localize(None)
+    ns, st = _app_namespace(lambda: frame.copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    assert out is None
+    reason = ns["get_load_stop_reason"]("USDJPY=X", "1d")
+    assert reason is not None
+    assert reason["code"] == "tz_unavailable"
+    assert any("タイムゾーン" in w and "停止" in w for w in st.warnings)
+    # 同じ呼び出しを繰り返しても、警告は同一描画内で1回だけ。
+    out2 = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    assert out2 is None
+    assert len(st.warnings) == 1
+
+
+def test_app_stop_reason_recorded_for_bad_index():
+    frame = make_frame()
+    frame.index = pd.RangeIndex(len(frame))
+    ns, st = _app_namespace(lambda: frame.copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "60d", "1h")
+    assert out is None
+    reason = ns["get_load_stop_reason"]("USDJPY=X", "1h")
+    assert reason is not None
+    assert reason["code"] == "timestamp_format_unconfirmed"
+    assert any("時刻形式" in w and "停止" in w for w in st.warnings)
+
+
+def test_app_download_failure_has_no_stop_reason():
+    ns, st = _app_namespace(lambda: pd.DataFrame())
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    assert out is None
+    # 取得失敗は停止ではない: 理由は記録されず、警告も出ない。
+    assert ns["get_load_stop_reason"]("USDJPY=X", "1d") is None
+    assert st.warnings == []
+
+
+def test_app_stop_reason_cleared_on_success():
+    naive = make_frame()
+    naive.index = naive.index.tz_localize(None)
+    aware = make_frame()
+    frames = [naive, aware]
+    ns, st = _app_namespace(lambda: frames.pop(0).copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    assert out is None
+    assert ns["get_load_stop_reason"]("USDJPY=X", "1d") is not None
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    assert out is not None
+    assert ns["get_load_stop_reason"]("USDJPY=X", "1d") is None
+    assert len(st.warnings) == 1

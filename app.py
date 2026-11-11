@@ -929,9 +929,39 @@ def summarize_news_risk(items):
     }
 
 
+# 段階1（016）追加レビュー対応: データ取得の停止理由の記録。
+# キャッシュ対象のコア処理（_load_and_process_data_cached）は停止理由を
+# 戻り値で返し、警告表示はキャッシュの外側の load_and_process_data() が
+# 行う。Streamlit の要素リプレイ（キャッシュヒット時にキャッシュ内要素が
+# 再生される仕様）に依存せず、ヒット時にも毎回確実に表示するため。
+# _LOAD_STOP_REASONS は (ticker, interval) -> {"code", "message"} の記録で、
+# データ取得失敗・データ不足では記録されないため、停止と区別できる。
+# スクリプトは再実行のたびに読み直されるため、この記録は1回の画面描画の
+# 中でのみ有効（永続化はしない）。
+_LOAD_STOP_REASONS = {}
+_LOAD_STOP_WARNED = set()
+
+
+def get_load_stop_reason(ticker, interval):
+    """直近の load_and_process_data() で記録された停止理由を返す。
+
+    停止していない場合（正常に取得できた場合・取得失敗・データ不足の
+    場合）は None。停止理由がある場合のみ辞書を返すため、呼び出し側で
+    「時刻情報を確認できないための停止」と「単なるデータ不足」を
+    区別できる。
+    """
+    return _LOAD_STOP_REASONS.get((ticker, interval))
+
+
 # Price data is cached for 60 seconds. This is data freshness, not a UI auto-refresh timer.
 @st.cache_data(ttl=60, show_spinner=False)
-def load_and_process_data(ticker, period, interval, label=""):
+def _load_and_process_data_cached(ticker, period, interval, label=""):
+    """load_and_process_data() の実処理（キャッシュ対象）。
+
+    戻り値は (DataFrame | None, 停止理由 | None) のタプル。停止理由は
+    {"code", "message"} の辞書で、表示はキャッシュの外側のラッパーが
+    行う（この関数内では st.warning を呼ばない）。
+    """
     try:
         actual_interval = "1h" if interval == "4h" else interval
         df = yf.download(ticker, period=period, interval=actual_interval, auto_adjust=False,
@@ -939,7 +969,7 @@ def load_and_process_data(ticker, period, interval, label=""):
         df = flatten_yf_df(df)
         required = ["Open", "High", "Low", "Close"]
         if df.empty or not set(required).issubset(df.columns):
-            return None
+            return None, None
         df = df[required + (["Volume"] if "Volume" in df.columns else [])].copy()
         data_quality = None
         if interval in ("1h", "1d"):
@@ -972,8 +1002,10 @@ def load_and_process_data(ticker, period, interval, label=""):
             # (0) timestamp の不正行を除外する。index が日時でない場合は
             # 時刻を確定できないため処理を停止する。
             if not isinstance(df.index, pd.DatetimeIndex):
-                st.warning("価格データの時刻形式を確認できないため、分析を停止しました。")
-                return None
+                return None, {
+                    "code": "timestamp_format_unconfirmed",
+                    "message": "価格データの時刻形式を確認できないため、分析を停止しました。",
+                }
             downloaded_rows = len(df)
             valid_timestamp = df.index.notna()
             data_quality["dropped_invalid_timestamp"] = int((~valid_timestamp).sum())
@@ -984,11 +1016,13 @@ def load_and_process_data(ticker, period, interval, label=""):
             # できない場合は処理を停止し、理由を表示する（UTC と推定して
             # 処理を続けることはしない）。
             if df.index.tz is None:
-                st.warning(
-                    "価格データの時刻にタイムゾーン情報がないため、分析を停止しました。"
-                    "UTCと推定して処理することはありません。配信元の時刻仕様を確認してください。"
-                )
-                return None
+                return None, {
+                    "code": "tz_unavailable",
+                    "message": (
+                        "価格データの時刻にタイムゾーン情報がないため、分析を停止しました。"
+                        "UTCと推定して処理することはありません。配信元の時刻仕様を確認してください。"
+                    ),
+                }
             df.index = df.index.tz_convert("UTC")
             # (1) 欠損・非有限値の行を除外する。
             df = df.apply(pd.to_numeric, errors="coerce")
@@ -1024,7 +1058,7 @@ def load_and_process_data(ticker, period, interval, label=""):
         if len(df) > 2:
             df = df.iloc[:-1]
         if len(df) < 80:
-            return None
+            return None, None
         close, high, low, opn = df["Close"], df["High"], df["Low"], df["Open"]
         df["SMA_20"] = close.rolling(20, min_periods=10).mean()
         df["EMA_20"] = close.ewm(span=20, adjust=False).mean()
@@ -1123,9 +1157,33 @@ def load_and_process_data(ticker, period, interval, label=""):
                 - data_quality["dropped_label_insufficient_future"]
             )
             result.attrs["data_quality"] = data_quality
-        return result
+        return result, None
     except Exception:
-        return None
+        return None, None
+
+
+def load_and_process_data(ticker, period, interval, label=""):
+    """価格データの取得・加工（公開関数）。
+
+    戻り値は従来どおり DataFrame か None（呼び出し側との契約は不変）。
+    実処理は _load_and_process_data_cached()（キャッシュ対象）が行い、
+    停止理由の記録と警告表示はここ（キャッシュの外側）で行うため、
+    キャッシュヒット時にも停止理由が毎回表示される。同一の画面描画の
+    中で同じ時間足・同じ理由の警告は1回だけ表示する。
+    """
+    result, stop_reason = _load_and_process_data_cached(
+        ticker, period, interval, label
+    )
+    key = (ticker, interval)
+    if stop_reason is not None:
+        _LOAD_STOP_REASONS[key] = stop_reason
+        warn_key = (interval, stop_reason.get("code"))
+        if warn_key not in _LOAD_STOP_WARNED:
+            _LOAD_STOP_WARNED.add(warn_key)
+            st.warning(stop_reason["message"])
+    else:
+        _LOAD_STOP_REASONS.pop(key, None)
+    return result
 
 
 def send_webhook_alert(url, message):
@@ -1628,6 +1686,8 @@ def _render_main_area():
             _against = [name for name, sign in _required_signs if sign != _direction]
             status = "WAIT（AIと時間足が不一致）"
             mtf_gate_reason = "AI判定と時間足の方向が一致しません（" + "・".join(_against) + "）。無理に方向を決めず、判定を保留しました。"
+    if mtf_gate_reason and data_htf is None and get_load_stop_reason(ticker, "1d"):
+        mtf_gate_reason += "なお、日足データは時刻情報を確認できないため停止中です（タイムゾーン未確認）。"
     # Save the final gated decision only when the selected price series passed freshness checks.
     # Stale/unknown timestamps must not create apparently actionable forecast records.
     if not data_is_stale and freshness_check_ok:
@@ -1859,7 +1919,17 @@ def _render_main_area():
                 scan_1h = scan_data if scan_config["interval"] == "1h" else load_and_process_data(pair_ticker, "60d", "1h", "1時間足")
                 scan_daily = load_and_process_data(pair_ticker, "2y", "1d", "日足")
                 if scan_data is None or scan_data.empty or scan_4h is None or scan_1h is None or scan_daily is None:
-                    scan_results.append({"通貨ペア": pair_label, "順位": "—", "判定": "判定保留", "AI方向": "—", "時間足一致": "確認不可", "買い確率": "—", "売り確率": "—", "価格": "—", "損切り目安": "—", "利確目安": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": "必要な時間足データが不足しています"})
+                    _daily_stop = (
+                        get_load_stop_reason(pair_ticker, "1d")
+                        if scan_daily is None
+                        else None
+                    )
+                    _scan_hold_reason = (
+                        "日足データは時刻情報を確認できないため停止中です（タイムゾーン未確認）。他の時間足を含め判定を保留しています"
+                        if _daily_stop
+                        else "必要な時間足データが不足しています"
+                    )
+                    scan_results.append({"通貨ペア": pair_label, "順位": "—", "判定": "判定保留", "AI方向": "—", "時間足一致": "確認不可", "買い確率": "—", "売り確率": "—", "価格": "—", "損切り目安": "—", "利確目安": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": _scan_hold_reason})
                 else:
                     result = analyze_signal_with_backtest(scan_data, scan_daily, pair_ticker, scan_config["interval"])
                     sig, confidence, test_n, accuracy, market_type, probs, importances, history = result
