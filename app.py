@@ -88,7 +88,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 6
+MODEL_VERSION = 7
 
 st.markdown("""
 <style>
@@ -929,9 +929,39 @@ def summarize_news_risk(items):
     }
 
 
+# 段階1（016）追加レビュー対応: データ取得の停止理由の記録。
+# キャッシュ対象のコア処理（_load_and_process_data_cached）は停止理由を
+# 戻り値で返し、警告表示はキャッシュの外側の load_and_process_data() が
+# 行う。Streamlit の要素リプレイ（キャッシュヒット時にキャッシュ内要素が
+# 再生される仕様）に依存せず、ヒット時にも毎回確実に表示するため。
+# _LOAD_STOP_REASONS は (ticker, interval) -> {"code", "message"} の記録で、
+# データ取得失敗・データ不足では記録されないため、停止と区別できる。
+# スクリプトは再実行のたびに読み直されるため、この記録は1回の画面描画の
+# 中でのみ有効（永続化はしない）。
+_LOAD_STOP_REASONS = {}
+_LOAD_STOP_WARNED = set()
+
+
+def get_load_stop_reason(ticker, interval):
+    """直近の load_and_process_data() で記録された停止理由を返す。
+
+    停止していない場合（正常に取得できた場合・取得失敗・データ不足の
+    場合）は None。停止理由がある場合のみ辞書を返すため、呼び出し側で
+    「時刻情報を確認できないための停止」と「単なるデータ不足」を
+    区別できる。
+    """
+    return _LOAD_STOP_REASONS.get((ticker, interval))
+
+
 # Price data is cached for 60 seconds. This is data freshness, not a UI auto-refresh timer.
 @st.cache_data(ttl=60, show_spinner=False)
-def load_and_process_data(ticker, period, interval, label=""):
+def _load_and_process_data_cached(ticker, period, interval, label=""):
+    """load_and_process_data() の実処理（キャッシュ対象）。
+
+    戻り値は (DataFrame | None, 停止理由 | None) のタプル。停止理由は
+    {"code", "message"} の辞書で、表示はキャッシュの外側のラッパーが
+    行う（この関数内では st.warning を呼ばない）。
+    """
     try:
         actual_interval = "1h" if interval == "4h" else interval
         df = yf.download(ticker, period=period, interval=actual_interval, auto_adjust=False,
@@ -939,18 +969,127 @@ def load_and_process_data(ticker, period, interval, label=""):
         df = flatten_yf_df(df)
         required = ["Open", "High", "Low", "Close"]
         if df.empty or not set(required).issubset(df.columns):
-            return None
+            return None, None
         df = df[required + (["Volume"] if "Volume" in df.columns else [])].copy()
-        df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
+        data_quality = None
+        # タイムゾーン安全停止の理由（1h・1d 共通）: 本番環境の
+        # yfinance の版が未確認であることを前提に、実行時に index の
+        # 型とタイムゾーンを検査する。タイムゾーンを確定できない場合は
+        # 処理を停止し、理由を表示する（UTC と推定して処理を続ける
+        # ことはしない）。
+        tz_unavailable_reason = {
+            "code": "tz_unavailable",
+            "message": (
+                "価格データの時刻にタイムゾーン情報がないため、分析を停止しました。"
+                "UTCと推定して処理することはありません。配信元の時刻仕様を確認してください。"
+            ),
+        }
+        if interval == "1h":
+            # 段階1（SYN-FX-016）: 入力検証・C-1 カウンタは1時間足
+            # だけに適用する（日足は適用範囲外。下記の elif を参照）。
+            # 処理順序は、ChatGPT 決定（案A）により鮮度除外を品質検証
+            # の前に置く: DatetimeIndex の確認 → タイムゾーンの確認
+            # （tz-aware は UTC へ正規化、tz-naive は停止）→ 有効
+            # timestamp の最大値（最新 timestamp）群の鮮度除外 →
+            # input_rows の確定 → (0) timestamp 不正 → (1) 欠損・非有限値
+            # → (2) 重複 timestamp (keep="last") → (3) OHLC 整合性
+            # → (4) 特徴量計算による除外。NaT 行は鮮度除外に含めず、
+            # (0) で dropped_invalid_timestamp として計上する。
+            # input_rows は、最新 timestamp 群の鮮度除外後に品質検証
+            # パイプラインへ入る行数とする。鮮度除外はデータ品質の
+            # 除外理由ではないため C-1 の品質カウンタには計上しない。
+            # 各行は最初に該当した理由で一度だけ計上する。
+            data_quality = {
+                "input_rows": 0,
+                "dropped_invalid_timestamp": 0,
+                "dropped_missing_or_nonfinite": 0,
+                "dropped_duplicate_timestamp": 0,
+                "dropped_invalid_ohlc": 0,
+                "dropped_feature_nan": 0,
+                "feature_rows": 0,
+                "dropped_label_discontinuous": 0,
+                "dropped_label_insufficient_future": 0,
+                "dropped_label_other": 0,
+                "trainable_rows": 0,
+            }
+            # index が日時でない場合は時刻を確定できないため処理を停止する。
+            if not isinstance(df.index, pd.DatetimeIndex):
+                return None, {
+                    "code": "timestamp_format_unconfirmed",
+                    "message": "価格データの時刻形式を確認できないため、分析を停止しました。",
+                }
+            if df.index.tz is None:
+                return None, tz_unavailable_reason
+            df.index = df.index.tz_convert("UTC")
+            # 鮮度除外: 有効 timestamp の最大値（最新 timestamp）に
+            # 属する行をすべて除外する（未確定の最新足。複数行ある
+            # 場合はその群全体）。NaT 行はここでは除外せず、次の
+            # (0) で計上する。
+            valid_timestamp = df.index.notna()
+            if valid_timestamp.any():
+                latest_timestamp = df.index[valid_timestamp].max()
+                freshness_rows = valid_timestamp & (df.index == latest_timestamp)
+                df = df.loc[~freshness_rows].copy()
+            # input_rows は、鮮度除外後に品質検証パイプラインへ
+            # 入る行数（NaT 行を含む）。
+            data_quality["input_rows"] = len(df)
+            # (0) timestamp の不正行（NaT）を除外する。
+            valid_timestamp = df.index.notna()
+            data_quality["dropped_invalid_timestamp"] = int((~valid_timestamp).sum())
+            df = df.loc[valid_timestamp].copy()
+            # (1) 欠損・非有限値の行を除外する。
+            df = df.apply(pd.to_numeric, errors="coerce")
+            rows_before = len(df)
+            df = df.dropna(subset=required)
+            finite_ok = np.isfinite(df[required].to_numpy(dtype=float)).all(axis=1)
+            df = df.loc[finite_ok].copy()
+            data_quality["dropped_missing_or_nonfinite"] = int(rows_before - len(df))
+            # (2) 重複 timestamp を keep="last" で整理する。
+            rows_before = len(df)
+            df = df[~df.index.duplicated(keep="last")].sort_index()
+            data_quality["dropped_duplicate_timestamp"] = int(rows_before - len(df))
+            # (3) OHLC 整合性を検証する。keep="last" で残った行が不正な
+            # 場合は古い重複行へ戻らず、その timestamp 自体を除外する。
+            oc_max = df[["Open", "Close"]].max(axis=1)
+            oc_min = df[["Open", "Close"]].min(axis=1)
+            ohlc_ok = (
+                (df["High"] >= oc_max)
+                & (df["Low"] <= oc_min)
+                & (df["High"] >= df["Low"])
+                & (df[required] > 0).all(axis=1)
+            ).to_numpy()
+            data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
+            df = df.loc[ohlc_ok].copy()
+        elif interval == "1d":
+            # 日足は段階1の適用範囲外（ChatGPT 再レビューによる適用
+            # 範囲の是正）: 入力検証・C-1 カウンタ・data_quality は
+            # 適用せず、従来（base）の処理順序・データ加工に戻す。
+            # ここで維持するのはタイムゾーン安全停止仕様のみで、
+            # DatetimeIndex でない場合と tz-naive の場合は停止し、
+            # 理由を返す（日足は段階0で全ペア tz-naive と確認されて
+            # おり、根拠が得られるまで停止対象）。tz-aware の日足は
+            # tz 変換も含めて従来経路で処理する。
+            if not isinstance(df.index, pd.DatetimeIndex):
+                return None, {
+                    "code": "timestamp_format_unconfirmed",
+                    "message": "価格データの時刻形式を確認できないため、分析を停止しました。",
+                }
+            if df.index.tz is None:
+                return None, tz_unavailable_reason
+            df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
+        else:
+            df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
         if interval == "4h":
             agg = {"Open":"first","High":"max","Low":"min","Close":"last"}
             if "Volume" in df: agg["Volume"] = "sum"
             df = df.resample("4h").agg(agg).dropna(subset=required)
         # Discard the newest bar because it may still be forming.
-        if len(df) > 2:
+        # 1時間足は品質検証の前で最新 timestamp 群を鮮度除外済みのため、
+        # ここでは除外しない（案A）。その他の時間足は従来どおり。
+        if interval != "1h" and len(df) > 2:
             df = df.iloc[:-1]
         if len(df) < 80:
-            return None
+            return None, None
         close, high, low, opn = df["Close"], df["High"], df["Low"], df["Open"]
         df["SMA_20"] = close.rolling(20, min_periods=10).mean()
         df["EMA_20"] = close.ewm(span=20, adjust=False).mean()
@@ -1029,9 +1168,53 @@ def load_and_process_data(ticker, period, interval, label=""):
             target[i] = label
         df["Target"] = target
         df = df.replace([np.inf, -np.inf], np.nan)
-        return df.dropna(subset=FEATURE_COLUMNS + ["Close", "ATR"])
+        result = df.dropna(subset=FEATURE_COLUMNS + ["Close", "ATR"])
+        if data_quality is not None:
+            # (4) 特徴量計算による除外と、ラベル判定段階の計上。
+            # ラベル判定段階は段階1では現行判定の記録のみ（ラベル定義・
+            # 8本窓の定義は変更しない）。App の現行ラベル計算は対象行に
+            # 必ずラベルを付けるため、不連続・その他の理由でラベルが
+            # 無効になる行は存在せず、末尾の未来窓不足の行だけが
+            # ラベルなしで残る。
+            data_quality["dropped_feature_nan"] = int(len(df) - len(result))
+            data_quality["feature_rows"] = int(len(result))
+            data_quality["dropped_label_discontinuous"] = 0
+            data_quality["dropped_label_insufficient_future"] = int(
+                result["Target"].isna().sum()
+            )
+            data_quality["dropped_label_other"] = 0
+            data_quality["trainable_rows"] = int(
+                data_quality["feature_rows"]
+                - data_quality["dropped_label_insufficient_future"]
+            )
+            result.attrs["data_quality"] = data_quality
+        return result, None
     except Exception:
-        return None
+        return None, None
+
+
+def load_and_process_data(ticker, period, interval, label=""):
+    """価格データの取得・加工（公開関数）。
+
+    戻り値は従来どおり DataFrame か None（呼び出し側との契約は不変）。
+    実処理は _load_and_process_data_cached()（キャッシュ対象）が行い、
+    停止理由の記録と警告表示はここ（キャッシュの外側）で行うため、
+    キャッシュヒット時にも停止理由が毎回表示される。同一の画面描画の
+    中で同じ時間足・同じ理由の警告は1回だけ表示する。
+    """
+    result, stop_reason = _load_and_process_data_cached(
+        ticker, period, interval, label
+    )
+    key = (ticker, interval)
+    if stop_reason is not None:
+        _LOAD_STOP_REASONS[key] = stop_reason
+        warn_key = (interval, stop_reason.get("code"))
+        if warn_key not in _LOAD_STOP_WARNED:
+            _LOAD_STOP_WARNED.add(warn_key)
+            st.warning(stop_reason["message"])
+    else:
+        _LOAD_STOP_REASONS.pop(key, None)
+    return result
 
 
 def send_webhook_alert(url, message):
@@ -1431,6 +1614,21 @@ def _render_main_area():
     last_bar_index = pd.Timestamp(data.index[-1])
     last_bar_jst = safe_to_tokyo_tz(data).index[-1].strftime("%Y-%m-%d %H:%M:%S")
     st.markdown(f'<div class="update-time">最終確定足の時刻: <b>{last_bar_jst} JST</b> (最新の未確定足は除外。取得時刻とは異なります)</div>', unsafe_allow_html=True)
+    # 段階1（016）: 1時間足の入力検証カウンタ（C-1）をデータ情報の近くに表示する。
+    _data_quality = data.attrs.get("data_quality") if hasattr(data, "attrs") else None
+    if _data_quality:
+        st.caption(
+            "データ品質（入力検証）: "
+            f"入力 {_data_quality['input_rows']}件 / "
+            f"除外 時刻不正 {_data_quality['dropped_invalid_timestamp']}件・"
+            f"欠損/非有限 {_data_quality['dropped_missing_or_nonfinite']}件・"
+            f"重複時刻 {_data_quality['dropped_duplicate_timestamp']}件・"
+            f"OHLC不整合 {_data_quality['dropped_invalid_ohlc']}件・"
+            f"特徴量不足 {_data_quality['dropped_feature_nan']}件 / "
+            f"特徴量行 {_data_quality['feature_rows']}件 / "
+            f"ラベルなし（未来窓不足） {_data_quality['dropped_label_insufficient_future']}件 / "
+            f"学習対象 {_data_quality['trainable_rows']}件"
+        )
     # Timeframe-aware freshness check. Yahoo timestamps can be delayed and are not Matsui live quotes.
     data_is_stale = False
     freshness_check_ok = False
@@ -1519,6 +1717,8 @@ def _render_main_area():
             _against = [name for name, sign in _required_signs if sign != _direction]
             status = "WAIT（AIと時間足が不一致）"
             mtf_gate_reason = "AI判定と時間足の方向が一致しません（" + "・".join(_against) + "）。無理に方向を決めず、判定を保留しました。"
+    if mtf_gate_reason and data_htf is None and get_load_stop_reason(ticker, "1d"):
+        mtf_gate_reason += "なお、日足データは時刻情報を確認できないため停止中です（タイムゾーン未確認）。"
     # Save the final gated decision only when the selected price series passed freshness checks.
     # Stale/unknown timestamps must not create apparently actionable forecast records.
     if not data_is_stale and freshness_check_ok:
@@ -1750,7 +1950,17 @@ def _render_main_area():
                 scan_1h = scan_data if scan_config["interval"] == "1h" else load_and_process_data(pair_ticker, "60d", "1h", "1時間足")
                 scan_daily = load_and_process_data(pair_ticker, "2y", "1d", "日足")
                 if scan_data is None or scan_data.empty or scan_4h is None or scan_1h is None or scan_daily is None:
-                    scan_results.append({"通貨ペア": pair_label, "順位": "—", "判定": "判定保留", "AI方向": "—", "時間足一致": "確認不可", "買い確率": "—", "売り確率": "—", "価格": "—", "損切り目安": "—", "利確目安": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": "必要な時間足データが不足しています"})
+                    _daily_stop = (
+                        get_load_stop_reason(pair_ticker, "1d")
+                        if scan_daily is None
+                        else None
+                    )
+                    _scan_hold_reason = (
+                        "日足データは時刻情報を確認できないため停止中です（タイムゾーン未確認）。他の時間足を含め判定を保留しています"
+                        if _daily_stop
+                        else "必要な時間足データが不足しています"
+                    )
+                    scan_results.append({"通貨ペア": pair_label, "順位": "—", "判定": "判定保留", "AI方向": "—", "時間足一致": "確認不可", "買い確率": "—", "売り確率": "—", "価格": "—", "損切り目安": "—", "利確目安": "—", "スプレッド目安(pips)": DEFAULT_SPREAD_PIPS.get(pair_ticker, 0.5), "理由": _scan_hold_reason})
                 else:
                     result = analyze_signal_with_backtest(scan_data, scan_daily, pair_ticker, scan_config["interval"])
                     sig, confidence, test_n, accuracy, market_type, probs, importances, history = result
