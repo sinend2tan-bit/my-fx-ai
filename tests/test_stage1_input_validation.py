@@ -43,6 +43,12 @@
   戻り値で返し、公開ラッパーがキャッシュの外側で記録・表示する。
   停止理由の記録・区別・解除をここで確認し、キャッシュミス／ヒット
   時の表示は tests/test_stage1_app_cache.py（AppTest）で確認する。
+- 再レビュー対応（適用範囲の是正）: 段階1の品質検証・C-1 カウンタは
+  App の1時間足だけに限定する。日足は、DatetimeIndex でない場合と
+  tz-naive の場合の安全停止だけを維持し、tz-aware の場合は従来
+  （base）経路で処理されること（重複・OHLC 不正行が残り、
+  data_quality が付かないこと、段階1で無変更の従来経路と出力が
+  一致すること）を確認する。
 """
 
 import ast
@@ -491,6 +497,75 @@ def test_app_4h_legacy_path_unchanged():
     assert out is not None
     assert "data_quality" not in out.attrs
     assert st.warnings == []
+
+
+def test_app_daily_legacy_path_keeps_dirty_rows():
+    # 日足は段階1の適用範囲外（再レビューで是正）: tz-aware の日足は
+    # 従来（base）経路で処理され、重複 timestamp の整理・OHLC 整合性
+    # 検証・カウンタ計上は行われない。欠損行だけは従来の dropna で
+    # 落ち、末尾の未確定足は従来どおり iloc[:-1] で落ちる。
+    frame = make_frame(n=500, tz="UTC", start="2024-06-03", freq="1d")
+    cl, hi = (frame.columns.get_loc(c) for c in ("Close", "High"))
+    nan_ts = frame.index[100]
+    frame.iloc[100, cl] = np.nan  # 欠損行
+    ohlc_ts = frame.index[200]
+    frame.iloc[200, hi] = frame.iloc[200]["Low"] - 0.5  # OHLC 不正（High < Low）
+    dup_ts = frame.index[350]
+    dup = frame.iloc[[350]].copy()
+    new_close = float(dup.iloc[0]["Close"]) + 0.03
+    dup.iloc[0, cl] = new_close
+    dup.iloc[0, hi] = max(float(dup.iloc[0]["High"]), new_close)
+    combined = pd.concat([frame.iloc[:351], dup, frame.iloc[351:]])
+    ns, st = _app_namespace(lambda: combined.copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    assert out is not None
+    assert st.warnings == []
+    # 1時間足用の data_quality は日足に付与されない。
+    assert "data_quality" not in out.attrs
+    # 従来経路の帰結: 欠損行は落ち、OHLC 不正行と重複行は残る。
+    assert nan_ts not in out.index
+    assert ohlc_ts in out.index
+    assert int((out.index == dup_ts).sum()) == 2
+    # 末尾の未確定足は従来どおり落ちる。
+    assert combined.index[-1] not in out.index
+
+
+def test_app_daily_output_matches_legacy_interval_path():
+    # 日足の処理が、段階1で無変更の従来経路（15分足が通る else 経路＝
+    # base の処理）と完全一致することで、従来動作の維持を示す。
+    frame = make_frame(n=500, tz="UTC", start="2024-06-03", freq="1d")
+    ns, _st = _app_namespace(lambda: frame.copy())
+    out_daily = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    out_legacy = ns["load_and_process_data"]("USDJPY=X", "2y", "15m")
+    assert out_daily is not None and out_legacy is not None
+    pd.testing.assert_frame_equal(out_daily, out_legacy)
+
+
+def test_app_daily_tz_aware_nonutc_processed_without_conversion():
+    # tz-aware の日足は tz 変換も含めて従来経路で処理する（1時間足の
+    # UTC 正規化は日足には適用しない）。index のタイムゾーンは
+    # そのまま保持される。
+    frame = make_frame(n=500, tz="Asia/Tokyo", start="2024-06-03", freq="1d")
+    ns, st = _app_namespace(lambda: frame.copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    assert out is not None
+    assert st.warnings == []
+    assert str(out.index.tz) == "Asia/Tokyo"
+    assert "data_quality" not in out.attrs
+
+
+def test_app_daily_non_datetime_index_stops():
+    # 日足でも、DatetimeIndex でない場合はタイムゾーン安全仕様として
+    # 停止し、理由コードが記録される。
+    frame = make_frame(n=500, tz="UTC", start="2024-06-03", freq="1d")
+    frame.index = pd.RangeIndex(len(frame))
+    ns, st = _app_namespace(lambda: frame.copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    assert out is None
+    reason = ns["get_load_stop_reason"]("USDJPY=X", "1d")
+    assert reason is not None
+    assert reason["code"] == "timestamp_format_unconfirmed"
+    assert any("時刻形式" in w and "停止" in w for w in st.warnings)
 
 
 # ---------------------------------------------------------------------------

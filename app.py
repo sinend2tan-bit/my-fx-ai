@@ -972,14 +972,24 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             return None, None
         df = df[required + (["Volume"] if "Volume" in df.columns else [])].copy()
         data_quality = None
-        if interval in ("1h", "1d"):
-            # 段階1（SYN-FX-016）: 1時間足の入力検証・C-1 カウンタと、
-            # タイムゾーンの安全処理を適用する。日足は段階0で全ペア
-            # tz-naive と確認されており、根拠が得られるまで下記の
-            # タイムゾーンチェックで分析・ラベル処理を停止する。
-            # 1時間足の処理順序は、ChatGPT 決定（案A）により鮮度除外を
-            # 品質検証の前に置く: DatetimeIndex の確認 → タイムゾーンの
-            # 確認（tz-aware は UTC へ正規化、tz-naive は停止）→ 有効
+        # タイムゾーン安全停止の理由（1h・1d 共通）: 本番環境の
+        # yfinance の版が未確認であることを前提に、実行時に index の
+        # 型とタイムゾーンを検査する。タイムゾーンを確定できない場合は
+        # 処理を停止し、理由を表示する（UTC と推定して処理を続ける
+        # ことはしない）。
+        tz_unavailable_reason = {
+            "code": "tz_unavailable",
+            "message": (
+                "価格データの時刻にタイムゾーン情報がないため、分析を停止しました。"
+                "UTCと推定して処理することはありません。配信元の時刻仕様を確認してください。"
+            ),
+        }
+        if interval == "1h":
+            # 段階1（SYN-FX-016）: 入力検証・C-1 カウンタは1時間足
+            # だけに適用する（日足は適用範囲外。下記の elif を参照）。
+            # 処理順序は、ChatGPT 決定（案A）により鮮度除外を品質検証
+            # の前に置く: DatetimeIndex の確認 → タイムゾーンの確認
+            # （tz-aware は UTC へ正規化、tz-naive は停止）→ 有効
             # timestamp の最大値（最新 timestamp）群の鮮度除外 →
             # input_rows の確定 → (0) timestamp 不正 → (1) 欠損・非有限値
             # → (2) 重複 timestamp (keep="last") → (3) OHLC 整合性
@@ -988,8 +998,7 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             # input_rows は、最新 timestamp 群の鮮度除外後に品質検証
             # パイプラインへ入る行数とする。鮮度除外はデータ品質の
             # 除外理由ではないため C-1 の品質カウンタには計上しない。
-            # 日足は従来挙動を維持する（処理順序・input_rows の定義とも
-            # 従来どおり）。各行は最初に該当した理由で一度だけ計上する。
+            # 各行は最初に該当した理由で一度だけ計上する。
             data_quality = {
                 "input_rows": 0,
                 "dropped_invalid_timestamp": 0,
@@ -1009,46 +1018,25 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
                     "code": "timestamp_format_unconfirmed",
                     "message": "価格データの時刻形式を確認できないため、分析を停止しました。",
                 }
-            # タイムゾーンの安全処理: 本番環境の yfinance の版が未確認で
-            # あることを前提に、実行時に index の型とタイムゾーンを検査
-            # する。tz-aware は UTC へ正規化する。タイムゾーンを確定
-            # できない場合は処理を停止し、理由を表示する（UTC と推定して
-            # 処理を続けることはしない）。
-            tz_unavailable_reason = {
-                "code": "tz_unavailable",
-                "message": (
-                    "価格データの時刻にタイムゾーン情報がないため、分析を停止しました。"
-                    "UTCと推定して処理することはありません。配信元の時刻仕様を確認してください。"
-                ),
-            }
-            if interval == "1h":
-                if df.index.tz is None:
-                    return None, tz_unavailable_reason
-                df.index = df.index.tz_convert("UTC")
-                # 鮮度除外: 有効 timestamp の最大値（最新 timestamp）に
-                # 属する行をすべて除外する（未確定の最新足。複数行ある
-                # 場合はその群全体）。NaT 行はここでは除外せず、次の
-                # (0) で計上する。
-                valid_timestamp = df.index.notna()
-                if valid_timestamp.any():
-                    latest_timestamp = df.index[valid_timestamp].max()
-                    freshness_rows = valid_timestamp & (df.index == latest_timestamp)
-                    df = df.loc[~freshness_rows].copy()
-                # input_rows は、鮮度除外後に品質検証パイプラインへ
-                # 入る行数（NaT 行を含む）。
-                data_quality["input_rows"] = len(df)
-            else:
-                downloaded_rows = len(df)
+            if df.index.tz is None:
+                return None, tz_unavailable_reason
+            df.index = df.index.tz_convert("UTC")
+            # 鮮度除外: 有効 timestamp の最大値（最新 timestamp）に
+            # 属する行をすべて除外する（未確定の最新足。複数行ある
+            # 場合はその群全体）。NaT 行はここでは除外せず、次の
+            # (0) で計上する。
+            valid_timestamp = df.index.notna()
+            if valid_timestamp.any():
+                latest_timestamp = df.index[valid_timestamp].max()
+                freshness_rows = valid_timestamp & (df.index == latest_timestamp)
+                df = df.loc[~freshness_rows].copy()
+            # input_rows は、鮮度除外後に品質検証パイプラインへ
+            # 入る行数（NaT 行を含む）。
+            data_quality["input_rows"] = len(df)
             # (0) timestamp の不正行（NaT）を除外する。
             valid_timestamp = df.index.notna()
             data_quality["dropped_invalid_timestamp"] = int((~valid_timestamp).sum())
             df = df.loc[valid_timestamp].copy()
-            if interval == "1d":
-                # 日足は従来挙動を維持する（タイムゾーンチェックは
-                # timestamp 検証の後に行う）。
-                if df.index.tz is None:
-                    return None, tz_unavailable_reason
-                df.index = df.index.tz_convert("UTC")
             # (1) 欠損・非有限値の行を除外する。
             df = df.apply(pd.to_numeric, errors="coerce")
             rows_before = len(df)
@@ -1072,10 +1060,23 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             ).to_numpy()
             data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
             df = df.loc[ohlc_ok].copy()
-            if interval == "1d":
-                # 日足の input_rows は従来定義のまま（ダウンロード行数から
-                # 末尾の未確定足ぶんを除いた行数）。
-                data_quality["input_rows"] = downloaded_rows - 1
+        elif interval == "1d":
+            # 日足は段階1の適用範囲外（ChatGPT 再レビューによる適用
+            # 範囲の是正）: 入力検証・C-1 カウンタ・data_quality は
+            # 適用せず、従来（base）の処理順序・データ加工に戻す。
+            # ここで維持するのはタイムゾーン安全停止仕様のみで、
+            # DatetimeIndex でない場合と tz-naive の場合は停止し、
+            # 理由を返す（日足は段階0で全ペア tz-naive と確認されて
+            # おり、根拠が得られるまで停止対象）。tz-aware の日足は
+            # tz 変換も含めて従来経路で処理する。
+            if not isinstance(df.index, pd.DatetimeIndex):
+                return None, {
+                    "code": "timestamp_format_unconfirmed",
+                    "message": "価格データの時刻形式を確認できないため、分析を停止しました。",
+                }
+            if df.index.tz is None:
+                return None, tz_unavailable_reason
+            df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
         else:
             df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
         if interval == "4h":
