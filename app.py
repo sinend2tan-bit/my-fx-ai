@@ -1093,7 +1093,14 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             if df.index.tz is None:
                 return None, tz_unavailable_reason
             df.index = df.index.tz_convert("UTC")
-            df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
+            df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required)
+            # 重複 timestamp の整理は Scanner の共通整形と文字どおり
+            # 同じ式・同じ順序（dropna の後、sort_index の前、
+            # keep="last"）で行う。これにより後段の完全性判定の本数が
+            # 「異なる timestamp の本数」になり、集約値（OHLC・
+            # Volume）も Scanner と一致する（段階2再レビュー対応・
+            # 案b）。重複のないデータでは挙動は変わらない。
+            df = df[~df.index.duplicated(keep="last")].sort_index()
         else:
             df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
         if interval == "4h":
@@ -1105,10 +1112,21 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             # （Scanner の完全性判定と同じ考え方）。最終区間の一律除外は
             # この完全性判定に置き換えたため、下の iloc[:-1] の対象から
             # 4時間足を外す。
+            # cutoff は Scanner と同一式（現在時刻の5分前、配信遅延への
+            # 猶予）。終了時刻（index+1h）が cutoff 以前の1時間足だけを
+            # 残し、形成中の足を集約前に除外する。採用条件にも区間の
+            # 終了（index+4h <= cutoff）を Scanner と同じく両項で明示
+            # する（段階2再レビュー対応）。cutoff で完全な区間が80未満
+            # になれば、既存の不足扱い（len(df) < 80）にそのまま乗る。
+            cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=5)
+            df = df.loc[(df.index + pd.Timedelta(hours=1)) <= cutoff].copy()
             hourly_counts = df["Close"].resample("4h", origin="start_day").count()
             df = df.resample("4h", origin="start_day").agg(agg).dropna(subset=required)
             complete_counts = hourly_counts.reindex(df.index).fillna(0)
-            df = df.loc[complete_counts == 4].copy()
+            df = df.loc[
+                ((df.index + pd.Timedelta(hours=4)) <= cutoff)
+                & (complete_counts == 4)
+            ].copy()
         # Discard the newest bar because it may still be forming.
         # 1時間足は品質検証の前で最新 timestamp 群を鮮度除外済みのため、
         # ここでは除外しない（案A）。4時間足は完全性判定に置き換えた

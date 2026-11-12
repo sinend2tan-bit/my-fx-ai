@@ -32,6 +32,24 @@
 - 段階2前は「空でない区間の本数 − 1（最終行一律除外）」だったため、
   同じ 320 本でも 80 − 1 = 79 で停止していた（旧実装との差異の
   実測は段階2の測定記録に残し、PR 本文に記載する）。
+
+段階2再レビュー対応（ChatGPT 独立レビューの保留2点への修正）:
+- cutoff を Scanner と同一式で導入する: cutoff = 現在時刻（UTC）
+  − 5分とし、終了時刻（index+1h）が cutoff 以前の 1時間足だけを
+  集約対象に残し、採用条件にも区間の終了（index+4h <= cutoff）を
+  明示する。これにより形成中の最終区間が App でも採用されなく
+  なり、最終 4h 足の採用条件が Scanner と一致する。
+- 集約前の重複 timestamp 整理（案b）: 4h 分岐で dropna の後・
+  sort_index の前に、Scanner の共通整形と文字どおり同じ式で
+  keep="last" の整理を行う。これにより完全性判定の本数が
+  「異なる timestamp の本数」になり、集約値（OHLC・Volume）も
+  Scanner と一致する。
+- cutoff の境界は、pd.Timestamp.now を関数スコープの monkeypatch
+  で固定する決定的テストで確認する（Scanner 実物と App 実物の
+  双方に同じ時刻を与える）。復元は monkeypatch の undo にのみ
+  任せ、手作業の退避・復元は行わない（実測で Timestamp.now が
+  壊れることを確認済み）。
+- MODEL_VERSION は 8 のまま据え置く。
 """
 
 import ast
@@ -417,3 +435,193 @@ def test_app_4h_boundary_partial_final_bin_not_counted():
     ns, _st = _app_namespace(lambda: frame.copy())
     out = ns["load_and_process_data"]("USDJPY=X", "90d", "4h")
     _assert_suffix_of_expected(out, expected, APP_FEATURE_WARMUP)
+
+
+# ---------------------------------------------------------------------------
+# cutoff の決定的境界テスト（段階2再レビュー対応・T1）
+#
+# pd.Timestamp.now を関数スコープの monkeypatch で固定値に差し替え、
+# Scanner 実物と App 実物の双方に同じ時刻を与える。差し替えはクラス
+# 単位で効くため、両実装の時刻源（pd.Timestamp.now のみ）が同じ固定
+# 値になり、実行時の実時刻に依存しない。復元は monkeypatch の undo
+# にのみ任せる（手作業で退避・復元・削除を行うと Timestamp.now が
+# 壊れることを実測済み）。
+# ---------------------------------------------------------------------------
+
+def _freeze_now(monkeypatch, fixed):
+    """pd.Timestamp.now を固定値に差し替える（関数スコープ限定）。"""
+    monkeypatch.setattr(
+        pd.Timestamp, "now", classmethod(lambda cls, tz=None: fixed)
+    )
+
+
+def _run_both_4h(monkeypatch, frame):
+    """同じフレームを Scanner 実物と App 実物の双方に与え、集約系列
+    （Scanner は attrs["latest_features"]、App は戻り値）を返す。"""
+    stub_scanner_download(monkeypatch, frame)
+    scan = scanner.bars("USDJPY=X", interval="4h", period="90d")
+    assert scan is not None
+    scan_series = scan.attrs["latest_features"]
+    ns, st = _app_namespace(lambda: frame.copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "90d", "4h")
+    assert st.warnings == []
+    return scan_series, out
+
+
+def _assert_both_agree_on_bins(scan_series, out, adopted_last_bin):
+    """両実装の採用区間が一致し、最新の採用区間が期待どおりである
+    ことと、共通部分の OHLC が完全一致することを確認する。"""
+    assert out is not None
+    # 両実装とも同じ採用系列の接尾辞（ウォームアップ差は一定）。
+    assert len(out) - len(scan_series) == (
+        SCANNER_FEATURE_WARMUP - APP_FEATURE_WARMUP
+    )
+    assert out.index[-1] == scan_series.index[-1] == adopted_last_bin
+    pd.testing.assert_frame_equal(
+        out.loc[scan_series.index, OHLC], scan_series[OHLC]
+    )
+
+
+def test_cutoff_boundary_end_equals_cutoff_adopted(monkeypatch):
+    # ケース(1): 最終 1h 足の終了時刻が cutoff と一致する場合、その足
+    # は採用対象（事前除外の条件は <=）となり、最終区間は両実装とも
+    # 採用する。FIXED = E + 5分 → cutoff == E。
+    frame = make_frame(n=1600, tz="UTC", seed=21)
+    end = frame.index[-1] + pd.Timedelta(hours=1)
+    _freeze_now(monkeypatch, end + pd.Timedelta(minutes=5))
+    scan_series, out = _run_both_4h(monkeypatch, frame)
+    final_bin = frame.index[-4]
+    assert final_bin in scan_series.index
+    assert final_bin in out.index
+    _assert_both_agree_on_bins(scan_series, out, final_bin)
+
+
+def test_cutoff_boundary_end_one_second_after_excluded(monkeypatch):
+    # ケース(2): 最終 1h 足の終了時刻が cutoff の1秒後の場合、その足
+    # は事前除外で落ち、最終区間は3本となり両実装とも採用しない。
+    # FIXED = E + 5分 − 1秒 → cutoff == E − 1秒。
+    frame = make_frame(n=1600, tz="UTC", seed=21)
+    end = frame.index[-1] + pd.Timedelta(hours=1)
+    _freeze_now(
+        monkeypatch, end + pd.Timedelta(minutes=5) - pd.Timedelta(seconds=1)
+    )
+    scan_series, out = _run_both_4h(monkeypatch, frame)
+    final_bin = frame.index[-4]
+    assert final_bin not in scan_series.index
+    assert final_bin not in out.index
+    _assert_both_agree_on_bins(scan_series, out, frame.index[-8])
+
+
+def test_cutoff_boundary_end_one_second_before_adopted(monkeypatch):
+    # ケース(3): 最終 1h 足の終了時刻が cutoff の1秒前の場合、その足
+    # は採用対象となり、最終区間は両実装とも採用する。
+    # FIXED = E + 5分 + 1秒 → cutoff == E + 1秒。
+    frame = make_frame(n=1600, tz="UTC", seed=21)
+    end = frame.index[-1] + pd.Timedelta(hours=1)
+    _freeze_now(
+        monkeypatch, end + pd.Timedelta(minutes=5) + pd.Timedelta(seconds=1)
+    )
+    scan_series, out = _run_both_4h(monkeypatch, frame)
+    final_bin = frame.index[-4]
+    assert final_bin in scan_series.index
+    assert final_bin in out.index
+    _assert_both_agree_on_bins(scan_series, out, final_bin)
+
+
+# ---------------------------------------------------------------------------
+# cutoff 適用後の80区間境界（段階2再レビュー対応・T2、App のみ）
+#
+# 80区間の判定（len(df) < 80）は集約ブロックの後にあるため、cutoff
+# 適用後に完全な区間が何区間残るかで開始・停止が決まることを固定
+# する。Scanner の最低本数は生の本数基準で位置づけが異なるため、
+# 確認対象は App のみ。
+# ---------------------------------------------------------------------------
+
+def test_cutoff_boundary_80_bins_after_cutoff_proceeds(monkeypatch):
+    # 324 本（81 区間分）のうち最終区間の4本目が cutoff で落ちると、
+    # 最終区間は3本で不採用となり、完全な区間はちょうど80 → 開始。
+    frame = make_frame(n=324, tz="UTC", seed=31)
+    end = frame.index[-1] + pd.Timedelta(hours=1)
+    _freeze_now(
+        monkeypatch, end + pd.Timedelta(minutes=5) - pd.Timedelta(seconds=1)
+    )
+    ns, st = _app_namespace(lambda: frame.copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "90d", "4h")
+    assert st.warnings == []
+    assert out is not None
+    assert len(out) == 80 - APP_FEATURE_WARMUP
+    assert out.index[-1] == frame.index[316]  # 80 番目の区間の開始
+    assert frame.index[320] not in out.index  # 不完全な最終区間
+
+
+def test_cutoff_boundary_79_bins_after_cutoff_stops(monkeypatch):
+    # 320 本（完全80区間）の最終区間の4本目が cutoff で落ちると、
+    # 完全な区間は79 → 停止する。cutoff は停止理由を生まないため、
+    # 理由は記録されず警告も出ない（既存の不足扱い）。
+    frame = make_frame(n=320, tz="UTC", seed=31)
+    end = frame.index[-1] + pd.Timedelta(hours=1)
+    _freeze_now(
+        monkeypatch, end + pd.Timedelta(minutes=5) - pd.Timedelta(seconds=1)
+    )
+    ns, st = _app_namespace(lambda: frame.copy())
+    out = ns["load_and_process_data"]("USDJPY=X", "90d", "4h")
+    assert out is None
+    assert st.warnings == []
+    assert ns["get_load_stop_reason"]("USDJPY=X", "4h") is None
+
+
+# ---------------------------------------------------------------------------
+# 重複 timestamp（段階2再レビュー対応・T3、案b）
+#
+# 過去フレーム（実時刻では cutoff 不活性）のため時刻固定は不要。
+# ---------------------------------------------------------------------------
+
+def test_duplicate_timestamps_three_distinct_bin_rejected(monkeypatch):
+    # ケースA: 1区間が異なる timestamp 3つ＋複製1行（行数は4）の
+    # 場合、その区間は両実装とも採用しない。修正前の App は行数4で
+    # 誤採用していたケース。
+    base = make_frame(n=1600, tz="UTC", seed=32)
+    bin_start = base.index[400]
+    # 区間（400〜403 本目）の3本目（402）を欠落させ、2本目（401）の
+    # 複製を直後に挿入する。
+    frame = pd.concat([base.iloc[:402], base.iloc[[401]], base.iloc[403:]])
+    scan_series, out = _run_both_4h(monkeypatch, frame)
+    assert bin_start not in scan_series.index
+    assert bin_start not in out.index
+    # 採用区間の総数は 399 で、両実装とも最終区間まで一致する。
+    assert len(out) == 399 - APP_FEATURE_WARMUP
+    assert len(scan_series) == 399 - SCANNER_FEATURE_WARMUP
+    _assert_both_agree_on_bins(scan_series, out, base.index[-4])
+
+
+def test_duplicate_timestamps_four_distinct_bin_adopted(monkeypatch):
+    # ケースB: 1区間が異なる timestamp 4つ＋複製1行（行数は5）の
+    # 場合、両実装とも採用し、集約値は keep="last" で残った行（値
+    # を変えた複製行）から計算されて一致する。修正前の App は行数
+    # 5で不採用にしていたケース。
+    base = make_frame(n=1600, tz="UTC", seed=32)
+    bin_start = base.index[400]
+    dup = base.iloc[[401]].copy()
+    bin_high = float(base.iloc[400:404]["High"].max()) + 1.0
+    bin_low = float(base.iloc[400:404]["Low"].min()) - 1.0
+    dup.iloc[0, dup.columns.get_loc("Close")] = (
+        float(dup.iloc[0]["Close"]) + 0.05
+    )
+    dup.iloc[0, dup.columns.get_loc("High")] = bin_high
+    dup.iloc[0, dup.columns.get_loc("Low")] = bin_low
+    dup.iloc[0, dup.columns.get_loc("Volume")] = 2_000_000.0
+    # 複製は元の行の直後（ダウンロード順で後）に挿入し、keep="last"
+    # で複製側が残るようにする。
+    frame = pd.concat([base.iloc[:402], dup, base.iloc[402:]])
+    scan_series, out = _run_both_4h(monkeypatch, frame)
+    assert bin_start in scan_series.index
+    assert bin_start in out.index
+    # keep="last" の集約値: 区間の High・Low は複製行の値、Volume は
+    # 複製行の 2,000,000 を含む4本分（5,000,000）になる。二重計上
+    # （6,000,000）でも keep="first"（4,000,000）でもない。
+    assert out.loc[bin_start, "High"] == bin_high
+    assert out.loc[bin_start, "Low"] == bin_low
+    assert out.loc[bin_start, "Volume"] == 5_000_000.0
+    assert scan_series.loc[bin_start, "High"] == bin_high
+    assert scan_series.loc[bin_start, "Low"] == bin_low
+    _assert_both_agree_on_bins(scan_series, out, base.index[-4])
