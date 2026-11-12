@@ -624,4 +624,6 @@ def test_duplicate_timestamps_four_distinct_bin_adopted(monkeypatch):
     assert out.loc[bin_start, "Volume"] == 5_000_000.0
     assert scan_series.loc[bin_start, "High"] == bin_high
     assert scan_series.loc[bin_start, "Low"] == bin_low
+    assert scan_series.loc[bin_start, "Volume"] == 5_000_000.0
+    assert out.loc[bin_start, "Volume"] == scan_series.loc[bin_start, "Volume"]
     _assert_both_agree_on_bins(scan_series, out, base.index[-4])
