@@ -1347,3 +1347,68 @@ def test_tv3_discontinuous_counter_is_real(monkeypatch):
     assert quality_of(clean)["dropped_label_discontinuous"] == 0
     out, _ = _gap_out(monkeypatch)
     assert quality_of(out)["dropped_label_discontinuous"] == 8
+
+
+# ---------------------------------------------------------------------------
+# 適用範囲: label_audit は1時間足の経路のみ（再レビュー対応で追加）
+# ---------------------------------------------------------------------------
+
+BASE_ATTRS_KEYS = {
+    "latest_data",
+    "latest_index",
+    "latest_history",
+    "latest_features",
+}
+
+
+def test_audit_scope_1h_present_in_prescribed_form(monkeypatch):
+    """適用範囲: 1時間足では label_audit が所定の形式で保持される。"""
+    out, _ = _gap_out(monkeypatch)
+    assert set(out.attrs) == BASE_ATTRS_KEYS | {"data_quality", "label_audit"}
+    audit = out.attrs["label_audit"]
+    assert set(audit.columns) == AUDIT_COLUMNS
+    assert str(audit["continuity_valid"].dtype) == "boolean"
+    assert audit.index.equals(out.attrs["latest_features"].index)
+    assert len(audit) == quality_of(out)["feature_rows"]
+
+
+def test_audit_scope_4h_absent_and_processing_unchanged(monkeypatch):
+    """適用範囲: 4時間足では label_audit が付与されず、既存の集約処理も変わらない。"""
+    hourly = path_frame(continuous_index(1500))
+    stub_download(monkeypatch, hourly)
+    out = scanner.bars(TICKER, interval="4h", period="90d")
+    assert out is not None
+    assert "label_audit" not in out.attrs
+    assert "data_quality" not in out.attrs
+    assert set(out.attrs) == BASE_ATTRS_KEYS
+    feature = out.attrs["latest_features"]
+    assert str(feature.index.tz) == "UTC"
+    assert all(
+        ts.hour % 4 == 0 and ts.minute == 0 for ts in feature.index
+    )
+    # 既存の集約（UTC の4時間区間、完了した区間のみ採用）の具体値で確認する。
+    probe_ts = pd.Timestamp("2026-01-15 00:00", tz="UTC")
+    hour_rows = hourly.loc[probe_ts : probe_ts + pd.Timedelta(hours=3)]
+    assert len(hour_rows) == 4
+    row = feature.loc[probe_ts]
+    assert row["Open"] == pytest.approx(hour_rows["Open"].iloc[0])
+    assert row["High"] == pytest.approx(hour_rows["High"].max())
+    assert row["Low"] == pytest.approx(hour_rows["Low"].min())
+    assert row["Close"] == pytest.approx(hour_rows["Close"].iloc[-1])
+
+
+def test_audit_scope_1d_absent_and_processing_unchanged(monkeypatch):
+    """適用範囲: 日足では label_audit が付与されず、従来処理も変わらない。"""
+    daily_index = pd.date_range(
+        start="2024-01-01 00:00", periods=500, freq="1D", tz="UTC"
+    )
+    stub_download(monkeypatch, path_frame(daily_index))
+    out = scanner.bars(TICKER, interval="1d", period="2y")
+    assert out is not None
+    assert "label_audit" not in out.attrs
+    assert "data_quality" not in out.attrs
+    assert set(out.attrs) == BASE_ATTRS_KEYS
+    feature = out.attrs["latest_features"]
+    # 日足は従来どおり、最後の取得足（未確定足）を除外する。
+    assert daily_index[-1] not in feature.index
+    assert daily_index[-2] in feature.index
