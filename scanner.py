@@ -57,7 +57,7 @@ FORWARD_PREDICTIONS_MAX = 200
 # 猶予。記録日時（recorded_at_jst、無ければ signal_bar_time）からの暦日。
 FORWARD_UNEVALUABLE_AFTER_DAYS = 14
 
-MODEL_VERSION = 20
+MODEL_VERSION = 21
 
 # 仮想検証用の追加コスト（実際の松井証券FXの約定・スワップ値ではありません）。
 # スリッページは往復合計の保守的な仮定。スワップは保有時間・方向・日々の値で変動するため、
@@ -1526,7 +1526,36 @@ def bars(ticker, interval="1h", period="60d"):
 
     targets = np.full(len(feature_df), np.nan)
 
+    # 段階3（B-2／SYN-FX-018）: 1時間足のみ、学習ラベルの窓（シグナル行と
+    # 未来8本）の時刻連続性を、フォワード評価と同じ正本
+    # （_forward_bar_gap_allowed）で判定する。窓が無効な行はラベルを
+    # 付けず、理由別に分類する。分類の優先順位は
+    # insufficient_future → discontinuous → other（仕様書2.5）。
+    # 理由は Target の NaN から推定せず、ここで明示的に記録する。
+    apply_continuity_check = interval == "1h"
+    feature_row_count = len(feature_df)
+    looped_row_count = max(0, feature_row_count - LOOKAHEAD_BARS)
+    label_reasons = [""] * feature_row_count
+    first_bad_pair_prev = [None] * feature_row_count
+    first_bad_pair_next = [None] * feature_row_count
+    if apply_continuity_check:
+        feature_index = feature_df.index
+        for i in range(looped_row_count):
+            for pair_pos in range(LOOKAHEAD_BARS):
+                prev_ts = feature_index[i + pair_pos]
+                next_ts = feature_index[i + pair_pos + 1]
+                if not _forward_bar_gap_allowed(prev_ts, next_ts):
+                    label_reasons[i] = "discontinuous"
+                    first_bad_pair_prev[i] = prev_ts
+                    first_bad_pair_next[i] = next_ts
+                    break
+    for tail_pos in range(looped_row_count, feature_row_count):
+        label_reasons[tail_pos] = "insufficient_future"
+
     for i in range(len(feature_df) - LOOKAHEAD_BARS):
+        # 段階3: 窓が不連続な行はラベル付けの対象にしない。
+        if label_reasons[i] == "discontinuous":
+            continue
         # シグナル確定後の次足始値をエントリー基準にする。
         # 仮想損益と学習ラベルのエントリー時点を一致させる。
         if i + 1 >= len(feature_df):
@@ -1540,6 +1569,7 @@ def bars(ticker, interval="1h", period="60d"):
             or price <= 0
             or atr_value <= 0
         ):
+            label_reasons[i] = "other"
             continue
 
         upper = price + atr_value
@@ -1581,6 +1611,21 @@ def bars(ticker, interval="1h", period="60d"):
         training_df[low_col] = feature_df["Low"].shift(-step)
         future_path_columns.extend([high_col, low_col])
 
+    # 段階3: 窓が不連続な行は Future_* をすべて NaN にし、学習・検証の
+    # 対象から丸ごと除外する（部分的な窓で仮想損益を計算しない）。
+    if apply_continuity_check:
+        discontinuous_positions = [
+            i for i in range(looped_row_count)
+            if label_reasons[i] == "discontinuous"
+        ]
+        if discontinuous_positions:
+            future_columns = [
+                "Future_Open_1", "Future_Close", *future_path_columns
+            ]
+            training_df.loc[
+                training_df.index[discontinuous_positions], future_columns
+            ] = np.nan
+
     training_df = training_df.dropna(
         subset=FEATURE_COLUMNS + [
             "Target", "ATR", "Close", "Future_Open_1", "Future_Close",
@@ -1595,20 +1640,25 @@ def bars(ticker, interval="1h", period="60d"):
         )
         return None
 
+    label_audit = None
     if data_quality is not None:
-        # ラベル判定段階の計上（段階1では現行判定の記録のみ。ラベル定義・
-        # 8本窓の定義は変更しない）。現行コードに不連続を理由とするラベル
-        # 除外は存在しないため、B-2 の連続性規則を扱う段階3までは
-        # dropped_label_discontinuous は 0 である。
+        # ラベル判定段階の計上（段階3で B-2 の連続性規則を実計上に変更）。
+        # 分類はラベル処理時に明示的に記録した理由（label_reasons）に
+        # 基づき、Target の NaN からは推定しない。優先順位は
+        # insufficient_future → discontinuous → other。
         # - insufficient_future: ラベルループの対象にならなかった系列末尾の行。
-        # - other: ループ対象だが基準価格・ATR が無効でラベルが付かなかった行。
-        looped_rows = max(0, len(feature_df) - LOOKAHEAD_BARS)
-        data_quality["dropped_label_discontinuous"] = 0
+        # - discontinuous: 窓（シグナル行＋未来8本）の時刻連続性を
+        #   満たさない行。
+        # - other: 窓は連続だが基準価格・ATR が無効でラベルが付かなかった行。
+        looped_rows = looped_row_count
+        data_quality["dropped_label_discontinuous"] = int(
+            label_reasons[:looped_rows].count("discontinuous")
+        )
         data_quality["dropped_label_insufficient_future"] = int(
             len(feature_df) - looped_rows
         )
         data_quality["dropped_label_other"] = int(
-            np.isnan(targets[:looped_rows]).sum()
+            label_reasons[:looped_rows].count("other")
         )
         data_quality["trainable_rows"] = int(len(training_df))
         input_check = data_quality["input_rows"] - (
@@ -1623,9 +1673,60 @@ def bars(ticker, interval="1h", period="60d"):
             + data_quality["dropped_label_insufficient_future"]
             + data_quality["dropped_label_other"]
         )
+
+        # 監査フレーム（仕様書3.5）: 1時間足の経路でのみ生成する
+        # （apply_continuity_check が真の場合に限る。4時間足・日足では
+        # 生成も保持もしない）。feature_df と同一の時刻インデックスで
+        # 構築する。特徴量・モデル入力・公開ステータスには含めず、
+        # training_df.attrs["label_audit"] にのみ保持する（後段で設定）。
+        # continuity_valid は pandas の nullable Boolean 型で保持し、
+        # 窓自体が存在しない行（insufficient_future）の判定不能は
+        # pd.NA として False と区別する。
+        audit_check = True
+        if apply_continuity_check:
+            label_audit = pd.DataFrame(
+                {
+                    "continuity_valid": pd.array(
+                        [
+                            pd.NA if reason == "insufficient_future"
+                            else reason != "discontinuous"
+                            for reason in label_reasons
+                        ],
+                        dtype="boolean",
+                    ),
+                    "label_trainable": [
+                        reason == "" for reason in label_reasons
+                    ],
+                    "invalid_reason": list(label_reasons),
+                    "first_bad_pair_prev": first_bad_pair_prev,
+                    "first_bad_pair_next": first_bad_pair_next,
+                },
+                index=feature_df.index,
+            )
+            audit_check = (
+                int(label_audit["continuity_valid"].eq(False).sum())
+                == data_quality["dropped_label_discontinuous"]
+                and int(label_audit["label_trainable"].sum())
+                == data_quality["trainable_rows"]
+                and int(
+                    (label_audit["invalid_reason"] == "discontinuous").sum()
+                )
+                == data_quality["dropped_label_discontinuous"]
+                and int(
+                    (
+                        label_audit["invalid_reason"]
+                        == "insufficient_future"
+                    ).sum()
+                )
+                == data_quality["dropped_label_insufficient_future"]
+                and int((label_audit["invalid_reason"] == "other").sum())
+                == data_quality["dropped_label_other"]
+                and len(label_audit) == data_quality["feature_rows"]
+            )
         if (
             input_check != data_quality["feature_rows"]
             or label_check != data_quality["trainable_rows"]
+            or not audit_check
         ):
             print(
                 f"[DATA QUALITY WARNING] {ticker} {interval}: "
@@ -1641,6 +1742,11 @@ def bars(ticker, interval="1h", period="60d"):
     training_df.attrs["latest_features"] = feature_df.copy()
     if data_quality is not None:
         training_df.attrs["data_quality"] = data_quality
+    # 段階3: 監査フレームは1時間足の経路でのみ生成・保持する（仕様書3.5）。
+    # 4時間足・日足には付与しない。永続化せず、特徴量・予測記録・
+    # 公開ステータスには含めない。
+    if apply_continuity_check:
+        training_df.attrs["label_audit"] = label_audit
 
 
     constant_features = [
@@ -3105,8 +3211,14 @@ def _forward_bar_gap_allowed(prev_ts, next_ts):
       （実データでは金曜21時→月曜0時の約51〜52時間が通常の週末休場）
     平日の2時間以上の欠けなど、それ以外の差は欠損として扱う。
     時刻の曜日は各タイムスタンプ自身のタイムゾーンで判定する。
+    時刻差が正でないペア（重複・逆順）は不連続として扱う。
     """
     diff = next_ts - prev_ts
+    # 段階3（B-2／U-1）: 時刻差が正であることを必須条件とする。重複
+    # （差がゼロ）・逆順（差が負）は週末ジャンプの判定に進まず不連続と
+    # する。正常な昇順入力に対する判定結果は従来と変わらない。
+    if diff <= pd.Timedelta(0):
+        return False
     if diff == pd.Timedelta(hours=1):
         return True
     if prev_ts.weekday() in (4, 5) and next_ts.weekday() == 0:
