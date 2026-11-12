@@ -1674,46 +1674,55 @@ def bars(ticker, interval="1h", period="60d"):
             + data_quality["dropped_label_other"]
         )
 
-        # 監査フレーム（仕様書3.5）: feature_df と同一の時刻インデックスで
+        # 監査フレーム（仕様書3.5）: 1時間足の経路でのみ生成する
+        # （apply_continuity_check が真の場合に限る。4時間足・日足では
+        # 生成も保持もしない）。feature_df と同一の時刻インデックスで
         # 構築する。特徴量・モデル入力・公開ステータスには含めず、
         # training_df.attrs["label_audit"] にのみ保持する（後段で設定）。
         # continuity_valid は pandas の nullable Boolean 型で保持し、
         # 窓自体が存在しない行（insufficient_future）の判定不能は
         # pd.NA として False と区別する。
-        label_audit = pd.DataFrame(
-            {
-                "continuity_valid": pd.array(
-                    [
-                        pd.NA if reason == "insufficient_future"
-                        else reason != "discontinuous"
-                        for reason in label_reasons
+        audit_check = True
+        if apply_continuity_check:
+            label_audit = pd.DataFrame(
+                {
+                    "continuity_valid": pd.array(
+                        [
+                            pd.NA if reason == "insufficient_future"
+                            else reason != "discontinuous"
+                            for reason in label_reasons
+                        ],
+                        dtype="boolean",
+                    ),
+                    "label_trainable": [
+                        reason == "" for reason in label_reasons
                     ],
-                    dtype="boolean",
-                ),
-                "label_trainable": [
-                    reason == "" for reason in label_reasons
-                ],
-                "invalid_reason": list(label_reasons),
-                "first_bad_pair_prev": first_bad_pair_prev,
-                "first_bad_pair_next": first_bad_pair_next,
-            },
-            index=feature_df.index,
-        )
-        audit_check = (
-            int(label_audit["continuity_valid"].eq(False).sum())
-            == data_quality["dropped_label_discontinuous"]
-            and int(label_audit["label_trainable"].sum())
-            == data_quality["trainable_rows"]
-            and int((label_audit["invalid_reason"] == "discontinuous").sum())
-            == data_quality["dropped_label_discontinuous"]
-            and int(
-                (label_audit["invalid_reason"] == "insufficient_future").sum()
+                    "invalid_reason": list(label_reasons),
+                    "first_bad_pair_prev": first_bad_pair_prev,
+                    "first_bad_pair_next": first_bad_pair_next,
+                },
+                index=feature_df.index,
             )
-            == data_quality["dropped_label_insufficient_future"]
-            and int((label_audit["invalid_reason"] == "other").sum())
-            == data_quality["dropped_label_other"]
-            and len(label_audit) == data_quality["feature_rows"]
-        )
+            audit_check = (
+                int(label_audit["continuity_valid"].eq(False).sum())
+                == data_quality["dropped_label_discontinuous"]
+                and int(label_audit["label_trainable"].sum())
+                == data_quality["trainable_rows"]
+                and int(
+                    (label_audit["invalid_reason"] == "discontinuous").sum()
+                )
+                == data_quality["dropped_label_discontinuous"]
+                and int(
+                    (
+                        label_audit["invalid_reason"]
+                        == "insufficient_future"
+                    ).sum()
+                )
+                == data_quality["dropped_label_insufficient_future"]
+                and int((label_audit["invalid_reason"] == "other").sum())
+                == data_quality["dropped_label_other"]
+                and len(label_audit) == data_quality["feature_rows"]
+            )
         if (
             input_check != data_quality["feature_rows"]
             or label_check != data_quality["trainable_rows"]
@@ -1733,8 +1742,10 @@ def bars(ticker, interval="1h", period="60d"):
     training_df.attrs["latest_features"] = feature_df.copy()
     if data_quality is not None:
         training_df.attrs["data_quality"] = data_quality
-        # 段階3: 監査フレームは専用キーで保持する（仕様書3.5）。
-        # 永続化せず、特徴量・予測記録・公開ステータスには含めない。
+    # 段階3: 監査フレームは1時間足の経路でのみ生成・保持する（仕様書3.5）。
+    # 4時間足・日足には付与しない。永続化せず、特徴量・予測記録・
+    # 公開ステータスには含めない。
+    if apply_continuity_check:
         training_df.attrs["label_audit"] = label_audit
 
 
