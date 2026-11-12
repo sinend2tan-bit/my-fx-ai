@@ -28,7 +28,7 @@
   統一・完全性判定に変更された（tests/test_stage2_4h_aggregation.py）。
   どちらの段階でも 4h に data_quality は付かない。
 - モデル版管理: App MODEL_VERSION 8（段階1で 6→7、段階2で 7→8）/
-  Scanner MODEL_VERSION 20。
+  Scanner MODEL_VERSION 21。
   旧版（App version 7）の保存済みモデルは再利用されない。品質ゲートを
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
   評価モデルが使われ、旧ファイルは上書きされない。新版（8）の保存済み
@@ -300,7 +300,7 @@ def test_scanner_4h_not_stopped_by_stage1_gate(monkeypatch):
 
 
 def test_scanner_version_and_status_record():
-    assert scanner.MODEL_VERSION == 20
+    assert scanner.MODEL_VERSION == 21
     source = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
     assert "v19_" not in source
     dq = {
