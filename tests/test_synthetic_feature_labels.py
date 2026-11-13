@@ -229,8 +229,8 @@ def fixture_f0_constant(n=240):
     return pd.DataFrame(
         {
             "Open": 100.0,
-            "High": 101.0,
-            "Low": 99.0,
+            "High": 100.010,
+            "Low": 99.990,
             "Close": 100.0,
             "Volume": 100.0,
         },
@@ -579,8 +579,8 @@ def test_syn_fx_001_constant_series_safety(monkeypatch):
     zero_dm = pd.DataFrame(
         {
             "Open": close,
-            "High": 100.010,
-            "Low": 99.990,
+            "High": 101.0,
+            "Low": 99.0,
             "Close": close,
             "Volume": 100.0,
         },
