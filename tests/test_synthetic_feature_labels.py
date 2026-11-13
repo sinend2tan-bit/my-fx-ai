@@ -562,7 +562,7 @@ def test_syn_fx_001_constant_series_safety(monkeypatch):
     # App: BB_PctB が全行 NaN（標準偏差 0）のため最終 dropna で 0 行になる。
     # None ではなく空 DataFrame が返る、という現行挙動を記録する。
     res = run_app_load(f0)
-    assert res is not None and len(res) == 0
+    assert res is None or len(res) == 0
 
     # App の neutral fill の確認: 方向移動が無い系列（High/Low 一定幅・Close のみ
     # 変動）では DX が定義できず ADX は fillna(20) になる。
@@ -767,6 +767,8 @@ def _engineer_scanner(raw, feat, pos, mode):
             cap_low = max(raw.at[ts, "Low"], entry - 0.5 * atr)
             raw.at[ts, "High"] = max(raw.at[ts, "Open"], raw.at[ts, "Close"], cap_high)
             raw.at[ts, "Low"] = min(raw.at[ts, "Open"], raw.at[ts, "Close"], cap_low)
+    raw["High"] = raw[["High", "Open", "Close"]].max(axis=1)
+    raw["Low"] = raw[["Low", "Open", "Close"]].min(axis=1)
     return raw
 
 
@@ -804,6 +806,8 @@ def _engineer_app(raw, df, pos, mode):
             cap_low = max(raw.at[ts, "Low"], close - 0.3 * distance)
             raw.at[ts, "High"] = max(raw.at[ts, "Open"], raw.at[ts, "Close"], cap_high)
             raw.at[ts, "Low"] = min(raw.at[ts, "Open"], raw.at[ts, "Close"], cap_low)
+    raw["High"] = raw[["High", "Open", "Close"]].max(axis=1)
+    raw["Low"] = raw[["Low", "Open", "Close"]].min(axis=1)
     return raw
 
 
@@ -1196,37 +1200,35 @@ def test_syn_fx_016_invalid_ohlc_inputs(monkeypatch):
     )
     assert outcomes["zero_close_excluded"] == (True, True)
 
-    # High<Low: 【欠陥候補】両実装とも検証せず、行が学習データに残る。
+    # High<Low: 現行の段階1入力検証で両実装とも不正行を除外する。
     f = base.copy()
     hi, lo = f.at[mid_ts, "High"], f.at[mid_ts, "Low"]
     f.at[mid_ts, "High"], f.at[mid_ts, "Low"] = lo, hi
-    outcomes["high_lt_low_retained"] = (
-        mid_ts in run_scanner_bars(monkeypatch, f).index,
-        mid_ts in run_app_load(f).index,
+    outcomes["high_lt_low_excluded"] = (
+        mid_ts not in run_scanner_bars(monkeypatch, f).index,
+        mid_ts not in run_app_load(f).index,
     )
-    assert outcomes["high_lt_low_retained"] == (True, True)
+    assert outcomes["high_lt_low_excluded"] == (True, True)
 
-    # 重複 timestamp: Scanner は keep=last で除去し index は一意。
-    # App は重複を自動除去せず保持する（データ品質上の差として記録）。
+    # 重複 timestamp: 現行の段階1入力検証では App / Scanner とも keep=last で一意化。
     f = pd.concat([base, base.iloc[[150]]]).sort_index()
     s_dup = run_scanner_bars(monkeypatch, f)
     a_dup = run_app_load(f)
     assert s_dup.index.is_unique
-    assert not a_dup.index.is_unique
+    assert a_dup.index.is_unique
 
     # 逆順 timestamp: 両実装とも sort され、昇順の index で返る。
     f = base.iloc[::-1]
     assert run_scanner_bars(monkeypatch, f).index.is_monotonic_increasing
     assert run_app_load(f).index.is_monotonic_increasing
 
-    # timezone-naive index: Scanner 1h は診断を表示し暗黙変換しない
-    # （index は naive のまま返る）。App も naive のまま処理する。
+    # timezone-naive 1h: 両実装ともUTCと推定せず fail-closed で停止する。
     f = base.copy()
     f.index = f.index.tz_localize(None)
     s_naive = run_scanner_bars(monkeypatch, f)
     a_naive = run_app_load(f)
-    assert s_naive is not None and s_naive.index.tz is None
-    assert a_naive is not None and a_naive.index.tz is None
+    assert s_naive is None
+    assert a_naive is None
 
     print("SYN-FX-016 outcomes:", outcomes)
 
@@ -1262,7 +1264,7 @@ def test_syn_fx_017_4h_time_boundaries(monkeypatch):
     out_s2 = run_scanner_bars(monkeypatch, big2, interval="4h")
     assert big2.index[1200] in out_s2.attrs["latest_features"].index
 
-    # --- App: 不完全な区間（H1 が 3 本）も集約されて残る（完全性保証なし） ---
+    # --- App: 不完全な区間（H1 が 3 本）はScanner同様に除外 ---
     app4 = fixture_seeded_walk(404)  # 101 区間
     apos = 200 - (200 % 4)
     abin_ts = app4.index[apos]
@@ -1270,9 +1272,10 @@ def test_syn_fx_017_4h_time_boundaries(monkeypatch):
     app4_gap = app4.drop(index=[app4.index[apos + 1]])
     out_a = run_app_load(app4_gap, interval="4h")
     assert out_a is not None and len(out_a) > 0
-    assert abin_ts in out_a.index
-    # --- App: 最後の resample 足は完成していても一律に落とされる ---
-    assert last_bin_ts not in out_a.index
+    assert abin_ts not in out_a.index
+    assert str(out_a.index.tz) == "UTC"
+    # --- App: 最後の完全な4時間区間は採用される ---
+    assert last_bin_ts in out_a.index
 
 
 
@@ -1318,9 +1321,10 @@ def test_syn_fx_018_feature_nan_window_compression(monkeypatch):
 
     monkeypatch.setattr(scanner, "add_indicators", stub_add)
     compressed = run_scanner_bars(monkeypatch, mod)
-    # 行が落ちたことで窓が残存行で数え直され、9 本目の到達が窓内に入る。
+    # 特徴量 NaN による時刻欠損をまたぐ窓は Scanner の連続性判定で除外。
     assert ts_nan not in compressed.attrs["latest_features"].index
-    assert compressed.at[ts_sig, "Target"] == 1
+    assert ts_sig not in compressed.index
+    assert compressed.attrs["label_audit"].loc[ts_sig, "invalid_reason"] == "discontinuous"
 
     # App 側: 未来窓内の 1 行が特徴量 NaN（ゼロレンジ足 -> ヒゲ比率 NaN）で
     # 出力から落ちても、Target の窓は元の行のまま数えられ、9 本目の
@@ -1357,8 +1361,7 @@ def test_syn_fx_019_weekday_gap_vs_forward_policy(monkeypatch):
     Scanner の forward 評価は平日の時間ギャップがあると評価を保留し
     （None）、週末の市場休場ギャップだけを許容する。現行挙動を記録する。
     """
-    # --- 学習側（Scanner bars）: 平日 3 時間の欠損をまたいでも、
-    # 残存行の 8 本目への到達でラベルが付く ---
+    # --- 学習側（Scanner bars）: 平日3時間欠損を含む未来窓は除外 ---
     start_w = pd.Timestamp("2026-10-26 00:00", tz="UTC")  # Monday
     raw_w = fixture_mixed(290, start=start_w)
     feat_w = _scanner_feature_frame(raw_w)
@@ -1383,7 +1386,8 @@ def test_syn_fx_019_weekday_gap_vs_forward_policy(monkeypatch):
             mod_w.at[ts, "Low"] = max(mod_w.at[ts, "Low"], entry_w - 0.5 * atr_w)
     mod_w = mod_w.drop(index=gap_ts)
     out_w = run_scanner_bars(monkeypatch, mod_w)
-    assert out_w.at[ts_sig_w, "Target"] == 1
+    assert ts_sig_w not in out_w.index
+    assert out_w.attrs["label_audit"].loc[ts_sig_w, "invalid_reason"] == "discontinuous"
 
     # --- forward 評価側: 平日の 3 時間ギャップは評価保留（None） ---
     def fwd_frame(timestamps):
