@@ -1876,7 +1876,8 @@ def _render_main_area():
             f"OHLC不整合 {_data_quality['dropped_invalid_ohlc']}件・"
             f"特徴量不足 {_data_quality['dropped_feature_nan']}件 / "
             f"特徴量行 {_data_quality['feature_rows']}件 / "
-            f"ラベルなし（未来窓不足） {_data_quality['dropped_label_insufficient_future']}件 / "
+            f"ラベル除外（時間足不連続） {_data_quality['dropped_label_discontinuous']}件・"
+            f"未来窓不足 {_data_quality['dropped_label_insufficient_future']}件 / "
             f"学習対象 {_data_quality['trainable_rows']}件"
         )
     # Timeframe-aware freshness check. Yahoo timestamps can be delayed and are not Matsui live quotes.
