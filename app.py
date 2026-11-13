@@ -1404,16 +1404,25 @@ def _model_filename(ticker, interval):
 
 
 def _save_trained_model(model_path, payload):
-    """学習済みモデルを保存し、成功したら True、失敗したら False を返す。
-
-    保存失敗の事実だけを戻り値で知らせる。例外の詳細や保存先パスは
-    呼び出し側・画面へ伝えない（露出防止）。保存形式・保存先は従来
-    どおりで、成功時の動作は変わらない。
-    """
+    """学習済みモデルを同じディレクトリの一時ファイル経由で安全に保存する。"""
+    temp_path = None
     try:
-        joblib.dump(payload, model_path)
+        directory = os.path.dirname(os.path.abspath(model_path)) or "."
+        fd, temp_path = tempfile.mkstemp(
+            prefix=".aifx-model-", suffix=".tmp", dir=directory
+        )
+        with os.fdopen(fd, "wb") as model_file:
+            joblib.dump(payload, model_file)
+            model_file.flush()
+            os.fsync(model_file.fileno())
+        os.replace(temp_path, model_path)
         return True
     except Exception:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
         return False
 
 
