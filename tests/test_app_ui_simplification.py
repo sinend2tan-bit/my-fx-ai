@@ -69,7 +69,7 @@ class _FakeResponse:
         pass
 
 
-def _make_download(tail_1h=0.0, tail_4h_source=0.0, stale_main=False, stale_4h_source=False):
+def _make_download(tail_1h=0.0, tail_4h_source=0.0, stale_main=False, stale_4h_source=False, missing_4h_source=False):
     now_h = pd.Timestamp.now(tz="UTC").floor("h")
 
     def fake_download(*args, **kwargs):
@@ -81,6 +81,8 @@ def _make_download(tail_1h=0.0, tail_4h_source=0.0, stale_main=False, stale_4h_s
             return _frame(500, "15min", now_h)
         # 1h 系: period=90d は4時間足の元データ、60d は1時間足（メイン含む）
         if period == "90d":
+            if missing_4h_source:
+                return pd.DataFrame()
             end4 = now_h - pd.Timedelta(days=2) if stale_4h_source else now_h
             return _frame(600, "1h", end4, tail=tail_4h_source)
         end = now_h - pd.Timedelta(days=10) if stale_main else now_h
@@ -190,6 +192,14 @@ def test_direction_hold_when_only_4h_stale(rig):
     assert not at.exception
     assert any("方向：判断保留" in w for w in _texts(at, "warning"))
     assert any("鮮度" in c for c in _texts(at, "caption"))
+    assert not any("方向：売り方向" in e for e in _texts(at, "error"))
+
+
+def test_direction_hold_when_4h_data_is_missing(rig):
+    # 1時間足が新鮮でも、4時間足の取得に失敗した場合は方向を補完せず保留する。
+    at = rig(tail_1h=-0.45, missing_4h_source=True)
+    assert not at.exception
+    assert any("方向：判断保留" in w for w in _texts(at, "warning"))
     assert not any("方向：売り方向" in e for e in _texts(at, "error"))
 
 
