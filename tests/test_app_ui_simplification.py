@@ -270,3 +270,12 @@ def test_all_timeframe_choices_keep_the_two_main_sections(rig):
         body = _all_text(at)
         assert "🎯 単発トレード" in body
         assert "📋 リピート注文（ハーフ＆ハーフ）" in body
+
+
+
+def test_narrow_layout_radio_options_wrap_and_keep_touch_targets():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert '@media (max-width: 900px)' in source
+    assert '[data-testid="stRadio"] [role="radiogroup"]' in source
+    assert 'flex-wrap: wrap !important;' in source
+    assert 'min-height: 44px;' in source
