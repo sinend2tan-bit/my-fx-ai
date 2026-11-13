@@ -27,6 +27,41 @@ def test_safe_float():
     assert scanner.safe_float(float("inf")) is None
 
 
+def test_scanner_status_write_replace_failure_preserves_existing(tmp_path, monkeypatch):
+    import os
+
+    path = tmp_path / "status.json"
+    original = '{"old": true}'
+    path.write_text(original, encoding="utf-8")
+
+    def fail_replace(source, destination):
+        raise OSError("simulated status replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated status replace failure"):
+        scanner.write_status_file({"new": True}, str(path))
+    assert path.read_text(encoding="utf-8") == original
+    assert not list(tmp_path.glob(".aifx-status-*.tmp"))
+
+
+def test_simple_scanner_write_replace_failure_preserves_existing(tmp_path, monkeypatch):
+    import os
+    import fx_scanner_simple as simple_scanner
+
+    path = tmp_path / "scan_history_simple.json"
+    original = '[{"old": true}]'
+    path.write_text(original, encoding="utf-8")
+
+    def fail_replace(source, destination):
+        raise OSError("simulated simple scanner replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated simple scanner replace failure"):
+        simple_scanner.save_json(str(path), [{"new": True}])
+    assert path.read_text(encoding="utf-8") == original
+    assert not list(tmp_path.glob(".aifx-simple-*.tmp"))
+
+
 def test_load_state_missing_file(tmp_path, monkeypatch):
     # 状態ファイルが無い (キャッシュの冷間スタート) でも落ちず、空 dict を返す。
     monkeypatch.chdir(tmp_path)
