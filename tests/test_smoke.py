@@ -1019,7 +1019,9 @@ def _extract_app_backup_functions(tmp_path):
     tree = ast.parse(source)
     wanted = {
         "_expected_json_type", "_read_json_file", "_validate_existing_json_file",
-        "_atomic_write_json", "_save_trained_model", "reset_settings_callback",
+        "_atomic_write_json", "_save_trained_model", "save_settings",
+        "save_feedback_data", "save_trade_journal", "save_entry_tracking",
+        "save_forecast_history", "reset_settings_callback",
         "load_feedback_data", "load_trade_journal",
         "load_entry_tracking", "load_forecast_history", "load_pair_scan_outcomes",
         "build_data_backup_bundle", "restore_data_backup_bundle",
@@ -1029,7 +1031,12 @@ def _extract_app_backup_functions(tmp_path):
     namespace = {
         "json": json_module,
         "joblib": None,
-        "st": SimpleNamespace(session_state={}),
+        "st": SimpleNamespace(
+            session_state={},
+            error=lambda message: errors.append(str(message)),
+            warning=lambda message: errors.append(str(message)),
+        ),
+        "errors": [],
         "_JSON_LOAD_ERRORS": {},
         "os": os,
         "tempfile": tempfile,
@@ -1155,6 +1162,29 @@ def test_app_history_loaders_ignore_non_dict_rows_without_crashing(tmp_path, mon
         assert ns[loader_name]() == [{"id": "valid"}, {"id": "valid-2"}]
 
 
+def test_app_persistence_errors_do_not_expose_paths_or_exception_details(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    secret_marker = "/private/runtime/path/secret-marker"
+    
+    def fail_write(*args, **kwargs):
+        raise OSError(f"permission denied: {secret_marker}")
+
+    ns["_atomic_write_json"] = fail_write
+    ns["st"].session_state.update({"rr_ratio": 1.5, "webhook_url": ""})
+
+    assert ns["save_settings"]() is False
+    assert ns["save_feedback_data"]([{"kind": "feedback"}]) is False
+    assert ns["save_trade_journal"]([{"kind": "journal"}]) is False
+    assert ns["save_entry_tracking"]([{"kind": "entry"}]) is False
+    assert ns["save_forecast_history"]([{"kind": "forecast"}]) is False
+
+    assert len(ns["errors"]) == 5
+    assert all("保存できませんでした" in message for message in ns["errors"])
+    assert all(secret_marker not in message for message in ns["errors"])
+    assert all("permission denied" not in message for message in ns["errors"])
+
+
 def test_app_settings_reset_reports_success_and_clears_corruption(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     ns = _extract_app_backup_functions(tmp_path)
@@ -1193,7 +1223,7 @@ def test_app_settings_reset_reports_file_delete_failure(tmp_path, monkeypatch):
     assert path.exists()
     assert ns["st"].session_state["rr_ratio"] == 1.5
     assert ns["st"].session_state["settings_loaded"] is True
-    assert ns["st"].session_state["settings_reset_error"] == "simulated settings delete failure"
+    assert ns["st"].session_state["settings_reset_error"] == "OSError"
     assert "settings_reset_done" not in ns["st"].session_state
 
 
