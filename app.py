@@ -1403,11 +1403,10 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
         result = df.dropna(subset=FEATURE_COLUMNS + ["Close", "ATR"])
         if data_quality is not None:
             # (4) 特徴量計算による除外と、ラベル判定段階の計上。
-            # ラベル判定段階は段階1では現行判定の記録のみ（ラベル定義・
-            # 8本窓の定義は変更しない）。App の現行ラベル計算は対象行に
-            # 必ずラベルを付けるため、不連続・その他の理由でラベルが
-            # 無効になる行は存在せず、末尾の未来窓不足の行だけが
-            # ラベルなしで残る。
+            # 1時間足は既存のラベル定義・8本窓を維持したまま、窓内の
+            # 時刻連続性を確認する。平日欠損・重複・逆順を含む窓は
+            # Target=NaN とし、末尾の未来不足とは分けて計上する。
+            # 週末の市場休場は Scanner と同じ80時間以内の規則で許容する。
             data_quality["dropped_feature_nan"] = int(len(df) - len(result))
             data_quality["feature_rows"] = int(len(result))
             result_positions = df.index.get_indexer(result.index)
