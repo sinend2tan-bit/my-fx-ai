@@ -293,7 +293,7 @@ def _atomic_write_json(path, value, validate_existing=True):
         os.replace(temp_path, path)
         _JSON_LOAD_ERRORS.pop(path, None)
         return True
-    except OSError:
+    except Exception:
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
