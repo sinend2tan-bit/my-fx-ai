@@ -91,6 +91,26 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
+
+def _app_forward_bar_gap_allowed(prev_ts, next_ts):
+    """Return whether adjacent 1h bars are continuous under the Scanner policy.
+
+    Accept exactly one hour, or a Friday/Saturday-to-Monday market closure
+    of at most 80 hours. Reject weekday gaps, duplicate timestamps and
+    reverse-ordered timestamps.
+    """
+    try:
+        diff = next_ts - prev_ts
+        if diff <= pd.Timedelta(0):
+            return False
+        if diff == pd.Timedelta(hours=1):
+            return True
+        if prev_ts.weekday() in (4, 5) and next_ts.weekday() == 0:
+            return diff <= pd.Timedelta(hours=80)
+        return False
+    except (TypeError, ValueError, OverflowError):
+        return False
+
 MODEL_VERSION = 8
 
 st.markdown("""
@@ -611,6 +631,21 @@ def update_forecast_history(items, df, ticker, interval, horizon=LOOKAHEAD_BARS)
             target_pos = base_pos + int(item.get("horizon_bars", horizon))
             if target_pos >= len(df):
                 continue
+            if interval == "1h":
+                evaluation_window = idx_utc[base_pos : target_pos + 1]
+                if any(
+                    not _app_forward_bar_gap_allowed(
+                        evaluation_window[pos - 1], evaluation_window[pos]
+                    )
+                    for pos in range(1, len(evaluation_window))
+                ):
+                    item.update({
+                        "status": "UNEVALUABLE_GAP",
+                        "evaluated_at": datetime.now(JST).isoformat(),
+                        "evaluation_note": "評価期間内に平日の1時間足欠損があるため採点対象外",
+                    })
+                    changed = True
+                    continue
             base_close = float(item["reference_close"])
             future_close = float(close_values[target_pos])
             signal = item.get("signal")
@@ -1337,8 +1372,15 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
         high_values = high.to_numpy(dtype=float)
         low_values = low.to_numpy(dtype=float)
         target = np.full(len(df), np.nan, dtype=float)
+        discontinuous_mask = np.zeros(len(df), dtype=bool)
         usable = max(0, len(df) - LOOKAHEAD_BARS)
         for i in range(usable):
+            if interval == "1h" and any(
+                not _app_forward_bar_gap_allowed(df.index[pos - 1], df.index[pos])
+                for pos in range(i + 1, i + LOOKAHEAD_BARS + 1)
+            ):
+                discontinuous_mask[i] = True
+                continue
             distance = barrier[i] + spread
             upper_barrier = close_values[i] + distance
             lower_barrier = close_values[i] - distance
@@ -1368,13 +1410,16 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             # ラベルなしで残る。
             data_quality["dropped_feature_nan"] = int(len(df) - len(result))
             data_quality["feature_rows"] = int(len(result))
-            data_quality["dropped_label_discontinuous"] = 0
+            result_positions = df.index.get_indexer(result.index)
+            discontinuous_count = int(discontinuous_mask[result_positions].sum())
+            data_quality["dropped_label_discontinuous"] = discontinuous_count
             data_quality["dropped_label_insufficient_future"] = int(
-                result["Target"].isna().sum()
+                result["Target"].isna().sum() - discontinuous_count
             )
             data_quality["dropped_label_other"] = 0
             data_quality["trainable_rows"] = int(
                 data_quality["feature_rows"]
+                - data_quality["dropped_label_discontinuous"]
                 - data_quality["dropped_label_insufficient_future"]
             )
             result.attrs["data_quality"] = data_quality
