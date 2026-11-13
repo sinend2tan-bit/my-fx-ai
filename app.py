@@ -369,14 +369,19 @@ def save_settings():
 
 
 def reset_settings_callback():
-    """Reset persisted settings before widgets are instantiated on the next run."""
+    """Reset settings and expose any failure to remove the persisted file."""
     for key, value in DEFAULT_SETTINGS.items():
         st.session_state[key] = value.copy() if isinstance(value, (dict, list)) else value
     try:
         if os.path.exists(SETTINGS_FILE):
             os.remove(SETTINGS_FILE)
-    except OSError:
-        pass
+    except OSError as exc:
+        st.session_state["settings_reset_error"] = str(exc)
+        st.session_state.pop("settings_reset_done", None)
+    else:
+        _JSON_LOAD_ERRORS.pop(SETTINGS_FILE, None)
+        st.session_state.pop("settings_reset_error", None)
+        st.session_state["settings_reset_done"] = True
     st.session_state["settings_loaded"] = True
 
 
@@ -1744,6 +1749,11 @@ with st.sidebar.expander("🛠️ 更新・メンテナンス", expanded=False):
         except Exception as exc:
             st.error(f"設定の復元に失敗しました: {exc}")
     st.button("🔄 設定を初期値にリセット", on_click=reset_settings_callback)
+    _reset_error = st.session_state.pop("settings_reset_error", None)
+    if _reset_error:
+        st.error(f"設定ファイルを削除できませんでした: {_reset_error}")
+    elif st.session_state.pop("settings_reset_done", False):
+        st.success("設定を初期値にリセットしました。")
     if st.button("🔄 最新データに更新"):
         st.cache_data.clear()
         st.rerun()
