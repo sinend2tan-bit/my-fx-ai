@@ -941,7 +941,7 @@ def _extract_app_backup_functions(tmp_path):
     # テストの実行場所（chdir 後など）に依存しないよう、このファイルの位置から app.py を引く。
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    wanted = {"load_pair_scan_outcomes", "build_data_backup_bundle", "restore_data_backup_bundle"}
+    wanted = {"_atomic_write_json", "load_pair_scan_outcomes", "build_data_backup_bundle", "restore_data_backup_bundle"}
     nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
     assert {n.name for n in nodes} == wanted
     namespace = {
@@ -966,6 +966,28 @@ def _extract_app_backup_functions(tmp_path):
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "app.py", "exec"), namespace)
     return namespace
+
+
+def test_app_atomic_json_write_preserves_existing_file_on_replace_failure(tmp_path, monkeypatch):
+    import os
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    destination = tmp_path / "existing.json"
+    destination.write_text('{"keep": true}', encoding="utf-8")
+    real_replace = os.replace
+
+    def fail_replace(source, target):
+        raise OSError("simulated disk replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated disk replace failure"):
+        ns["_atomic_write_json"](str(destination), {"replace": True})
+    assert destination.read_text(encoding="utf-8") == '{"keep": true}'
+    assert not list(tmp_path.glob(".aifx-save-*.tmp"))
+
+    monkeypatch.setattr(os, "replace", real_replace)
+    assert ns["_atomic_write_json"](str(destination), {"saved": True}) is True
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"saved": True}
 
 
 def test_app_backup_bundle_includes_pair_scan_outcomes(tmp_path, monkeypatch):
