@@ -1,0 +1,38 @@
+name: Read-only FX timezone diagnostic
+
+on:
+  push:
+    branches:
+      - diagnostics/yfinance-timezone-clean-20261114
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out diagnostic branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned free public packages
+        run: python -m pip install --disable-pip-version-check "yfinance==0.2.66" "pandas==2.2.3"
+
+      - name: Run read-only Yahoo FX timezone comparison
+        run: |
+          python tools/diagnose_yfinance_fx_timezone.py | tee timezone-diagnostic.json
+
+      - name: Upload diagnostic report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fx-timezone-diagnostic
+          path: timezone-diagnostic.json
+          if-no-files-found: error
+          retention-days: 7
