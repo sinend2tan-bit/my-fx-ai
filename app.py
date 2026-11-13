@@ -7,6 +7,7 @@
 import html
 import json
 import os
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -424,13 +425,75 @@ def restore_data_backup_bundle(bundle):
         lists[PAIR_SCAN_OUTCOME_FILE] = bundle.get("pair_scan_outcomes")
     if any(not isinstance(v, list) for v in lists.values()):
         raise ValueError("履歴データの形式が正しくありません。復元を中止しました。")
-    # Validate all content before writing any files.
-    json.dumps({"settings": safe_settings, "lists": lists}, ensure_ascii=False, default=_json_default)
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(safe_settings, f, ensure_ascii=False, indent=2, default=_json_default)
-    for filename, items in lists.items():
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(items[-3000:], f, ensure_ascii=False, indent=2, default=_json_default)
+    # Reject malformed rows before touching current files. All consumers expect
+    # dictionary records and call .get() on them during later evaluation/rendering.
+    if any(not isinstance(row, dict) for items in lists.values() for row in items):
+        raise ValueError("履歴データに不正な行があります。復元を中止しました。")
+
+    # Serialize every target before writing anything, then stage files beside their
+    # destinations so os.replace remains atomic on the same filesystem.
+    payloads = {
+        SETTINGS_FILE: json.dumps(safe_settings, ensure_ascii=False, indent=2, default=_json_default),
+    }
+    payloads.update({
+        filename: json.dumps(items[-3000:], ensure_ascii=False, indent=2, default=_json_default)
+        for filename, items in lists.items()
+    })
+    staged = {}
+    originals = {}
+    replaced = []
+    try:
+        for filename, payload in payloads.items():
+            directory = os.path.dirname(os.path.abspath(filename)) or "."
+            if os.path.exists(filename):
+                with open(filename, "rb") as current_file:
+                    originals[filename] = current_file.read()
+            else:
+                originals[filename] = None
+            fd, temp_path = tempfile.mkstemp(prefix=".aifx-restore-", suffix=".tmp", dir=directory)
+            staged[filename] = temp_path
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+
+        try:
+            for filename, temp_path in staged.items():
+                os.replace(temp_path, filename)
+                replaced.append(filename)
+        except OSError as write_error:
+            # Restore any destination already replaced if a later replace fails.
+            rollback_errors = []
+            for filename in reversed(replaced):
+                try:
+                    original = originals[filename]
+                    if original is None:
+                        if os.path.exists(filename):
+                            os.remove(filename)
+                    else:
+                        directory = os.path.dirname(os.path.abspath(filename)) or "."
+                        fd, rollback_path = tempfile.mkstemp(
+                            prefix=".aifx-rollback-", suffix=".tmp", dir=directory
+                        )
+                        with os.fdopen(fd, "wb") as f:
+                            f.write(original)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        os.replace(rollback_path, filename)
+                except OSError as rollback_error:
+                    rollback_errors.append(f"{filename}: {rollback_error}")
+            if rollback_errors:
+                raise RuntimeError(
+                    f"復元に失敗し、一部ファイルの原状回復も失敗しました: {'; '.join(rollback_errors)}"
+                ) from write_error
+            raise
+    finally:
+        for temp_path in staged.values():
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
 
 def update_forecast_history(items, df, ticker, interval, horizon=LOOKAHEAD_BARS):
