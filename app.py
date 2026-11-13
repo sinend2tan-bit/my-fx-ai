@@ -221,6 +221,26 @@ def _json_default(obj):
     return str(obj)
 
 
+def _atomic_write_json(path, value):
+    """Write one JSON file without truncating the previous file on write failure."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, temp_path = tempfile.mkstemp(prefix=".aifx-save-", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(value, f, ensure_ascii=False, indent=2, default=_json_default)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+        return True
+    except OSError:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
+
+
 def load_settings():
     result = DEFAULT_SETTINGS.copy()
     try:
@@ -286,10 +306,10 @@ def load_settings():
 def save_settings():
     payload = {k: st.session_state.get(k, v) for k, v in DEFAULT_SETTINGS.items()}
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2, default=_json_default)
+        return _atomic_write_json(SETTINGS_FILE, payload)
     except OSError as exc:
         st.warning(f"設定を保存できませんでした: {exc}")
+        return False
 
 
 def reset_settings_callback():
@@ -315,10 +335,10 @@ def load_feedback_data():
 
 def save_feedback_data(items):
     try:
-        with open(FEEDBACK_FILE, "w", encoding="utf-8") as f:
-            json.dump(items, f, ensure_ascii=False, indent=2, default=_json_default)
+        return _atomic_write_json(FEEDBACK_FILE, items)
     except OSError as exc:
         st.error(f"フィードバックを保存できませんでした: {exc}")
+        return False
 
 
 def load_trade_journal():
@@ -333,10 +353,10 @@ def load_trade_journal():
 
 def save_trade_journal(items):
     try:
-        with open(TRADE_JOURNAL_FILE, "w", encoding="utf-8") as f:
-            json.dump(items[-2000:], f, ensure_ascii=False, indent=2, default=_json_default)
+        return _atomic_write_json(TRADE_JOURNAL_FILE, items[-2000:])
     except OSError as exc:
         st.error(f"実取引記録を保存できませんでした: {exc}")
+        return False
 
 
 def load_entry_tracking():
@@ -352,10 +372,10 @@ def load_entry_tracking():
 def save_entry_tracking(items):
     try:
         # Keep the file bounded so it remains practical on mobile/local hosting.
-        with open(ENTRY_TRACK_FILE, "w", encoding="utf-8") as f:
-            json.dump(items[-1000:], f, ensure_ascii=False, indent=2, default=_json_default)
+        return _atomic_write_json(ENTRY_TRACK_FILE, items[-1000:])
     except OSError as exc:
         st.error(f"候補価格の検証履歴を保存できませんでした: {exc}")
+        return False
 
 
 def load_forecast_history():
@@ -370,10 +390,10 @@ def load_forecast_history():
 
 def save_forecast_history(items):
     try:
-        with open(FORECAST_TRACK_FILE, "w", encoding="utf-8") as f:
-            json.dump(items[-3000:], f, ensure_ascii=False, indent=2, default=_json_default)
+        return _atomic_write_json(FORECAST_TRACK_FILE, items[-3000:])
     except OSError as exc:
         st.warning(f"自動予測検証履歴を保存できませんでした: {exc}")
+        return False
 
 
 def load_pair_scan_outcomes():
@@ -2083,17 +2103,17 @@ def _render_main_area():
                     "reference_close": latest_price,
                     "created_at": datetime.now(JST).isoformat(),
                 })
-            save_feedback_data(fb_list)
+            return save_feedback_data(fb_list)
 
         fb_col1, fb_col2 = st.columns(2)
         with fb_col1:
             if st.button("👍 利益になった結果を記録", use_container_width=True, key="record_feedback_win"):
-                record_feedback(True)
-                st.success("結果を記録しました。AIの再学習データには自動投入しません。")
+                if record_feedback(True):
+                    st.success("結果を記録しました。AIの再学習データには自動投入しません。")
         with fb_col2:
             if st.button("👎 損失になった結果を記録", use_container_width=True, key="record_feedback_loss"):
-                record_feedback(False)
-                st.warning("結果を記録しました。AIの再学習データには自動投入しません。")
+                if record_feedback(False):
+                    st.warning("結果を記録しました。AIの再学習データには自動投入しません。")
 
         st.markdown("##### 📒 実取引の損益記録")
         st.caption(
@@ -2154,8 +2174,8 @@ def _render_main_area():
                     "result": "利益" if journal_pnl > 0 else "損失" if journal_pnl < 0 else "±0円",
                     "note": journal_note.strip(),
                 })
-                save_trade_journal(journal_items)
-                st.success("実取引記録を保存しました。次の再表示でも履歴を読み込みます。")
+                if save_trade_journal(journal_items):
+                    st.success("実取引記録を保存しました。次の再表示でも履歴を読み込みます。")
 
         journal_items = load_trade_journal()
         if journal_items:
