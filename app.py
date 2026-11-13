@@ -19,6 +19,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
+
+from aifx_time_validation import has_contiguous_hourly_window
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
@@ -610,6 +612,18 @@ def update_forecast_history(items, df, ticker, interval, horizon=LOOKAHEAD_BARS)
             base_pos = int(matches[-1])
             target_pos = base_pos + int(item.get("horizon_bars", horizon))
             if target_pos >= len(df):
+                continue
+            # 1時間足の予測採点では、週末休場以外の欠損をまたいで
+            # horizon 本数を数えない。学習・Scanner側と同じ連続性ルールを適用する。
+            if interval == "1h" and not has_contiguous_hourly_window(
+                idx_utc[base_pos:target_pos + 1]
+            ):
+                item.update({
+                    "status": "UNEVALUABLE_DISCONTINUOUS",
+                    "evaluated_at": datetime.now(JST).isoformat(),
+                    "evaluation_note": "評価期間中に1時間足の不連続があるため採点対象外",
+                })
+                changed = True
                 continue
             base_close = float(item["reference_close"])
             future_close = float(close_values[target_pos])
