@@ -1,9 +1,6 @@
 name: Read-only FX timezone diagnostic
 
 on:
-  pull_request:
-    branches:
-      - feat/ui-simplification
   push:
     branches:
       - diagnostics/yfinance-timezone-readonly
