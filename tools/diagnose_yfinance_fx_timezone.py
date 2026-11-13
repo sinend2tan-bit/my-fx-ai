@@ -128,6 +128,22 @@ def diagnose(symbol: str) -> dict:
         hist = pd.DataFrame()
         result["ticker_history_error"] = f"{type(exc).__name__}: {exc}"
 
+    # Some yfinance versions populate history_metadata only after history()
+    # has fetched the chart response; retry metadata after that first request.
+    if not result.get("history_metadata_available"):
+        try:
+            getter = getattr(ticker, "get_history_metadata", None)
+            metadata = getter() if callable(getter) else getattr(ticker, "history_metadata", None)
+            if isinstance(metadata, dict):
+                keys = [
+                    "exchangeTimezoneName", "timezone", "currency", "exchangeName",
+                    "fullExchangeName", "instrumentType", "gmtoffset", "firstTradeDate",
+                ]
+                result["history_metadata"] = {k: json_safe(metadata.get(k)) for k in keys}
+                result["history_metadata_available"] = bool(metadata)
+        except Exception as exc:
+            result["history_metadata_retry_error"] = f"{type(exc).__name__}: {exc}"
+
     frames = {}
     for mode, kwargs in (
         ("download_ignore_tz_false", {"ignore_tz": False}),
