@@ -933,6 +933,8 @@ if __name__ == "__main__":
 def _extract_app_backup_functions(tmp_path):
     import ast
     import json as json_module
+    import os
+    import tempfile
     from datetime import datetime, timedelta, timezone
     from pathlib import Path
 
@@ -944,6 +946,8 @@ def _extract_app_backup_functions(tmp_path):
     assert {n.name for n in nodes} == wanted
     namespace = {
         "json": json_module,
+        "os": os,
+        "tempfile": tempfile,
         "datetime": datetime,
         "JST": timezone(timedelta(hours=9)),
         "_json_default": str,
@@ -1008,6 +1012,59 @@ def test_app_restore_legacy_bundle_keeps_pair_scan_outcomes(tmp_path, monkeypatc
     ns["restore_data_backup_bundle"](legacy_bundle)
     saved = json_module.loads((tmp_path / "pair_scan_outcomes.json").read_text(encoding="utf-8"))
     assert saved == current
+
+
+def test_app_restore_rejects_non_dict_history_rows_without_touching_files(tmp_path, monkeypatch):
+    import json as json_module
+    monkeypatch.chdir(tmp_path)
+    settings_path = tmp_path / "user_settings.json"
+    forecast_path = tmp_path / "forecast_outcome_history.json"
+    settings_path.write_text('{"rr_ratio": 1.25}', encoding="utf-8")
+    forecast_path.write_text('[{"status": "PENDING"}]', encoding="utf-8")
+    ns = _extract_app_backup_functions(tmp_path)
+    malformed = {
+        "format": "ai_fx_analyzer_backup",
+        "settings": {"rr_ratio": 2.0},
+        "forecast_history": ["not-a-record"],
+        "entry_tracking": [], "trade_journal": [], "feedback_history": [],
+    }
+    with pytest.raises(ValueError, match="不正な行"):
+        ns["restore_data_backup_bundle"](malformed)
+    assert json_module.loads(settings_path.read_text(encoding="utf-8")) == {"rr_ratio": 1.25}
+    assert json_module.loads(forecast_path.read_text(encoding="utf-8")) == [{"status": "PENDING"}]
+
+
+def test_app_restore_rolls_back_if_a_later_file_replace_fails(tmp_path, monkeypatch):
+    import json as json_module
+    import os
+    monkeypatch.chdir(tmp_path)
+    settings_path = tmp_path / "user_settings.json"
+    forecast_path = tmp_path / "forecast_outcome_history.json"
+    settings_path.write_text('{"rr_ratio": 1.25}', encoding="utf-8")
+    forecast_path.write_text('[{"status": "KEEP"}]', encoding="utf-8")
+    ns = _extract_app_backup_functions(tmp_path)
+    bundle = {
+        "format": "ai_fx_analyzer_backup",
+        "settings": {"rr_ratio": 2.0},
+        "forecast_history": [{"status": "REPLACE"}],
+        "entry_tracking": [], "trade_journal": [], "feedback_history": [],
+    }
+    real_replace = os.replace
+    calls = {"count": 0}
+
+    def fail_second_replace(source, destination):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise OSError("simulated replace failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_second_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        ns["restore_data_backup_bundle"](bundle)
+    assert json_module.loads(settings_path.read_text(encoding="utf-8")) == {"rr_ratio": 1.25}
+    assert json_module.loads(forecast_path.read_text(encoding="utf-8")) == [{"status": "KEEP"}]
+    assert not list(tmp_path.glob(".aifx-restore-*.tmp"))
+    assert not list(tmp_path.glob(".aifx-rollback-*.tmp"))
 
 
 # =========================================================
