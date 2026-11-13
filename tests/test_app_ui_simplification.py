@@ -84,6 +84,8 @@ def _make_download(
         period = kwargs.get("period")
         if interval == "1d":
             return _frame(500, "1d", now_h.normalize())
+        if interval == "5m":
+            return _frame(500, "5min", now_h)
         if interval == "15m":
             return _frame(500, "15min", now_h)
         # 1h 系: period=90d は4時間足の元データ、60d は1時間足（メイン含む）
