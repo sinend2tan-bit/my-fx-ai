@@ -941,7 +941,11 @@ def _extract_app_backup_functions(tmp_path):
     # テストの実行場所（chdir 後など）に依存しないよう、このファイルの位置から app.py を引く。
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    wanted = {"_atomic_write_json", "load_pair_scan_outcomes", "build_data_backup_bundle", "restore_data_backup_bundle"}
+    wanted = {
+        "_atomic_write_json", "load_feedback_data", "load_trade_journal",
+        "load_entry_tracking", "load_forecast_history", "load_pair_scan_outcomes",
+        "build_data_backup_bundle", "restore_data_backup_bundle",
+    }
     nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
     assert {n.name for n in nodes} == wanted
     namespace = {
@@ -958,6 +962,10 @@ def _extract_app_backup_functions(tmp_path):
         "TRADE_JOURNAL_FILE": str(tmp_path / "actual_trade_journal.json"),
         "FEEDBACK_FILE": str(tmp_path / "trade_feedback.json"),
         "PAIR_SCAN_OUTCOME_FILE": str(tmp_path / "pair_scan_outcomes.json"),
+        "FEEDBACK_FILE": str(tmp_path / "trade_feedback.json"),
+        "TRADE_JOURNAL_FILE": str(tmp_path / "actual_trade_journal.json"),
+        "ENTRY_TRACK_FILE": str(tmp_path / "entry_candidate_history.json"),
+        "FORECAST_TRACK_FILE": str(tmp_path / "forecast_outcome_history.json"),
         "load_settings": lambda: {"webhook_url": "https://discord.com/api/webhooks/dummy", "rr_ratio": 1.5},
         "load_forecast_history": lambda: [{"kind": "forecast"}],
         "load_entry_tracking": lambda: [{"kind": "entry"}],
@@ -989,6 +997,33 @@ def test_app_atomic_json_write_preserves_existing_file_on_replace_failure(tmp_pa
     assert ns["_atomic_write_json"](str(destination), {"saved": True}) is True
     import json as json_module
     assert json_module.loads(destination.read_text(encoding="utf-8")) == {"saved": True}
+
+
+def test_app_history_loaders_ignore_non_dict_rows_without_crashing(tmp_path, monkeypatch):
+    import json as json_module
+    monkeypatch.chdir(tmp_path)
+    files = {
+        "FEEDBACK_FILE": "trade_feedback.json",
+        "TRADE_JOURNAL_FILE": "actual_trade_journal.json",
+        "ENTRY_TRACK_FILE": "entry_candidate_history.json",
+        "FORECAST_TRACK_FILE": "forecast_outcome_history.json",
+        "PAIR_SCAN_OUTCOME_FILE": "pair_scan_outcomes.json",
+    }
+    for filename in files.values():
+        (tmp_path / filename).write_text(
+            json_module.dumps([{"id": "valid"}, None, "bad-row", 17, {"id": "valid-2"}]),
+            encoding="utf-8",
+        )
+    ns = _extract_app_backup_functions(tmp_path)
+    loaders = {
+        "FEEDBACK_FILE": "load_feedback_data",
+        "TRADE_JOURNAL_FILE": "load_trade_journal",
+        "ENTRY_TRACK_FILE": "load_entry_tracking",
+        "FORECAST_TRACK_FILE": "load_forecast_history",
+        "PAIR_SCAN_OUTCOME_FILE": "load_pair_scan_outcomes",
+    }
+    for key, loader_name in loaders.items():
+        assert ns[loader_name]() == [{"id": "valid"}, {"id": "valid-2"}]
 
 
 def test_app_backup_bundle_includes_pair_scan_outcomes(tmp_path, monkeypatch):
