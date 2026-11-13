@@ -578,10 +578,11 @@ def test_syn_fx_001_constant_series_safety(monkeypatch):
     # App の neutral fill の確認: 方向移動が無い系列（High/Low 一定幅・Close のみ
     # 変動）では DX が定義できず ADX は fillna(20) になる。
     n = 260
-    close = fixture_mixed(n)["Close"]
+    close = 100.0 + 0.001 * np.sin(np.arange(n, dtype=float) / 5.0)
+    open_ = np.concatenate(([close[0]], close[:-1]))
     zero_dm = pd.DataFrame(
         {
-            "Open": close,
+            "Open": open_,
             "High": 100.010,
             "Low": 99.990,
             "Close": close,
@@ -833,7 +834,6 @@ def test_syn_fx_007_reference_price_difference(monkeypatch):
     # ケース1: 次足 Open を signal Close より上へ gap → Scanner の上側 barrier が
     # App より遠くなる。間の価格への到達は App のみ +1。
     mod = raw.copy()
-    mod.at[next_ts, "Open"] = close_i + 0.006
     app_upper = close_i + app_dist
     scan_upper = close_i + 0.006 + atr_s
     assert scan_upper - app_upper > 0.002  # 間に置ける幅があること
@@ -841,11 +841,15 @@ def test_syn_fx_007_reference_price_difference(monkeypatch):
     for k in range(1, 9):
         ts = feat.index[p_s + k]
         if k == 1:
+            mod.at[ts, "Open"] = close_i + 0.006
+            mod.at[ts, "Close"] = close_i + 0.005
             mod.at[ts, "High"] = high_mid
             mod.at[ts, "Low"] = close_i + 0.004
         else:
-            mod.at[ts, "High"] = min(mod.at[ts, "High"], close_i + 0.008)
-            mod.at[ts, "Low"] = max(mod.at[ts, "Low"], close_i + 0.004)
+            o = float(mod.at[ts, "Open"])
+            c = float(mod.at[ts, "Close"])
+            mod.at[ts, "High"] = max(o, c) + 0.001
+            mod.at[ts, "Low"] = min(o, c) - 0.001
     out_s = run_scanner_bars(monkeypatch, mod)
     out_a = run_app_load(mod)
     assert out_a.at[ts_sig, "Target"] == 1
@@ -854,7 +858,6 @@ def test_syn_fx_007_reference_price_difference(monkeypatch):
     # ケース2: 次足 Open を上へ gap → Scanner の下側 barrier が App より
     # 近くなる。間の価格への到達は Scanner のみ -1。
     mod2 = raw.copy()
-    mod2.at[next_ts, "Open"] = close_i + 0.006
     scan_lower = close_i + 0.006 - atr_s
     app_lower = close_i - app_dist
     assert scan_lower - app_lower > 0.002
@@ -862,11 +865,15 @@ def test_syn_fx_007_reference_price_difference(monkeypatch):
     for k in range(1, 9):
         ts = feat.index[p_s + k]
         if k == 1:
+            mod2.at[ts, "Open"] = close_i + 0.006
+            mod2.at[ts, "Close"] = close_i + 0.005
             mod2.at[ts, "Low"] = low_mid
-            mod2.at[ts, "High"] = close_i + 0.004
+            mod2.at[ts, "High"] = close_i + 0.007
         else:
-            mod2.at[ts, "Low"] = max(mod2.at[ts, "Low"], close_i - 0.002)
-            mod2.at[ts, "High"] = min(mod2.at[ts, "High"], close_i + 0.004)
+            o = float(mod2.at[ts, "Open"])
+            c = float(mod2.at[ts, "Close"])
+            mod2.at[ts, "Low"] = min(o, c) - 0.001
+            mod2.at[ts, "High"] = max(o, c) + 0.001
     out_s2 = run_scanner_bars(monkeypatch, mod2)
     out_a2 = run_app_load(mod2)
     assert out_a2.at[ts_sig, "Target"] == 0
@@ -978,12 +985,14 @@ def test_syn_fx_012_spread_effect(monkeypatch):
     mod = raw.copy()
     for k in range(1, 9):
         ts = df_a.index[pos + k]
+        mod.at[ts, "Open"] = close + 0.1 * distance
+        mod.at[ts, "Close"] = close + 0.1 * distance
         if k == 1:
             mod.at[ts, "High"] = upper + 0.0005
             mod.at[ts, "Low"] = close - 0.3 * distance
         else:
-            mod.at[ts, "High"] = min(mod.at[ts, "High"], close + 0.3 * distance)
-            mod.at[ts, "Low"] = max(mod.at[ts, "Low"], close - 0.3 * distance)
+            mod.at[ts, "High"] = close + 0.2 * distance
+            mod.at[ts, "Low"] = close - 0.2 * distance
     out_default = run_app_load(mod)
     assert out_default.at[ts_a, "Target"] == 1
 
