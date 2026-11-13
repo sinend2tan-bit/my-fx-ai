@@ -1346,6 +1346,9 @@ def _normalise_timestamp(value):
 
 def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
     """Returns the same tuple shape expected by the UI."""
+    # 保存失敗の警告は「直近の分析実行」の結果だけを示す。
+    # 次の分析で保存処理が行われなければ、以前の失敗状態を引き継がない。
+    st.session_state.pop("model_save_status", None)
     st.session_state.pop("model_eval_metrics", None)
     fallback = ("WAIT (様子見)", 0.0, 0, 0.0, "データ不足",
                 {"buy": 0, "sell": 0, "wait": 100}, pd.Series(dtype=float), pd.Series(dtype=int))
