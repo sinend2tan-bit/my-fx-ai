@@ -670,6 +670,16 @@ def test_app_model_version_is_8():
     assert _app_literal("MODEL_VERSION") == 8
 
 
+def test_app_clears_stale_model_save_status_at_start():
+    ns, st = _model_namespace()
+    st.session_state["model_save_status"] = {
+        "ticker": "USDJPY=X", "interval": "1h", "saved": False
+    }
+
+    # データ不足の早期 return でも、前回の保存失敗状態を持ち越さない。
+    ns["analyze_signal_with_backtest"](None, None, "USDJPY=X", "1h")
+
+    assert "model_save_status" not in st.session_state
 def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     ns, st = _model_namespace()
     path = _save_model_file(ns, tmp_path, monkeypatch, 7, _tiny_model())
