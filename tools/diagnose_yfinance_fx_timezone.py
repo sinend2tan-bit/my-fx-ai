@@ -276,68 +276,83 @@ def fetch_raw_chart(ticker, symbol: str, interval: str, period: str = "3mo") -> 
     }
 
 
+
 def compare_raw_daily_windows_to_hourly(ticker, symbol: str) -> dict:
-    """Test whether each raw daily timestamp interval contains matching hourly OHLC."""
+    """Sweep UTC start offsets around Yahoo's daily date label and compare H1 OHLC."""
     try:
         daily = fetch_raw_chart(ticker, symbol, "1d", "3mo")
         hourly = fetch_raw_chart(ticker, symbol, "1h", "3mo")
     except Exception as exc:
         return {"available": False, "reason": f"{type(exc).__name__}: {exc}"}
 
-    d = daily["frame"]
-    h = hourly["frame"]
+    d = daily["frame"].sort_values("timestamp")
+    h = hourly["frame"].sort_values("timestamp")
     if d.empty or h.empty:
         return {"available": False, "reason": "raw_daily_or_hourly_empty"}
-    h = h.sort_values("timestamp")
-    d = d.sort_values("timestamp")
-    compared = []
-    exchange_tz = daily["exchange_timezone"] or "UTC"
-    for _, daily_row in d.iterrows():
-        start = int(daily_row["timestamp"])
-        local_start = pd.Timestamp(start, unit="s", tz="UTC").tz_convert(exchange_tz)
-        # A 1d candle ends at the next local calendar midnight, not at the
-        # next available daily row (which may be 72h later across weekends).
-        local_end = local_start.normalize() + pd.DateOffset(days=1)
-        end = int(local_end.tz_convert("UTC").timestamp())
-        bars = h[(h["timestamp"] >= start) & (h["timestamp"] < end)].copy()
-        bars = bars.dropna(subset=OHLC, how="all")
-        if len(bars) < 18:
-            continue
-        open_values = bars["Open"].dropna()
-        close_values = bars["Close"].dropna()
-        high_values = bars["High"].dropna()
-        low_values = bars["Low"].dropna()
-        if open_values.empty or close_values.empty or high_values.empty or low_values.empty:
-            continue
-        aggregate = {
-            "Open": open_values.iloc[0],
-            "High": high_values.max(),
-            "Low": low_values.min(),
-            "Close": close_values.iloc[-1],
-        }
-        daily_values = {column: d.iloc[i][column] for column in OHLC}
-        valid = all(pd.notna(daily_values[k]) and pd.notna(aggregate[k]) for k in OHLC)
-        deltas = {
-            key: abs(float(daily_values[key]) - float(aggregate[key]))
-            if valid else None
-            for key in OHLC
-        }
-        compared.append({
-            "daily_raw_timestamp": start,
-            "daily_raw_utc": pd.Timestamp(start, unit="s", tz="UTC").isoformat(),
-            "daily_raw_exchange_time": pd.Timestamp(start, unit="s", tz="UTC").tz_convert(
-                daily["exchange_timezone"] or "UTC"
-            ).isoformat(),
-            "window_end_raw_utc": pd.Timestamp(end, unit="s", tz="UTC").isoformat(),
-            "window_duration_hours": (end - start) / 3600,
-            "hourly_rows": int(len(bars)),
-            "matches_ohlc": bool(valid and all(v <= 1e-8 for v in deltas.values())),
-            "daily_ohlc": {k: json_safe(v) for k, v in daily_values.items()},
-            "hourly_aggregated_ohlc": {k: json_safe(v) for k, v in aggregate.items()},
-            "absolute_differences": deltas,
+
+    # Yahoo's daily timestamp may be a date label rather than the true FX
+    # session-open timestamp. Test candidate offsets instead of assuming it.
+    offset_results = []
+    detailed_by_offset = {}
+    for offset_hours in range(-5, 2):
+        compared = []
+        for _, daily_row in d.iterrows():
+            label_epoch = int(daily_row["timestamp"])
+            start_epoch = label_epoch + offset_hours * 3600
+            end_epoch = start_epoch + 24 * 3600
+            bars = h[(h["timestamp"] >= start_epoch) & (h["timestamp"] < end_epoch)]
+            bars = bars.dropna(subset=OHLC, how="any")
+            if len(bars) < 18:
+                continue
+            aggregate = {
+                "Open": bars["Open"].iloc[0],
+                "High": bars["High"].max(),
+                "Low": bars["Low"].min(),
+                "Close": bars["Close"].iloc[-1],
+            }
+            daily_values = {column: daily_row[column] for column in OHLC}
+            deltas = {
+                key: abs(float(daily_values[key]) - float(aggregate[key]))
+                for key in OHLC
+                if pd.notna(daily_values[key]) and pd.notna(aggregate[key])
+            }
+            valid = len(deltas) == len(OHLC)
+            match = bool(valid and all(value <= 1e-8 for value in deltas.values()))
+            compared.append({
+                "daily_label_epoch": label_epoch,
+                "daily_label_utc": pd.Timestamp(label_epoch, unit="s", tz="UTC").isoformat(),
+                "candidate_window_start_utc": pd.Timestamp(start_epoch, unit="s", tz="UTC").isoformat(),
+                "candidate_window_end_utc": pd.Timestamp(end_epoch, unit="s", tz="UTC").isoformat(),
+                "hourly_rows": int(len(bars)),
+                "matches_ohlc": match,
+                "daily_ohlc": {k: json_safe(v) for k, v in daily_values.items()},
+                "hourly_aggregated_ohlc": {k: json_safe(v) for k, v in aggregate.items()},
+                "absolute_differences": deltas,
+            })
+        matches = sum(1 for row in compared if row["matches_ohlc"])
+        errors = [
+            max(row["absolute_differences"].values())
+            for row in compared if row["absolute_differences"]
+        ]
+        offset_results.append({
+            "offset_hours_from_raw_daily_timestamp": offset_hours,
+            "compared_windows": len(compared),
+            "exact_ohlc_matches": matches,
+            "mismatches": len(compared) - matches,
+            "median_max_ohlc_difference": float(pd.Series(errors).median()) if errors else None,
+            "max_ohlc_difference": max(errors) if errors else None,
         })
-    matched = sum(1 for row in compared if row["matches_ohlc"])
-    mismatch_samples = [row for row in compared if not row["matches_ohlc"]][:5]
+        detailed_by_offset[offset_hours] = compared
+
+    ranked = sorted(
+        offset_results,
+        key=lambda item: (
+            -item["exact_ohlc_matches"],
+            item["median_max_ohlc_difference"] if item["median_max_ohlc_difference"] is not None else float("inf"),
+        ),
+    )
+    best_offset = ranked[0]["offset_hours_from_raw_daily_timestamp"] if ranked else None
+    best_rows = detailed_by_offset.get(best_offset, []) if best_offset is not None else []
     return {
         "available": True,
         "exchange_timezone_daily": daily["exchange_timezone"],
@@ -368,13 +383,10 @@ def compare_raw_daily_windows_to_hourly(ticker, symbol: str) -> dict:
             pd.Timestamp(int(v), unit="s", tz="UTC").isoformat()
             for v in h["timestamp"].tail(3)
         ],
-        "compared_daily_windows": len(compared),
-        "matched_ohlc_windows": matched,
-        "mismatched_ohlc_windows": len(compared) - matched,
-        "hourly_rows_per_daily_window_min": min((x["hourly_rows"] for x in compared), default=None),
-        "hourly_rows_per_daily_window_max": max((x["hourly_rows"] for x in compared), default=None),
-        "first_5_mismatch_samples": mismatch_samples,
-        "note": "This compares raw Yahoo chart epoch windows [daily timestamp, next local calendar midnight) with raw hourly chart bars. Weekends without daily rows are not treated as one long daily candle; this does not infer a broker's candle convention.",
+        "offset_sweep_results": offset_results,
+        "best_offset_by_exact_matches_then_median_error": best_offset,
+        "best_offset_first_5_windows": best_rows[:5],
+        "note": "Candidate 24h UTC windows are swept relative to the raw daily date label; best offset is a diagnostic result, not proof of broker-equivalent candle semantics.",
     }
 
 def diagnose(symbol: str) -> dict:
