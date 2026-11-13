@@ -1105,8 +1105,12 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
     """
     try:
         actual_interval = "1h" if interval == "4h" else interval
+        # yfinance defaults ignore_tz=True for daily and higher intervals,
+        # which strips Yahoo's exchange timezone from the returned index.
+        # Preserve the provider-supplied timezone instead of assuming UTC/JST;
+        # the runtime tz-aware check below remains as a fail-safe.
         df = yf.download(ticker, period=period, interval=actual_interval, auto_adjust=False,
-                         progress=False, threads=False, timeout=20)
+                         progress=False, threads=False, timeout=20, ignore_tz=False)
         df = flatten_yf_df(df)
         required = ["Open", "High", "Low", "Close"]
         if df.empty or not set(required).issubset(df.columns):
