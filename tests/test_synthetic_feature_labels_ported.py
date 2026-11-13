@@ -7,7 +7,7 @@
   決定論的な合成 DataFrame だけで再現・記録する。
 - 本番コード（app.py / scanner.py / Workflow / requirements）は
   一切変更しない。本ファイルは現行 main へ移植したテスト専用ファイルである。
-- SYN-FX-016..019 は現行 Stage1/2/3 テストで置き換わっているため除外し、
+- SYN-FX-010 と SYN-FX-016..019 は現行 Stage1/2/3 テストで置き換わっているため除外し、
   旧期待値を現行コードへ誤適用しない。
 - 合成テストの PASS は、実市場での予測精度・利益・校正性能の証明ではない。
 
@@ -413,11 +413,31 @@ def _extract_scanner_nested(outer_name, inner_names):
 
 # --- load_and_process_data 用 namespace（yf は stub に差し替え） ---
 _yf_app = YFStub()
+class _AppLoadStreamlit:
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, message):
+        self.warnings.append(message)
+
+
 _app_load_mod = _extract_app_module(
-    {"flatten_yf_df", "load_and_process_data"},
+    {
+        "flatten_yf_df",
+        "get_load_stop_reason",
+        "_load_and_process_data_cached",
+        "load_and_process_data",
+    },
     {"FEATURE_COLUMNS", "DEFAULT_SPREAD_PIPS", "LOOKAHEAD_BARS"},
 )
-APP_LOAD_NS = {"np": np, "pd": pd, "yf": _yf_app}
+APP_LOAD_NS = {
+    "np": np,
+    "pd": pd,
+    "yf": _yf_app,
+    "st": _AppLoadStreamlit(),
+    "_LOAD_STOP_REASONS": {},
+    "_LOAD_STOP_WARNED": set(),
+}
 exec(compile(_app_load_mod, "app.py[ast-extract]", "exec"), APP_LOAD_NS)
 APP_FEATURE_COLUMNS = APP_LOAD_NS["FEATURE_COLUMNS"]
 
@@ -498,6 +518,8 @@ def test_extraction_integrity():
     抽出され、hash が再現可能であることを確認する（抽出実行の明示）。"""
     for key in (
         "app.py:flatten_yf_df",
+        "app.py:get_load_stop_reason",
+        "app.py:_load_and_process_data_cached",
         "app.py:load_and_process_data",
         "app.py:analyze_signal_with_backtest",
         "scanner.py:walk_forward_validation.summarize_trade_results",
@@ -507,9 +529,10 @@ def test_extraction_integrity():
         assert len(EXTRACTION_INFO[key]["source_sha256"]) == 64
     # load_and_process_data のデコレータは Streamlit cache で、抽出時に
     # 取り除いたことを記録として明示する。
-    assert EXTRACTION_INFO["app.py:load_and_process_data"]["decorators"] == [
+    assert EXTRACTION_INFO["app.py:_load_and_process_data_cached"]["decorators"] == [
         "st.cache_data(ttl=60, show_spinner=False)"
     ]
+    assert EXTRACTION_INFO["app.py:load_and_process_data"]["decorators"] == []
     hashes = fixture_source_hashes()
     assert all(len(v) == 64 for v in hashes.values())
     print("EXTRACTION_INFO:", json.dumps(EXTRACTION_INFO, indent=1))
@@ -920,21 +943,8 @@ def test_syn_fx_009_same_bar_ambiguity(monkeypatch):
     assert trades_up[0]["net_pips"] == pytest.approx(0.1)
 
 
-def test_syn_fx_010_timeout_neutral(monkeypatch):
-    """010: 8本の未来窓でどちらにも到達しない → Target は 0（timeout/neutral）
-    のまま残り、未来窓不足（NaN）とは区別される。"""
-    raw = fixture_mixed()
-    feat = _scanner_feature_frame(raw)
-    pos = 120
-    ts_sig = feat.index[pos]
-    out = run_scanner_bars(monkeypatch, _engineer_scanner(raw, feat, pos, "none"))
-    assert ts_sig in out.index
-    assert out.at[ts_sig, "Target"] == 0
-
-    df_a = run_app_load(raw)
-    ts_a = df_a.index[pos]
-    out_a = run_app_load(_engineer_app(raw, df_a, pos, "none"))
-    assert out_a.at[ts_a, "Target"] == 0
+# SYN-FX-010 was not copied forward: current Stage3 tests cover the no-touch
+# neutral case with the new feature-row continuity contract.
 
 
 def test_syn_fx_011_insufficient_future_window(monkeypatch):
