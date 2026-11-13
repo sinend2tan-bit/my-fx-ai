@@ -174,7 +174,8 @@ def test_two_sections_and_removed_displays(rig):
 def test_direction_sell_when_trends_agree_down(rig):
     at = rig(tail_1h=-0.45, tail_4h_source=-0.45)
     assert not at.exception
-    assert any("方向：売り方向" in e for e in _texts(at, "error")), _texts(at, "error")
+    assert any("方向：売り方向" in m for m in _texts(at, "markdown")), _texts(at, "markdown")
+    assert not any("方向：売り方向" in e for e in _texts(at, "error"))
     assert any("4時間足： 下降" in m for m in _texts(at, "markdown"))
     assert any("1時間足： 下降" in m for m in _texts(at, "markdown"))
 
