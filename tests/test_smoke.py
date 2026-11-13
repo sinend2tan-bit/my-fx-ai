@@ -1037,7 +1037,7 @@ def _extract_app_backup_functions(tmp_path):
             error=lambda message: errors.append(str(message)),
             warning=lambda message: errors.append(str(message)),
         ),
-        "errors": [],
+        "errors": errors,
         "_JSON_LOAD_ERRORS": {},
         "os": os,
         "tempfile": tempfile,
