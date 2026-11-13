@@ -15,6 +15,7 @@
 streamlit が無い環境ではモジュールごとスキップする。
 """
 
+import json
 import socket
 from pathlib import Path
 
@@ -117,6 +118,7 @@ def rig(monkeypatch, tmp_path):
         st.cache_data.clear()
         return AppTest.from_file(str(APP_PATH), default_timeout=120).run()
 
+    boot.tmp_path = tmp_path
     return boot
 
 
@@ -214,3 +216,25 @@ def test_direction_hold_when_timeframes_disagree(rig):
     assert not at.exception
     assert any("方向：判断保留" in w for w in _texts(at, "warning"))
     assert any("一致していない" in c for c in _texts(at, "caption"))
+
+
+def test_saved_candidate_outcomes_continue_without_history_ui(rig):
+    # UIから候補履歴表示を外しても、既に保存済みの候補は後続足で評価し続ける。
+    history_path = rig.tmp_path / "entry_candidate_history.json"
+    history_path.write_text(
+        json.dumps([{
+            "ticker": "USDJPY=X",
+            "interval": "1h",
+            "bar_timestamp": "2000-01-01T00:00:00+00:00",
+            "candidate_price": 9999.0,
+            "status": "PENDING",
+        }]),
+        encoding="utf-8",
+    )
+
+    at = rig()
+    assert not at.exception, f"app raised: {[e.value for e in at.exception]}"
+    saved = json.loads(history_path.read_text(encoding="utf-8"))
+    assert len(saved) == 1
+    assert saved[0]["status"] == "NOT_REACHED"
+    assert saved[0].get("evaluated_at")
