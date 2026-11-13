@@ -363,8 +363,8 @@ def save_settings():
     payload = {k: st.session_state.get(k, v) for k, v in DEFAULT_SETTINGS.items()}
     try:
         return _atomic_write_json(SETTINGS_FILE, payload)
-    except OSError as exc:
-        st.warning(f"設定を保存できませんでした: {exc}")
+    except OSError:
+        st.warning("設定を保存できませんでした。既存データは保護されています。")
         return False
 
 
@@ -376,7 +376,7 @@ def reset_settings_callback():
         if os.path.exists(SETTINGS_FILE):
             os.remove(SETTINGS_FILE)
     except OSError as exc:
-        st.session_state["settings_reset_error"] = str(exc)
+        st.session_state["settings_reset_error"] = type(exc).__name__
         st.session_state.pop("settings_reset_done", None)
     else:
         _JSON_LOAD_ERRORS.pop(SETTINGS_FILE, None)
@@ -392,8 +392,8 @@ def load_feedback_data():
 def save_feedback_data(items):
     try:
         return _atomic_write_json(FEEDBACK_FILE, items)
-    except OSError as exc:
-        st.error(f"フィードバックを保存できませんでした: {exc}")
+    except OSError:
+        st.error("フィードバックを保存できませんでした。既存データは保護されています。")
         return False
 
 
@@ -405,8 +405,8 @@ def load_trade_journal():
 def save_trade_journal(items):
     try:
         return _atomic_write_json(TRADE_JOURNAL_FILE, items[-2000:])
-    except OSError as exc:
-        st.error(f"実取引記録を保存できませんでした: {exc}")
+    except OSError:
+        st.error("実取引記録を保存できませんでした。既存データは保護されています。")
         return False
 
 
@@ -419,8 +419,8 @@ def save_entry_tracking(items):
     try:
         # Keep the file bounded so it remains practical on mobile/local hosting.
         return _atomic_write_json(ENTRY_TRACK_FILE, items[-1000:])
-    except OSError as exc:
-        st.error(f"候補価格の検証履歴を保存できませんでした: {exc}")
+    except OSError:
+        st.error("候補価格の検証履歴を保存できませんでした。既存データは保護されています。")
         return False
 
 
@@ -432,8 +432,8 @@ def load_forecast_history():
 def save_forecast_history(items):
     try:
         return _atomic_write_json(FORECAST_TRACK_FILE, items[-3000:])
-    except OSError as exc:
-        st.warning(f"自動予測検証履歴を保存できませんでした: {exc}")
+    except OSError:
+        st.warning("自動予測検証履歴を保存できませんでした。既存データは保護されています。")
         return False
 
 
@@ -1736,7 +1736,7 @@ with st.sidebar.expander("🛠️ 更新・メンテナンス", expanded=False):
                 st.success("設定と履歴を復元しました。アプリを再読み込みしてください。Webhook URLは復元していません。")
                 st.rerun()
             except Exception as exc:
-                st.error(f"バックアップの復元に失敗しました: {exc}")
+                st.error(f"バックアップの復元に失敗しました（{type(exc).__name__}）。復元先のデータ状態を確認してください。")
     uploaded_file = st.file_uploader("📤 設定のみを復元 (アップロード)", type=["json"], key="settings_only_upload")
     if uploaded_file is not None:
         try:
@@ -1747,11 +1747,11 @@ with st.sidebar.expander("🛠️ 更新・メンテナンス", expanded=False):
                 _atomic_write_json(SETTINGS_FILE, safe_data, validate_existing=False)
                 st.success("設定を復元しました。再読み込みしてください。")
         except Exception as exc:
-            st.error(f"設定の復元に失敗しました: {exc}")
+            st.error(f"設定の復元に失敗しました（{type(exc).__name__}）。")
     st.button("🔄 設定を初期値にリセット", on_click=reset_settings_callback)
     _reset_error = st.session_state.pop("settings_reset_error", None)
     if _reset_error:
-        st.error(f"設定ファイルを削除できませんでした: {_reset_error}")
+        st.error(f"設定ファイルを削除できませんでした（{_reset_error}）。既存ファイルは残っています。")
     elif st.session_state.pop("settings_reset_done", False):
         st.success("設定を初期値にリセットしました。")
     if st.button("🔄 最新データに更新"):
