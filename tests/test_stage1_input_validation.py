@@ -562,6 +562,28 @@ def test_app_daily_tz_aware_nonutc_processed_without_conversion():
     assert "data_quality" not in out.attrs
 
 
+def test_app_daily_download_explicitly_preserves_provider_timezone():
+    # yf.download の日足既定値は ignore_tz=True でtimezoneを落とすため、
+    # アプリはFalseを明示し、配信元のtimezoneを保持する。
+    # ただし実行時にtz-naiveが返れば既存の安全停止が働く。
+    frame = make_frame(n=500, tz="Europe/London", start="2024-06-03", freq="1d")
+    calls = []
+
+    def download(*args, **kwargs):
+        calls.append(kwargs.copy())
+        return frame.copy()
+
+    ns, st = _app_namespace(lambda: frame.copy())
+    ns["yf"].download = staticmethod(download)
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+
+    assert out is not None
+    assert calls and calls[0].get("ignore_tz") is False
+    assert str(out.index.tz) == "Europe/London"
+    assert st.warnings == []
+    assert "data_quality" not in out.attrs
+
+
 def test_app_daily_non_datetime_index_stops():
     # 日足でも、DatetimeIndex でない場合はタイムゾーン安全仕様として
     # 停止し、理由コードが記録される。
