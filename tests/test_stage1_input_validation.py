@@ -1182,12 +1182,12 @@ def test_app_stop_reason_recorded_for_tz_naive_daily():
     frame = make_frame()
     frame.index = frame.index.tz_localize(None)
     ns, st = _app_namespace(lambda: frame.copy())
-    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d", "日足")
     assert out is None
     reason = ns["get_load_stop_reason"]("USDJPY=X", "1d")
     assert reason is not None
     assert reason["code"] == "tz_unavailable"
-    assert any("タイムゾーン" in w and "停止" in w for w in st.warnings)
+    assert any("日足" in w and "タイムゾーン" in w and "停止" in w for w in st.warnings)
     # 同じ呼び出しを繰り返しても、警告は同一描画内で1回だけ。
     out2 = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
     assert out2 is None
