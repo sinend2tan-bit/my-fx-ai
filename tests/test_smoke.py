@@ -1073,7 +1073,7 @@ def test_app_corrupt_history_is_preserved_and_blocks_overwrite(tmp_path, monkeyp
 
     # The loader may return an empty safe view, but it records the schema error.
     assert ns["load_forecast_history"]() == []
-    with pytest.raises(OSError, match="上書きを停止"):
+    with pytest.raises(OSError, match="保存を停止"):
         ns["_atomic_write_json"](str(path), [{"new": "row"}])
     assert path.read_text(encoding="utf-8") == original
     assert ns["build_data_backup_bundle"]() is None
@@ -1088,7 +1088,7 @@ def test_app_malformed_history_rows_are_not_silently_discarded_on_save(tmp_path,
     path.write_text(original, encoding="utf-8")
 
     assert ns["load_forecast_history"]() == [{"id": "keep"}]
-    with pytest.raises(OSError, match="上書きを停止"):
+    with pytest.raises(OSError, match="保存を停止"):
         ns["_atomic_write_json"](str(path), [{"id": "keep"}])
     assert path.read_text(encoding="utf-8") == original
 
