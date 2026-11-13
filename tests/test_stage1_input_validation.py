@@ -1283,11 +1283,11 @@ def test_app_and_scanner_1h_dst_inputs_normalize_to_same_utc_instants(
         assert after - before == pd.Timedelta(hours=2)
     else:
         # Fall-back: 01:00 local occurs twice on 2026-10-25.
-        repeated_hour = local_wall_clock[
-            local_wall_clock.strftime("%Y-%m-%d %H") == "2026-10-25 01"
+        repeated_hour = london_frame.index[
+            london_frame.index.strftime("%Y-%m-%d %H") == "2026-10-25 01"
         ]
         assert len(repeated_hour) == 2
-        assert repeated_hour[0] != repeated_hour[1]
+        assert repeated_hour[0].tz_convert("UTC") != repeated_hour[1].tz_convert("UTC")
 
     stub_scanner_download(monkeypatch, london_frame)
     scan = scanner.bars("USDJPY=X", interval="1h", period="180d")
