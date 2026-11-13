@@ -279,9 +279,10 @@ def _validate_existing_json_file(path):
         raise OSError(f"{path} に不正な履歴行があるため、上書きを停止しました。バックアップから復元してください。")
 
 
-def _atomic_write_json(path, value):
+def _atomic_write_json(path, value, validate_existing=True):
     """Write one JSON file without truncating the previous file on write failure."""
-    _validate_existing_json_file(path)
+    if validate_existing:
+        _validate_existing_json_file(path)
     directory = os.path.dirname(os.path.abspath(path)) or "."
     fd, temp_path = tempfile.mkstemp(prefix=".aifx-save-", suffix=".tmp", dir=directory)
     try:
@@ -290,6 +291,7 @@ def _atomic_write_json(path, value):
             f.flush()
             os.fsync(f.fileno())
         os.replace(temp_path, path)
+        _JSON_LOAD_ERRORS.pop(path, None)
         return True
     except OSError:
         if os.path.exists(temp_path):
@@ -1728,7 +1730,7 @@ with st.sidebar.expander("🛠️ 更新・メンテナンス", expanded=False):
             if isinstance(imported_data, dict):
                 safe_data = {k: imported_data[k] for k in DEFAULT_SETTINGS if k in imported_data}
                 safe_data["webhook_url"] = ""  # Never import a webhook URL from an untrusted backup.
-                _atomic_write_json(SETTINGS_FILE, safe_data)
+                _atomic_write_json(SETTINGS_FILE, safe_data, validate_existing=False)
                 st.success("設定を復元しました。再読み込みしてください。")
         except Exception as exc:
             st.error(f"設定の復元に失敗しました: {exc}")
