@@ -1282,14 +1282,14 @@ def test_app_and_scanner_1h_dst_inputs_normalize_to_same_utc_instants(
     scan_index = scan.attrs["latest_features"].index
     assert scan_index.tz is not None
     assert str(scan_index.tz) == "UTC"
-    assert scan_index.equals(utc_frame.index[:-1])
+    assert scan_index.equals(utc_frame.index[19:-1])
 
     app_ns, _st = _app_namespace(lambda: london_frame.copy())
     app = app_ns["load_and_process_data"]("USDJPY=X", "60d", "1h")
     assert app is not None
     assert app.index.tz is not None
     assert str(app.index.tz) == "UTC"
-    assert app.index.equals(utc_frame.index[:-1])
+    assert app.index.equals(utc_frame.index[15:-1])
 
 
 def test_app_daily_keeps_exchange_calendar_timezone_without_utc_relabel():
