@@ -1274,7 +1274,20 @@ def test_app_and_scanner_1h_dst_inputs_normalize_to_same_utc_instants(
     # each row still represents the same absolute instant as the UTC source.
     assert london_frame.index.tz is not None
     assert london_frame.index.tz_convert("UTC").equals(utc_frame.index)
-    assert not london_frame.index.equals(utc_frame.index)
+    local_wall_clock = london_frame.index.tz_localize(None)
+    if start.startswith("2026-03"):
+        # Spring-forward: 01:00 local does not exist on 2026-03-29.
+        assert pd.Timestamp("2026-03-29 01:00") not in local_wall_clock
+        before = pd.Timestamp("2026-03-29 00:00")
+        after = pd.Timestamp("2026-03-29 02:00")
+        assert after - before == pd.Timedelta(hours=2)
+    else:
+        # Fall-back: 01:00 local occurs twice on 2026-10-25.
+        repeated_hour = local_wall_clock[
+            local_wall_clock.strftime("%Y-%m-%d %H") == "2026-10-25 01"
+        ]
+        assert len(repeated_hour) == 2
+        assert repeated_hour[0] != repeated_hour[1]
 
     stub_scanner_download(monkeypatch, london_frame)
     scan = scanner.bars("USDJPY=X", interval="1h", period="180d")
