@@ -1017,6 +1017,7 @@ def _extract_app_backup_functions(tmp_path):
     # テストの実行場所（chdir 後など）に依存しないよう、このファイルの位置から app.py を引く。
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
+    errors = []
     wanted = {
         "_expected_json_type", "_read_json_file", "_validate_existing_json_file",
         "_atomic_write_json", "_save_trained_model", "save_settings",
