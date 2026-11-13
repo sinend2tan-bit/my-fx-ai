@@ -1849,7 +1849,12 @@ def direction_from_probabilities(sell_probability, buy_probability, threshold=0.
     """
     sell_value = safe_float(sell_probability)
     buy_value = safe_float(buy_probability)
-    if sell_value is None or buy_value is None:
+    if (
+        sell_value is None
+        or buy_value is None
+        or not 0.0 <= sell_value <= 1.0
+        or not 0.0 <= buy_value <= 1.0
+    ):
         return 0
     if buy_value >= threshold and buy_value > sell_value:
         return 1
