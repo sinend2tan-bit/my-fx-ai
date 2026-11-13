@@ -866,10 +866,11 @@ def test_app_atomic_save_without_old_model_leaves_no_partial_file_on_failure(
 
 def test_app_force_retrain_button_does_not_delete_existing_model():
     source = APP_PATH.read_text(encoding="utf-8")
-    start = source.index('if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)")')
+    start = source.index('if st.button("🧠 AIモデルを今すぐ強制再学習"):')
     end = source.index("m_file_info =", start)
     button_block = source[start:end]
     assert "os.remove" not in button_block
+    assert "os.unlink" not in button_block
     assert "force_retrain_once" in button_block
     assert "st.cache_data.clear()" in button_block
 
