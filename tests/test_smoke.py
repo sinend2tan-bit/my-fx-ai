@@ -36,9 +36,49 @@ def test_load_state_missing_file(tmp_path, monkeypatch):
 
 def test_load_state_broken_json(tmp_path, monkeypatch):
     state = tmp_path / "scan_state.json"
-    state.write_text("{broken json", encoding="utf-8")
+    original = "{broken json"
+    state.write_text(original, encoding="utf-8")
     monkeypatch.setattr(scanner, "STATE_FILE", str(state))
     assert scanner.load_state() == {}
+    with pytest.raises(RuntimeError, match="上書きを停止"):
+        scanner.save_state({"replacement": True})
+    assert state.read_text(encoding="utf-8") == original
+
+
+def test_load_state_wrong_json_type_is_not_overwritten(tmp_path, monkeypatch):
+    state = tmp_path / "scan_state.json"
+    original = "[]"
+    state.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(scanner, "STATE_FILE", str(state))
+    assert scanner.load_state() == {}
+    with pytest.raises(RuntimeError, match="上書きを停止"):
+        scanner.save_state({"replacement": True})
+    assert state.read_text(encoding="utf-8") == original
+
+
+def test_simple_scanner_corrupt_history_is_not_overwritten(tmp_path, monkeypatch):
+    import fx_scanner_simple as simple_scanner
+
+    history = tmp_path / "scan_history_simple.json"
+    original = '[{"old": 1}, broken'
+    history.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(simple_scanner, "HISTORY_FILE", str(history))
+    assert simple_scanner.load_history() == []
+    with pytest.raises(RuntimeError, match="上書きを停止"):
+        simple_scanner.save_json(str(history), [{"new": 2}])
+    assert history.read_text(encoding="utf-8") == original
+
+
+def test_simple_scanner_wrong_history_type_is_not_overwritten(tmp_path, monkeypatch):
+    import fx_scanner_simple as simple_scanner
+
+    history = tmp_path / "scan_history_simple.json"
+    original = '{"not": "a list"}'
+    history.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(simple_scanner, "HISTORY_FILE", str(history))
+    with pytest.raises(RuntimeError, match="形式が不正"):
+        simple_scanner.save_json(str(history), [])
+    assert history.read_text(encoding="utf-8") == original
 
 
 def test_flatten_yf_columns_multiindex():
