@@ -2130,18 +2130,6 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 spread_pips,
                 pip_size,
             )
-            # 本番 Scanner の 55% 方向ゲートを適用した参考損益も別計算する。
-            # 既存 argmax 損益・モデル合格条件・品質ゲートは変更しない。
-            runtime_gate_pred = np.asarray([
-                direction_from_probabilities(row[0], row[2])
-                for row in aligned_proba
-            ], dtype=int)
-            runtime_gate_pnl, runtime_gate_trades = simulated_pnl(
-                runtime_gate_pred,
-                df.loc[test_X.index],
-                spread_pips,
-                pip_size,
-            )
             # 各foldで選ばれた非重複取引だけを全体集計に使う。
             simulated_trade_rows.extend(fold_trades)
             runtime_gate_trade_rows.extend(runtime_gate_trades)
