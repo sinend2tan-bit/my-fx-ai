@@ -229,8 +229,8 @@ def fixture_f0_constant(n=240):
     return pd.DataFrame(
         {
             "Open": 100.0,
-            "High": 100.010,
-            "Low": 99.990,
+            "High": 101.0,
+            "Low": 99.0,
             "Close": 100.0,
             "Volume": 100.0,
         },
@@ -318,6 +318,14 @@ FIXTURE_BUILDERS = {
     "fixture_mixed": fixture_mixed,
     "fixture_seeded_walk": fixture_seeded_walk,
 }
+
+
+def normalize_ohlc(frame):
+    """Keep engineered synthetic candles valid after changing Open/High/Low/Close."""
+    frame = frame.copy()
+    frame["High"] = frame[["High", "Open", "Close"]].max(axis=1)
+    frame["Low"] = frame[["Low", "Open", "Close"]].min(axis=1)
+    return frame
 
 
 def fixture_source_hashes():
@@ -843,6 +851,7 @@ def test_syn_fx_007_reference_price_difference(monkeypatch):
         else:
             mod.at[ts, "High"] = min(mod.at[ts, "High"], close_i + 0.008)
             mod.at[ts, "Low"] = max(mod.at[ts, "Low"], close_i + 0.004)
+    mod = normalize_ohlc(mod)
     out_s = run_scanner_bars(monkeypatch, mod)
     out_a = run_app_load(mod)
     assert out_a.at[ts_sig, "Target"] == 1
@@ -864,6 +873,7 @@ def test_syn_fx_007_reference_price_difference(monkeypatch):
         else:
             mod2.at[ts, "Low"] = max(mod2.at[ts, "Low"], close_i - 0.002)
             mod2.at[ts, "High"] = min(mod2.at[ts, "High"], close_i + 0.004)
+    mod2 = normalize_ohlc(mod2)
     out_s2 = run_scanner_bars(monkeypatch, mod2)
     out_a2 = run_app_load(mod2)
     assert out_a2.at[ts_sig, "Target"] == 0
@@ -994,6 +1004,7 @@ def test_syn_fx_012_spread_effect(monkeypatch):
         else:
             mod.at[ts, "High"] = min(mod.at[ts, "High"], close + 0.3 * distance)
             mod.at[ts, "Low"] = max(mod.at[ts, "Low"], close - 0.3 * distance)
+    mod = normalize_ohlc(mod)
     out_default = run_app_load(mod)
     assert out_default.at[ts_a, "Target"] == 1
 
@@ -1306,6 +1317,7 @@ def test_syn_fx_018_feature_nan_window_compression(monkeypatch):
             mod.at[ts, "Low"] = max(mod.at[ts, "Low"], entry - 0.5 * atr)
 
     # 対照（行除去なし）: 9 本目の到達は窓の外 -> Target は 0。
+    mod = normalize_ohlc(mod)
     control = run_scanner_bars(monkeypatch, mod)
     assert control.at[ts_sig, "Target"] == 0
 
@@ -1349,6 +1361,7 @@ def test_syn_fx_018_feature_nan_window_compression(monkeypatch):
         else:
             mod_a.at[ts, "High"] = min(mod_a.at[ts, "High"], close_a + 0.3 * dist_a)
             mod_a.at[ts, "Low"] = max(mod_a.at[ts, "Low"], close_a - 0.3 * dist_a)
+    mod_a = normalize_ohlc(mod_a)
     out_a = run_app_load(mod_a)
     assert zero_ts not in out_a.index  # 特徴量 NaN 行は出力から落ちる
     assert out_a.at[ts_a, "Target"] == 0  # しかし窓は圧縮されない
@@ -1384,7 +1397,7 @@ def test_syn_fx_019_weekday_gap_vs_forward_policy(monkeypatch):
         else:
             mod_w.at[ts, "High"] = min(mod_w.at[ts, "High"], entry_w + 0.5 * atr_w)
             mod_w.at[ts, "Low"] = max(mod_w.at[ts, "Low"], entry_w - 0.5 * atr_w)
-    mod_w = mod_w.drop(index=gap_ts)
+    mod_w = normalize_ohlc(mod_w.drop(index=gap_ts))
     out_w = run_scanner_bars(monkeypatch, mod_w)
     assert ts_sig_w not in out_w.index
     assert out_w.attrs["label_audit"].loc[ts_sig_w, "invalid_reason"] == "discontinuous"
