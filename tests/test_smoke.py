@@ -1012,13 +1012,15 @@ def _extract_app_backup_functions(tmp_path):
     import tempfile
     from datetime import datetime, timedelta, timezone
     from pathlib import Path
+    from types import SimpleNamespace
 
     # テストの実行場所（chdir 後など）に依存しないよう、このファイルの位置から app.py を引く。
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     wanted = {
         "_expected_json_type", "_read_json_file", "_validate_existing_json_file",
-        "_atomic_write_json", "_save_trained_model", "load_feedback_data", "load_trade_journal",
+        "_atomic_write_json", "_save_trained_model", "reset_settings_callback",
+        "load_feedback_data", "load_trade_journal",
         "load_entry_tracking", "load_forecast_history", "load_pair_scan_outcomes",
         "build_data_backup_bundle", "restore_data_backup_bundle",
     }
@@ -1027,6 +1029,7 @@ def _extract_app_backup_functions(tmp_path):
     namespace = {
         "json": json_module,
         "joblib": None,
+        "st": SimpleNamespace(session_state={}),
         "_JSON_LOAD_ERRORS": {},
         "os": os,
         "tempfile": tempfile,
@@ -1150,6 +1153,48 @@ def test_app_history_loaders_ignore_non_dict_rows_without_crashing(tmp_path, mon
     }
     for key, loader_name in loaders.items():
         assert ns[loader_name]() == [{"id": "valid"}, {"id": "valid-2"}]
+
+
+def test_app_settings_reset_reports_success_and_clears_corruption(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "user_settings.json"
+    path.write_text("{broken", encoding="utf-8")
+    ns["SETTINGS_FILE"] = str(path)
+    ns["_JSON_LOAD_ERRORS"][str(path)] = "broken JSON"
+    ns["st"].session_state["rr_ratio"] = 99
+
+    ns["reset_settings_callback"]()
+
+    assert not path.exists()
+    assert ns["st"].session_state["rr_ratio"] == 1.5
+    assert ns["st"].session_state["settings_loaded"] is True
+    assert ns["st"].session_state["settings_reset_done"] is True
+    assert "settings_reset_error" not in ns["st"].session_state
+    assert str(path) not in ns["_JSON_LOAD_ERRORS"]
+
+
+def test_app_settings_reset_reports_file_delete_failure(tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "user_settings.json"
+    path.write_text('{"rr_ratio": 2.0}', encoding="utf-8")
+    ns["SETTINGS_FILE"] = str(path)
+    ns["st"].session_state["rr_ratio"] = 99
+
+    def fail_remove(_path):
+        raise OSError("simulated settings delete failure")
+
+    monkeypatch.setattr(os, "remove", fail_remove)
+    ns["reset_settings_callback"]()
+
+    assert path.exists()
+    assert ns["st"].session_state["rr_ratio"] == 1.5
+    assert ns["st"].session_state["settings_loaded"] is True
+    assert ns["st"].session_state["settings_reset_error"] == "simulated settings delete failure"
+    assert "settings_reset_done" not in ns["st"].session_state
 
 
 def test_app_corrupt_history_is_preserved_and_blocks_overwrite(tmp_path, monkeypatch):
