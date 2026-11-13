@@ -2,9 +2,8 @@
 
 目的（Notion「旧AIFX読み取り専用監査」ページの
 「Muse実施依頼：隔離合成テスト実装・実行（ユーザー承認済み、2026-11-11）」）:
-- 対象 commit c90d5732bafa2cd7bbb488be84a6144a93dabe85（main）時点の
-  App（app.py）と Scanner（scanner.py）の現行挙動を、実データを使わず
-  決定論的な合成 DataFrame だけで再現・記録する。
+- 現行 main を基準に、App（app.py）と Scanner（scanner.py）の特徴量・
+  ラベル生成・品質検証の挙動を、決定論的な合成 DataFrame で再検証する。
 - 本番コード（app.py / scanner.py / 既存テスト / Workflow / requirements）は
   一切変更しない。本ファイルは新規追加のテスト専用ファイルである。
 - 合成テストの PASS は、実市場での予測精度・利益・校正性能の証明ではない。
@@ -16,8 +15,9 @@
   AST で対象関数定義だけを抽出し、必要な依存（numpy / pandas /
   ダウンロード stub / flatten_yf_df / 定数）を明示した namespace で実行する。
   これは元関数の「抽出実行」であり、Streamlit の cache ラッパ等は含まない。
-  - load_and_process_data には @st.cache_data(ttl=60) デコレータが付いている。
-    抽出時はデコレータを取り除き、関数本体のみを実行する（記録済み）。
+  - 現行 main では @st.cache_data が内部関数 _load_and_process_data_cached
+    に付いている。AST抽出時はデコレータを取り除き、公開ラッパーも含めて
+    実処理を実行する。
   - 抽出した各関数のソース断片 SHA-256 と AST dump の SHA-256 は
     EXTRACTION_INFO に記録し、レポートへ残す。
 - ネットワークは fail-closed: autouse fixture が socket / DNS / urllib の
@@ -412,10 +412,25 @@ def _extract_scanner_nested(outer_name, inner_names):
 # --- load_and_process_data 用 namespace（yf は stub に差し替え） ---
 _yf_app = YFStub()
 _app_load_mod = _extract_app_module(
-    {"flatten_yf_df", "load_and_process_data"},
+    {"flatten_yf_df", "_load_and_process_data_cached", "load_and_process_data"},
     {"FEATURE_COLUMNS", "DEFAULT_SPREAD_PIPS", "LOOKAHEAD_BARS"},
 )
-APP_LOAD_NS = {"np": np, "pd": pd, "yf": _yf_app}
+class _LoadStreamlitStub:
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, message):
+        self.warnings.append(str(message))
+
+
+APP_LOAD_NS = {
+    "np": np,
+    "pd": pd,
+    "yf": _yf_app,
+    "st": _LoadStreamlitStub(),
+    "_LOAD_STOP_REASONS": {},
+    "_LOAD_STOP_WARNED": set(),
+}
 exec(compile(_app_load_mod, "app.py[ast-extract]", "exec"), APP_LOAD_NS)
 APP_FEATURE_COLUMNS = APP_LOAD_NS["FEATURE_COLUMNS"]
 
@@ -496,6 +511,7 @@ def test_extraction_integrity():
     抽出され、hash が再現可能であることを確認する（抽出実行の明示）。"""
     for key in (
         "app.py:flatten_yf_df",
+        "app.py:_load_and_process_data_cached",
         "app.py:load_and_process_data",
         "app.py:analyze_signal_with_backtest",
         "scanner.py:walk_forward_validation.summarize_trade_results",
@@ -503,9 +519,8 @@ def test_extraction_integrity():
     ):
         assert key in EXTRACTION_INFO, key
         assert len(EXTRACTION_INFO[key]["source_sha256"]) == 64
-    # load_and_process_data のデコレータは Streamlit cache で、抽出時に
-    # 取り除いたことを記録として明示する。
-    assert EXTRACTION_INFO["app.py:load_and_process_data"]["decorators"] == [
+    # 現行 main では内部処理関数のStreamlit cacheデコレータを抽出時に除去。
+    assert EXTRACTION_INFO["app.py:_load_and_process_data_cached"]["decorators"] == [
         "st.cache_data(ttl=60, show_spinner=False)"
     ]
     hashes = fixture_source_hashes()
@@ -748,8 +763,10 @@ def _engineer_scanner(raw, feat, pos, mode):
             raw.at[ts, "High"] = entry + atr + 0.002
             raw.at[ts, "Low"] = entry - 0.5 * atr
         elif mode == "none":
-            raw.at[ts, "High"] = min(raw.at[ts, "High"], entry + 0.5 * atr)
-            raw.at[ts, "Low"] = max(raw.at[ts, "Low"], entry - 0.5 * atr)
+            cap_high = min(raw.at[ts, "High"], entry + 0.5 * atr)
+            cap_low = max(raw.at[ts, "Low"], entry - 0.5 * atr)
+            raw.at[ts, "High"] = max(raw.at[ts, "Open"], raw.at[ts, "Close"], cap_high)
+            raw.at[ts, "Low"] = min(raw.at[ts, "Open"], raw.at[ts, "Close"], cap_low)
     return raw
 
 
@@ -783,8 +800,10 @@ def _engineer_app(raw, df, pos, mode):
             raw.at[ts, "High"] = upper + 0.001
             raw.at[ts, "Low"] = close - 0.3 * distance
         elif mode == "none":
-            raw.at[ts, "High"] = min(raw.at[ts, "High"], close + 0.3 * distance)
-            raw.at[ts, "Low"] = max(raw.at[ts, "Low"], close - 0.3 * distance)
+            cap_high = min(raw.at[ts, "High"], close + 0.3 * distance)
+            cap_low = max(raw.at[ts, "Low"], close - 0.3 * distance)
+            raw.at[ts, "High"] = max(raw.at[ts, "Open"], raw.at[ts, "Close"], cap_high)
+            raw.at[ts, "Low"] = min(raw.at[ts, "Open"], raw.at[ts, "Close"], cap_low)
     return raw
 
 
