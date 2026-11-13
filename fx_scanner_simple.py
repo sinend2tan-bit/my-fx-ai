@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import tempfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -82,10 +83,25 @@ def json_default(value):
 
 
 def save_json(path, data):
-    """一時ファイルに書いてから置き換える。"""
-    temp_path = path + ".tmp"
+    """既存JSONを検証してから一時ファイル経由で置き換える。"""
+    if os.path.exists(path):
+        expected_type = dict if path == STATE_FILE else list if path == HISTORY_FILE else None
+        try:
+            with open(path, "r", encoding="utf-8") as current_file:
+                existing = json.load(current_file)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+            raise RuntimeError(f"{path} の既存データを読み取れないため、上書きを停止しました") from exc
+        if expected_type is not None and not isinstance(existing, expected_type):
+            raise RuntimeError(f"{path} の既存データ形式が不正なため、上書きを停止しました")
+        if isinstance(existing, list) and any(not isinstance(row, dict) for row in existing):
+            raise RuntimeError(f"{path} に不正な履歴行があるため、上書きを停止しました")
+    temp_path = None
     try:
-        with open(temp_path, "w", encoding="utf-8") as f:
+        target_dir = os.path.dirname(os.path.abspath(path)) or "."
+        fd, temp_path = tempfile.mkstemp(
+            prefix=".aifx-simple-", suffix=".tmp", dir=target_dir
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(
                 data,
                 f,
@@ -94,9 +110,11 @@ def save_json(path, data):
                 default=json_default,
                 allow_nan=False,
             )
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(temp_path, path)
     finally:
-        if os.path.exists(temp_path):
+        if temp_path and os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
             except OSError:

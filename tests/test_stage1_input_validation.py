@@ -562,6 +562,28 @@ def test_app_daily_tz_aware_nonutc_processed_without_conversion():
     assert "data_quality" not in out.attrs
 
 
+def test_app_daily_download_explicitly_preserves_provider_timezone():
+    # yf.download の日足既定値は ignore_tz=True でtimezoneを落とすため、
+    # アプリはFalseを明示し、配信元のtimezoneを保持する。
+    # ただし実行時にtz-naiveが返れば既存の安全停止が働く。
+    frame = make_frame(n=500, tz="Europe/London", start="2024-06-03", freq="1d")
+    calls = []
+
+    def download(*args, **kwargs):
+        calls.append(kwargs.copy())
+        return frame.copy()
+
+    ns, st = _app_namespace(lambda: frame.copy())
+    ns["yf"].download = staticmethod(download)
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+
+    assert out is not None
+    assert calls and calls[0].get("ignore_tz") is False
+    assert str(out.index.tz) == "Europe/London"
+    assert st.warnings == []
+    assert "data_quality" not in out.attrs
+
+
 def test_app_daily_non_datetime_index_stops():
     # 日足でも、DatetimeIndex でない場合はタイムゾーン安全仕様として
     # 停止し、理由コードが記録される。
@@ -668,6 +690,7 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
 def test_app_model_version_is_8():
     # 段階1で 6→7、段階2（SYN-FX-017）で 7→8。
     assert _app_literal("MODEL_VERSION") == 8
+
 
 def test_app_clears_stale_model_save_status_at_start():
     ns, st = _model_namespace()
@@ -865,10 +888,11 @@ def test_app_atomic_save_without_old_model_leaves_no_partial_file_on_failure(
 
 def test_app_force_retrain_button_does_not_delete_existing_model():
     source = APP_PATH.read_text(encoding="utf-8")
-    start = source.index('if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)")')
+    start = source.index('if st.button("🧠 AIモデルを今すぐ強制再学習"):')
     end = source.index("m_file_info =", start)
     button_block = source[start:end]
     assert "os.remove" not in button_block
+    assert "os.unlink" not in button_block
     assert "force_retrain_once" in button_block
     assert "st.cache_data.clear()" in button_block
 
@@ -1180,12 +1204,12 @@ def test_app_stop_reason_recorded_for_tz_naive_daily():
     frame = make_frame()
     frame.index = frame.index.tz_localize(None)
     ns, st = _app_namespace(lambda: frame.copy())
-    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    out = ns["load_and_process_data"]("USDJPY=X", "2y", "1d", "日足")
     assert out is None
     reason = ns["get_load_stop_reason"]("USDJPY=X", "1d")
     assert reason is not None
     assert reason["code"] == "tz_unavailable"
-    assert any("タイムゾーン" in w and "停止" in w for w in st.warnings)
+    assert any("日足" in w and "タイムゾーン" in w and "停止" in w for w in st.warnings)
     # 同じ呼び出しを繰り返しても、警告は同一描画内で1回だけ。
     out2 = ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
     assert out2 is None

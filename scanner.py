@@ -25,6 +25,7 @@ from sklearn.utils.class_weight import compute_sample_weight
 JST = ZoneInfo("Asia/Tokyo")
 
 STATE_FILE = "scan_state.json"
+_STATE_LOAD_ERROR = None
 LOOKAHEAD_BARS = 8
 # 特徴量計算に必要な最小の足本数（加工後）。最も遅い指標である EMA200 が
 # 有効になるには 200 本が必要で、残りは他の指標とラベル付けの余裕分。
@@ -284,24 +285,49 @@ def compare_previous_run(previous_state, pair_results):
 
 
 def load_state():
+    global _STATE_LOAD_ERROR
     if not os.path.exists(STATE_FILE):
+        _STATE_LOAD_ERROR = None
         return {}
 
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
+            _STATE_LOAD_ERROR = None
             return data
+        _STATE_LOAD_ERROR = "scan_state.json is not a JSON object"
         print("[STATE LOAD WARNING] scan_state.json is not a JSON object; starting with empty state")
         return {}
     except Exception as exc:
-        # 壊れた履歴があってもスキャン全体を止めない。原因はログに残す。
-        print(f"[STATE LOAD WARNING] {type(exc).__name__}: {str(exc)[:180]}; starting with empty state")
+        # 壊れた履歴があってもスキャン全体を止めない。ただし保存時に元ファイルを保護する。
+        _STATE_LOAD_ERROR = f"{type(exc).__name__}: {str(exc)[:180]}"
+        print(f"[STATE LOAD WARNING] {_STATE_LOAD_ERROR}; starting with empty state")
         return {}
+
+
+def _validate_state_before_save():
+    global _STATE_LOAD_ERROR
+    if not os.path.exists(STATE_FILE):
+        _STATE_LOAD_ERROR = None
+        return
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            existing = json.load(f)
+    except Exception as exc:
+        _STATE_LOAD_ERROR = f"{type(exc).__name__}: {str(exc)[:180]}"
+        raise RuntimeError(
+            f"scan_state.json の既存データを読み取れないため、上書きを停止しました: {_STATE_LOAD_ERROR}"
+        ) from exc
+    if not isinstance(existing, dict):
+        _STATE_LOAD_ERROR = "既存データがJSONオブジェクトではありません"
+        raise RuntimeError("scan_state.json の既存データ形式が不正なため、上書きを停止しました")
+    _STATE_LOAD_ERROR = None
 
 
 def save_state(state):
     """一時ファイルへ書いてから置換し、途中終了でJSONが壊れるリスクを下げる。"""
+    _validate_state_before_save()
     target = os.path.abspath(STATE_FILE)
     target_dir = os.path.dirname(target) or "."
     temp_path = None
@@ -4128,12 +4154,24 @@ def write_status_file(record, path=STATUS_FILE):
     行い、途中で失敗しても既存のステータスファイルを壊さない。
     """
     target = os.path.abspath(path)
-    tmp_path = target + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(record, f, ensure_ascii=False, indent=2, default=json_default)
-        f.write("\n")
-    os.replace(tmp_path, target)
-    return target
+    target_dir = os.path.dirname(target) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".aifx-status-", suffix=".tmp", dir=target_dir
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2, default=json_default)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, target)
+        return target
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def write_status_safely(started_at, pair_results, forward_summary, run_health):

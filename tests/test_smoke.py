@@ -27,6 +27,41 @@ def test_safe_float():
     assert scanner.safe_float(float("inf")) is None
 
 
+def test_scanner_status_write_replace_failure_preserves_existing(tmp_path, monkeypatch):
+    import os
+
+    path = tmp_path / "status.json"
+    original = '{"old": true}'
+    path.write_text(original, encoding="utf-8")
+
+    def fail_replace(source, destination):
+        raise OSError("simulated status replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated status replace failure"):
+        scanner.write_status_file({"new": True}, str(path))
+    assert path.read_text(encoding="utf-8") == original
+    assert not list(tmp_path.glob(".aifx-status-*.tmp"))
+
+
+def test_simple_scanner_write_replace_failure_preserves_existing(tmp_path, monkeypatch):
+    import os
+    import fx_scanner_simple as simple_scanner
+
+    path = tmp_path / "scan_history_simple.json"
+    original = '[{"old": true}]'
+    path.write_text(original, encoding="utf-8")
+
+    def fail_replace(source, destination):
+        raise OSError("simulated simple scanner replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated simple scanner replace failure"):
+        simple_scanner.save_json(str(path), [{"new": True}])
+    assert path.read_text(encoding="utf-8") == original
+    assert not list(tmp_path.glob(".aifx-simple-*.tmp"))
+
+
 def test_load_state_missing_file(tmp_path, monkeypatch):
     # 状態ファイルが無い (キャッシュの冷間スタート) でも落ちず、空 dict を返す。
     monkeypatch.chdir(tmp_path)
@@ -36,9 +71,49 @@ def test_load_state_missing_file(tmp_path, monkeypatch):
 
 def test_load_state_broken_json(tmp_path, monkeypatch):
     state = tmp_path / "scan_state.json"
-    state.write_text("{broken json", encoding="utf-8")
+    original = "{broken json"
+    state.write_text(original, encoding="utf-8")
     monkeypatch.setattr(scanner, "STATE_FILE", str(state))
     assert scanner.load_state() == {}
+    with pytest.raises(RuntimeError, match="上書きを停止"):
+        scanner.save_state({"replacement": True})
+    assert state.read_text(encoding="utf-8") == original
+
+
+def test_load_state_wrong_json_type_is_not_overwritten(tmp_path, monkeypatch):
+    state = tmp_path / "scan_state.json"
+    original = "[]"
+    state.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(scanner, "STATE_FILE", str(state))
+    assert scanner.load_state() == {}
+    with pytest.raises(RuntimeError, match="上書きを停止"):
+        scanner.save_state({"replacement": True})
+    assert state.read_text(encoding="utf-8") == original
+
+
+def test_simple_scanner_corrupt_history_is_not_overwritten(tmp_path, monkeypatch):
+    import fx_scanner_simple as simple_scanner
+
+    history = tmp_path / "scan_history_simple.json"
+    original = '[{"old": 1}, broken'
+    history.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(simple_scanner, "HISTORY_FILE", str(history))
+    assert simple_scanner.load_history() == []
+    with pytest.raises(RuntimeError, match="上書きを停止"):
+        simple_scanner.save_json(str(history), [{"new": 2}])
+    assert history.read_text(encoding="utf-8") == original
+
+
+def test_simple_scanner_wrong_history_type_is_not_overwritten(tmp_path, monkeypatch):
+    import fx_scanner_simple as simple_scanner
+
+    history = tmp_path / "scan_history_simple.json"
+    original = '{"not": "a list"}'
+    history.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(simple_scanner, "HISTORY_FILE", str(history))
+    with pytest.raises(RuntimeError, match="形式が不正"):
+        simple_scanner.save_json(str(history), [])
+    assert history.read_text(encoding="utf-8") == original
 
 
 def test_flatten_yf_columns_multiindex():
@@ -933,17 +1008,39 @@ if __name__ == "__main__":
 def _extract_app_backup_functions(tmp_path):
     import ast
     import json as json_module
+    import os
+    import tempfile
     from datetime import datetime, timedelta, timezone
     from pathlib import Path
+    from types import SimpleNamespace
 
     # テストの実行場所（chdir 後など）に依存しないよう、このファイルの位置から app.py を引く。
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    wanted = {"load_pair_scan_outcomes", "build_data_backup_bundle", "restore_data_backup_bundle"}
+    errors = []
+    wanted = {
+        "_expected_json_type", "_read_json_file", "_validate_existing_json_file",
+        "_atomic_write_json", "_save_trained_model", "save_settings",
+        "save_feedback_data", "save_trade_journal", "save_entry_tracking",
+        "save_forecast_history", "reset_settings_callback",
+        "load_feedback_data", "load_trade_journal",
+        "load_entry_tracking", "load_forecast_history", "load_pair_scan_outcomes",
+        "build_data_backup_bundle", "restore_data_backup_bundle",
+    }
     nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
     assert {n.name for n in nodes} == wanted
     namespace = {
         "json": json_module,
+        "joblib": None,
+        "st": SimpleNamespace(
+            session_state={},
+            error=lambda message: errors.append(str(message)),
+            warning=lambda message: errors.append(str(message)),
+        ),
+        "errors": errors,
+        "_JSON_LOAD_ERRORS": {},
+        "os": os,
+        "tempfile": tempfile,
         "datetime": datetime,
         "JST": timezone(timedelta(hours=9)),
         "_json_default": str,
@@ -962,6 +1059,253 @@ def _extract_app_backup_functions(tmp_path):
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "app.py", "exec"), namespace)
     return namespace
+
+
+def _valid_app_model_payload(ns):
+    import joblib
+    from sklearn.ensemble import RandomForestClassifier
+
+    features = [
+        "Return_1", "Return_5", "Dev_SMA20", "Dev_EMA200", "Dev_EMA20_200",
+        "Vol_Ratio", "RSI", "RSI_Diff", "MACD_Hist_Ratio", "BB_PctB", "ADX",
+        "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio", "Stoch_K", "CCI", "ROC",
+    ]
+    model = RandomForestClassifier(n_estimators=2, random_state=0)
+    model.fit([[0.0] * len(features), [1.0] * len(features)], [-1, 1])
+    ns.update({
+        "joblib": joblib,
+        "MODEL_VERSION": 8,
+        "FEATURE_COLUMNS": features,
+        "RandomForestClassifier": RandomForestClassifier,
+    })
+    return {"version": 8, "features": features, "model": model}
+
+
+def test_app_model_save_uses_atomic_replace_and_preserves_old_file(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    model_path = tmp_path / "model_USDJPY_1h.joblib"
+    model_path.write_bytes(b"old-model")
+    payload = _valid_app_model_payload(ns)
+
+    assert ns["_save_trained_model"](str(model_path), payload) is True
+    import joblib
+    assert joblib.load(model_path)["version"] == 8
+    assert not list(tmp_path.glob(".aifx-model-*.tmp"))
+
+
+def test_app_model_save_failure_preserves_old_file_and_cleans_temp(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    model_path = tmp_path / "model_USDJPY_1h.joblib"
+    model_path.write_bytes(b"old-model")
+
+    def fail_after_partial_write(payload, path):
+        with open(path, "wb") as stream:
+            stream.write(b"partial-model")
+        raise RuntimeError("simulated model serialization failure")
+
+    payload = _valid_app_model_payload(ns)
+    ns["joblib"] = SimpleNamespace(dump=fail_after_partial_write)
+    assert ns["_save_trained_model"](str(model_path), payload) is False
+    assert model_path.read_bytes() == b"old-model"
+    assert not list(tmp_path.glob(".aifx-model-*.tmp"))
+
+
+def test_app_model_save_replace_failure_preserves_old_file(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    model_path = tmp_path / "model_USDJPY_1h.joblib"
+    model_path.write_bytes(b"old-model")
+    payload = _valid_app_model_payload(ns)
+
+    def fail_replace(source, destination):
+        raise OSError("simulated model replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    assert ns["_save_trained_model"](str(model_path), payload) is False
+    assert model_path.read_bytes() == b"old-model"
+    assert not list(tmp_path.glob(".aifx-model-*.tmp"))
+
+
+def test_app_atomic_json_write_cleans_temp_after_serialization_failure(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "trade_feedback.json"
+    original = "[]"
+    path.write_text(original, encoding="utf-8")
+    cyclic = []
+    cyclic.append(cyclic)
+
+    with pytest.raises(ValueError, match="Circular reference detected"):
+        ns["_atomic_write_json"](str(path), cyclic)
+
+    assert path.read_text(encoding="utf-8") == original
+    assert not list(tmp_path.glob(".aifx-save-*.tmp"))
+
+
+def test_app_atomic_json_write_preserves_existing_file_on_replace_failure(tmp_path, monkeypatch):
+    import os
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    destination = tmp_path / "existing.json"
+    destination.write_text('{"keep": true}', encoding="utf-8")
+    real_replace = os.replace
+
+    def fail_replace(source, target):
+        raise OSError("simulated disk replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated disk replace failure"):
+        ns["_atomic_write_json"](str(destination), {"replace": True})
+    assert destination.read_text(encoding="utf-8") == '{"keep": true}'
+    assert not list(tmp_path.glob(".aifx-save-*.tmp"))
+
+    monkeypatch.setattr(os, "replace", real_replace)
+    assert ns["_atomic_write_json"](str(destination), {"saved": True}) is True
+    import json as json_module
+    assert json_module.loads(destination.read_text(encoding="utf-8")) == {"saved": True}
+
+
+def test_app_history_loaders_ignore_non_dict_rows_without_crashing(tmp_path, monkeypatch):
+    import json as json_module
+    monkeypatch.chdir(tmp_path)
+    files = {
+        "FEEDBACK_FILE": "trade_feedback.json",
+        "TRADE_JOURNAL_FILE": "actual_trade_journal.json",
+        "ENTRY_TRACK_FILE": "entry_candidate_history.json",
+        "FORECAST_TRACK_FILE": "forecast_outcome_history.json",
+        "PAIR_SCAN_OUTCOME_FILE": "pair_scan_outcomes.json",
+    }
+    for filename in files.values():
+        (tmp_path / filename).write_text(
+            json_module.dumps([{"id": "valid"}, None, "bad-row", 17, {"id": "valid-2"}]),
+            encoding="utf-8",
+        )
+    ns = _extract_app_backup_functions(tmp_path)
+    loaders = {
+        "FEEDBACK_FILE": "load_feedback_data",
+        "TRADE_JOURNAL_FILE": "load_trade_journal",
+        "ENTRY_TRACK_FILE": "load_entry_tracking",
+        "FORECAST_TRACK_FILE": "load_forecast_history",
+        "PAIR_SCAN_OUTCOME_FILE": "load_pair_scan_outcomes",
+    }
+    for key, loader_name in loaders.items():
+        assert ns[loader_name]() == [{"id": "valid"}, {"id": "valid-2"}]
+
+
+def test_app_persistence_errors_do_not_expose_paths_or_exception_details(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    secret_marker = "/private/runtime/path/secret-marker"
+    
+    def fail_write(*args, **kwargs):
+        raise OSError(f"permission denied: {secret_marker}")
+
+    ns["_atomic_write_json"] = fail_write
+    ns["st"].session_state.update({"rr_ratio": 1.5, "webhook_url": ""})
+
+    assert ns["save_settings"]() is False
+    assert ns["save_feedback_data"]([{"kind": "feedback"}]) is False
+    assert ns["save_trade_journal"]([{"kind": "journal"}]) is False
+    assert ns["save_entry_tracking"]([{"kind": "entry"}]) is False
+    assert ns["save_forecast_history"]([{"kind": "forecast"}]) is False
+
+    assert len(ns["errors"]) == 5
+    assert all("保存できませんでした" in message for message in ns["errors"])
+    assert all(secret_marker not in message for message in ns["errors"])
+    assert all("permission denied" not in message for message in ns["errors"])
+
+
+def test_app_settings_reset_reports_success_and_clears_corruption(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "user_settings.json"
+    path.write_text("{broken", encoding="utf-8")
+    ns["SETTINGS_FILE"] = str(path)
+    ns["_JSON_LOAD_ERRORS"][str(path)] = "broken JSON"
+    ns["st"].session_state["rr_ratio"] = 99
+
+    ns["reset_settings_callback"]()
+
+    assert not path.exists()
+    assert ns["st"].session_state["rr_ratio"] == 1.5
+    assert ns["st"].session_state["settings_loaded"] is True
+    assert ns["st"].session_state["settings_reset_done"] is True
+    assert "settings_reset_error" not in ns["st"].session_state
+    assert str(path) not in ns["_JSON_LOAD_ERRORS"]
+
+
+def test_app_settings_reset_reports_file_delete_failure(tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "user_settings.json"
+    path.write_text('{"rr_ratio": 2.0}', encoding="utf-8")
+    ns["SETTINGS_FILE"] = str(path)
+    ns["st"].session_state["rr_ratio"] = 99
+
+    def fail_remove(_path):
+        raise OSError("simulated settings delete failure")
+
+    monkeypatch.setattr(os, "remove", fail_remove)
+    ns["reset_settings_callback"]()
+
+    assert path.exists()
+    assert ns["st"].session_state["rr_ratio"] == 1.5
+    assert ns["st"].session_state["settings_loaded"] is True
+    assert ns["st"].session_state["settings_reset_error"] == "OSError"
+    assert "settings_reset_done" not in ns["st"].session_state
+
+
+def test_app_corrupt_history_is_preserved_and_blocks_overwrite(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "forecast_outcome_history.json"
+    original = '{"valid": "json but wrong top-level type"}'
+    path.write_text(original, encoding="utf-8")
+
+    # The loader may return an empty safe view, but it records the schema error.
+    assert ns["load_forecast_history"]() == []
+    with pytest.raises(OSError, match="保存を停止"):
+        ns["_atomic_write_json"](str(path), [{"new": "row"}])
+    assert path.read_text(encoding="utf-8") == original
+    assert ns["build_data_backup_bundle"]() is None
+
+
+def test_app_malformed_history_rows_are_not_silently_discarded_on_save(tmp_path, monkeypatch):
+    import json as json_module
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "forecast_outcome_history.json"
+    original = json_module.dumps([{"id": "keep"}, "malformed-row"])
+    path.write_text(original, encoding="utf-8")
+
+    assert ns["load_forecast_history"]() == [{"id": "keep"}]
+    with pytest.raises(OSError, match="保存を停止"):
+        ns["_atomic_write_json"](str(path), [{"id": "keep"}])
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_app_corrupt_json_is_preserved_even_without_prior_loader(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "actual_trade_journal.json"
+    original = '[{"id": 1}, broken'
+    path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(OSError, match="読み取れない"):
+        ns["_atomic_write_json"](str(path), [])
+    assert path.read_text(encoding="utf-8") == original
 
 
 def test_app_backup_bundle_includes_pair_scan_outcomes(tmp_path, monkeypatch):
@@ -1008,6 +1352,59 @@ def test_app_restore_legacy_bundle_keeps_pair_scan_outcomes(tmp_path, monkeypatc
     ns["restore_data_backup_bundle"](legacy_bundle)
     saved = json_module.loads((tmp_path / "pair_scan_outcomes.json").read_text(encoding="utf-8"))
     assert saved == current
+
+
+def test_app_restore_rejects_non_dict_history_rows_without_touching_files(tmp_path, monkeypatch):
+    import json as json_module
+    monkeypatch.chdir(tmp_path)
+    settings_path = tmp_path / "user_settings.json"
+    forecast_path = tmp_path / "forecast_outcome_history.json"
+    settings_path.write_text('{"rr_ratio": 1.25}', encoding="utf-8")
+    forecast_path.write_text('[{"status": "PENDING"}]', encoding="utf-8")
+    ns = _extract_app_backup_functions(tmp_path)
+    malformed = {
+        "format": "ai_fx_analyzer_backup",
+        "settings": {"rr_ratio": 2.0},
+        "forecast_history": ["not-a-record"],
+        "entry_tracking": [], "trade_journal": [], "feedback_history": [],
+    }
+    with pytest.raises(ValueError, match="不正な行"):
+        ns["restore_data_backup_bundle"](malformed)
+    assert json_module.loads(settings_path.read_text(encoding="utf-8")) == {"rr_ratio": 1.25}
+    assert json_module.loads(forecast_path.read_text(encoding="utf-8")) == [{"status": "PENDING"}]
+
+
+def test_app_restore_rolls_back_if_a_later_file_replace_fails(tmp_path, monkeypatch):
+    import json as json_module
+    import os
+    monkeypatch.chdir(tmp_path)
+    settings_path = tmp_path / "user_settings.json"
+    forecast_path = tmp_path / "forecast_outcome_history.json"
+    settings_path.write_text('{"rr_ratio": 1.25}', encoding="utf-8")
+    forecast_path.write_text('[{"status": "KEEP"}]', encoding="utf-8")
+    ns = _extract_app_backup_functions(tmp_path)
+    bundle = {
+        "format": "ai_fx_analyzer_backup",
+        "settings": {"rr_ratio": 2.0},
+        "forecast_history": [{"status": "REPLACE"}],
+        "entry_tracking": [], "trade_journal": [], "feedback_history": [],
+    }
+    real_replace = os.replace
+    calls = {"count": 0}
+
+    def fail_second_replace(source, destination):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise OSError("simulated replace failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_second_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        ns["restore_data_backup_bundle"](bundle)
+    assert json_module.loads(settings_path.read_text(encoding="utf-8")) == {"rr_ratio": 1.25}
+    assert json_module.loads(forecast_path.read_text(encoding="utf-8")) == [{"status": "KEEP"}]
+    assert not list(tmp_path.glob(".aifx-restore-*.tmp"))
+    assert not list(tmp_path.glob(".aifx-rollback-*.tmp"))
 
 
 # =========================================================
@@ -1112,14 +1509,14 @@ def test_simple_scanner_requirements_cover_imports():
 # アプリ画面の注記（アプリ内分析とクラウドスキャンは別モデル）の確認
 # =========================================================
 
-def test_app_shows_separate_model_note():
+def test_app_model_note_removed_from_main_screen():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
-    # タイトル直下の注記が残っていること（誤って消えていないこと）を確認する。
-    assert "【分析モデルについて】" in source
-    assert "異なるモデル・判定基準を使用しています" in source
-    assert "アプリ内分析の精度を直接保証するものではありません" in source
+    # 画面簡素化のレビュー指示（PR #34）により、タイトル直下の
+    # 「分析モデルについて」注記は通常画面から外した。内部のモデル処理・
+    # 学習・記録は無変更で、このテストは表示文言の不在だけを確認する。
+    assert "【分析モデルについて】" not in source
 
 
 def test_build_feature_snapshot_covers_all_feature_columns():

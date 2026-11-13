@@ -55,4 +55,4 @@ jobs:
           pip install streamlit==1.66.1 plotly==7.1.0 pytest==8.3.4
 
       - name: App smoke tests (no network)
-        run: python -m pytest tests/test_app_smoke.py -q
+        run: python -m pytest tests/test_app_smoke.py tests/test_app_ui_simplification.py -q
