@@ -1321,6 +1321,11 @@ def bars(ticker, interval="1h", period="60d"):
             "dropped_label_insufficient_future": 0,
             "dropped_label_other": 0,
             "trainable_rows": 0,
+            "neutral_total": 0,
+            "neutral_no_reach": 0,
+            "neutral_both_touch": 0,
+            "neutral_no_reach_pct": None,
+            "neutral_both_touch_pct": None,
         }
         # index が日時でない場合は時刻を確定できないため、この足の処理を
         # 停止する。
@@ -1552,6 +1557,11 @@ def bars(ticker, interval="1h", period="60d"):
     for tail_pos in range(looped_row_count, feature_row_count):
         label_reasons[tail_pos] = "insufficient_future"
 
+    # 中立クラス内訳の観測用（集計のみ。ラベル・予測には影響しない）。
+    # Target=0 の行について、同一足で上下両方に到達した行を "both_touch"、
+    # 8本以内にどちらにも到達しなかった行を "no_reach" として位置で記録する。
+    neutral_kinds = [""] * feature_row_count
+
     for i in range(len(feature_df) - LOOKAHEAD_BARS):
         # 段階3: 窓が不連続な行はラベル付けの対象にしない。
         if label_reasons[i] == "discontinuous":
@@ -1575,6 +1585,7 @@ def bars(ticker, interval="1h", period="60d"):
         upper = price + atr_value
         lower = price - atr_value
         label = 0
+        neutral_kind = "no_reach"
 
         for j in range(i + 1, i + LOOKAHEAD_BARS + 1):
             hit_up = high_values[j] >= upper
@@ -1584,6 +1595,7 @@ def bars(ticker, interval="1h", period="60d"):
                 # 学習ラベルでは足内の到達順が不明なケースを中立扱い。
                 # 仮想損益では予測方向に対して損切り側を優先する。
                 label = 0
+                neutral_kind = "both_touch"
                 break
             if hit_up:
                 label = 1
@@ -1593,6 +1605,8 @@ def bars(ticker, interval="1h", period="60d"):
                 break
 
         targets[i] = label
+        if label == 0:
+            neutral_kinds[i] = neutral_kind
 
     training_df = feature_df.copy()
     training_df["Target"] = targets
@@ -1661,6 +1675,31 @@ def bars(ticker, interval="1h", period="60d"):
             label_reasons[:looped_rows].count("other")
         )
         data_quality["trainable_rows"] = int(len(training_df))
+        # 中立クラス内訳（観測のみ）: training_df に残った Target=0 行を、
+        # ラベル生成時に記録した種別で数える。Target=0 の行はラベル生成時に
+        # 必ずどちらかへ分類されているため、no_reach + both_touch は
+        # neutral_total と一致する。
+        training_timestamps = set(training_df.index)
+        neutral_total = 0
+        neutral_both_touch = 0
+        for pos, ts in enumerate(feature_df.index):
+            if neutral_kinds[pos] and ts in training_timestamps:
+                neutral_total += 1
+                if neutral_kinds[pos] == "both_touch":
+                    neutral_both_touch += 1
+        data_quality["neutral_total"] = int(neutral_total)
+        data_quality["neutral_both_touch"] = int(neutral_both_touch)
+        data_quality["neutral_no_reach"] = int(
+            neutral_total - neutral_both_touch
+        )
+        if neutral_total > 0:
+            data_quality["neutral_both_touch_pct"] = round(
+                100.0 * neutral_both_touch / neutral_total, 1
+            )
+            data_quality["neutral_no_reach_pct"] = round(
+                100.0 * (neutral_total - neutral_both_touch) / neutral_total,
+                1,
+            )
         input_check = data_quality["input_rows"] - (
             data_quality["dropped_invalid_timestamp"]
             + data_quality["dropped_missing_or_nonfinite"]

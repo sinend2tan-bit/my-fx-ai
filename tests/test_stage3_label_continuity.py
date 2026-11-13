@@ -1150,6 +1150,12 @@ EXPECTED_QUALITY_KEYS = {
     "dropped_label_insufficient_future",
     "dropped_label_other",
     "trainable_rows",
+    # AIFX-OBS-20261113-01 で追加した中立クラス内訳の観測項目（集計のみ）。
+    "neutral_total",
+    "neutral_no_reach",
+    "neutral_both_touch",
+    "neutral_no_reach_pct",
+    "neutral_both_touch_pct",
 }
 
 
