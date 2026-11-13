@@ -383,6 +383,7 @@ def _app_namespace(frame_factory):
     }
     for fname in (
         "flatten_yf_df",
+        "_app_forward_bar_gap_allowed",
         "_load_and_process_data_cached",
         "get_load_stop_reason",
         "load_and_process_data",
