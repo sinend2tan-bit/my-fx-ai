@@ -983,7 +983,7 @@ def _extract_app_backup_functions(tmp_path):
     tree = ast.parse(source)
     wanted = {
         "_expected_json_type", "_read_json_file", "_validate_existing_json_file",
-        "_atomic_write_json", "load_feedback_data", "load_trade_journal",
+        "_atomic_write_json", "_save_trained_model", "load_feedback_data", "load_trade_journal",
         "load_entry_tracking", "load_forecast_history", "load_pair_scan_outcomes",
         "build_data_backup_bundle", "restore_data_backup_bundle",
     }
@@ -991,6 +991,7 @@ def _extract_app_backup_functions(tmp_path):
     assert {n.name for n in nodes} == wanted
     namespace = {
         "json": json_module,
+        "joblib": None,
         "_JSON_LOAD_ERRORS": {},
         "os": os,
         "tempfile": tempfile,
@@ -1012,6 +1013,58 @@ def _extract_app_backup_functions(tmp_path):
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "app.py", "exec"), namespace)
     return namespace
+
+
+def test_app_model_save_uses_atomic_replace_and_preserves_old_file(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    model_path = tmp_path / "model_USDJPY_1h.joblib"
+    model_path.write_bytes(b"old-model")
+    ns["joblib"] = SimpleNamespace(dump=lambda payload, stream: stream.write(b"new-model"))
+
+    assert ns["_save_trained_model"](str(model_path), {"model": "new"}) is True
+    assert model_path.read_bytes() == b"new-model"
+    assert not list(tmp_path.glob(".aifx-model-*.tmp"))
+
+
+def test_app_model_save_failure_preserves_old_file_and_cleans_temp(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    model_path = tmp_path / "model_USDJPY_1h.joblib"
+    model_path.write_bytes(b"old-model")
+
+    def fail_after_partial_write(payload, stream):
+        stream.write(b"partial-model")
+        raise RuntimeError("simulated model serialization failure")
+
+    ns["joblib"] = SimpleNamespace(dump=fail_after_partial_write)
+    assert ns["_save_trained_model"](str(model_path), {"model": "new"}) is False
+    assert model_path.read_bytes() == b"old-model"
+    assert not list(tmp_path.glob(".aifx-model-*.tmp"))
+
+
+def test_app_model_save_replace_failure_preserves_old_file(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    model_path = tmp_path / "model_USDJPY_1h.joblib"
+    model_path.write_bytes(b"old-model")
+    ns["joblib"] = SimpleNamespace(dump=lambda payload, stream: stream.write(b"new-model"))
+
+    def fail_replace(source, destination):
+        raise OSError("simulated model replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    assert ns["_save_trained_model"](str(model_path), {"model": "new"}) is False
+    assert model_path.read_bytes() == b"old-model"
+    assert not list(tmp_path.glob(".aifx-model-*.tmp"))
 
 
 def test_app_atomic_json_write_preserves_existing_file_on_replace_failure(tmp_path, monkeypatch):
