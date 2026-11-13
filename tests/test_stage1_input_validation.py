@@ -582,6 +582,7 @@ def test_app_daily_non_datetime_index_stops():
 
 def _model_namespace():
     import os
+    import tempfile
     import time
     from datetime import datetime
 
@@ -591,6 +592,7 @@ def _model_namespace():
         "np": np,
         "st": st,
         "os": os,
+        "tempfile": tempfile,
         "time": time,
         "joblib": joblib,
         "RandomForestClassifier": RandomForestClassifier,
@@ -714,6 +716,150 @@ def test_app_current_version_model_reused(tmp_path, monkeypatch):
     # 新版（8）で鮮度内の保存済みモデルは従来どおり再利用され、
     # ファイルは書き換わらない（再利用の仕組み自体は壊していない）。
     assert path.read_bytes() == before
+
+
+def test_app_forced_retrain_replaces_old_model_only_after_validation(tmp_path, monkeypatch):
+    ns, st = _model_namespace()
+    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    before = path.read_bytes()
+
+    result = ns["analyze_signal_with_backtest"](
+        _model_df("learnable"), None, "USDJPY=X", "1h", force_retrain=True
+    )
+
+    assert result is not None
+    assert st.session_state["model_eval_metrics"]["quality_ok"] is True
+    saved = joblib.load(path)
+    assert saved["version"] == 8
+    assert saved["model"].n_estimators == 260
+    assert path.read_bytes() != before
+    assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
+
+
+def test_app_forced_retrain_gate_failure_preserves_old_model(tmp_path, monkeypatch):
+    ns, st = _model_namespace()
+    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    before = path.read_bytes()
+
+    result = ns["analyze_signal_with_backtest"](
+        _model_df("noise"), None, "USDJPY=X", "1h", force_retrain=True
+    )
+
+    assert result is not None
+    assert st.session_state["model_eval_metrics"]["quality_ok"] is False
+    assert path.read_bytes() == before
+    assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
+
+
+def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch):
+    ns, _st = _model_namespace()
+    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    before = path.read_bytes()
+
+    def fail_dump(*args, **kwargs):
+        raise OSError("private simulated dump error")
+
+    monkeypatch.setattr(ns["joblib"], "dump", fail_dump)
+    payload = {
+        "version": 8,
+        "features": _app_literal("FEATURE_COLUMNS"),
+        "model": _tiny_model(),
+    }
+    assert ns["_save_trained_model"](str(path), payload) is False
+    assert path.read_bytes() == before
+    assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
+
+
+def test_app_atomic_save_reload_failure_preserves_old_model(tmp_path, monkeypatch):
+    ns, _st = _model_namespace()
+    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    before = path.read_bytes()
+
+    def fail_load(*args, **kwargs):
+        raise OSError("private simulated reload error")
+
+    monkeypatch.setattr(ns["joblib"], "load", fail_load)
+    payload = {
+        "version": 8,
+        "features": _app_literal("FEATURE_COLUMNS"),
+        "model": _tiny_model(),
+    }
+    assert ns["_save_trained_model"](str(path), payload) is False
+    assert path.read_bytes() == before
+    assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
+
+
+@pytest.mark.parametrize("invalid_kind", ["version", "features", "model_type", "single_class"])
+def test_app_atomic_save_rejects_invalid_candidate_and_preserves_old_model(
+    tmp_path, monkeypatch, invalid_kind
+):
+    ns, _st = _model_namespace()
+    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    before = path.read_bytes()
+    candidate = _tiny_model(single_class=(invalid_kind == "single_class"))
+    payload = {
+        "version": 7 if invalid_kind == "version" else 8,
+        "features": ["wrong"] if invalid_kind == "features" else _app_literal("FEATURE_COLUMNS"),
+        "model": object() if invalid_kind == "model_type" else candidate,
+    }
+    monkeypatch.setattr(ns["joblib"], "load", lambda _path: payload)
+
+    assert ns["_save_trained_model"](str(path), {
+        "version": 8,
+        "features": _app_literal("FEATURE_COLUMNS"),
+        "model": candidate,
+    }) is False
+    assert path.read_bytes() == before
+    assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
+
+
+def test_app_atomic_save_replace_failure_preserves_old_model(tmp_path, monkeypatch):
+    ns, _st = _model_namespace()
+    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    before = path.read_bytes()
+
+    def fail_replace(*args, **kwargs):
+        raise OSError("private simulated replace error")
+
+    monkeypatch.setattr(ns["os"], "replace", fail_replace)
+    payload = {
+        "version": 8,
+        "features": _app_literal("FEATURE_COLUMNS"),
+        "model": _tiny_model(),
+    }
+    assert ns["_save_trained_model"](str(path), payload) is False
+    assert path.read_bytes() == before
+    assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
+
+
+def test_app_atomic_save_without_old_model_leaves_no_partial_file_on_failure(
+    tmp_path, monkeypatch
+):
+    ns, _st = _model_namespace()
+    monkeypatch.chdir(tmp_path)
+
+    def fail_replace(*args, **kwargs):
+        raise OSError("private simulated replace error")
+
+    monkeypatch.setattr(ns["os"], "replace", fail_replace)
+    payload = {
+        "version": 8,
+        "features": _app_literal("FEATURE_COLUMNS"),
+        "model": _tiny_model(),
+    }
+    assert ns["_save_trained_model"]("model_USDJPY_1h.joblib", payload) is False
+    assert not (tmp_path / "model_USDJPY_1h.joblib").exists()
+    assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
+
+
+def test_app_force_retrain_button_does_not_delete_existing_model():
+    source = APP_PATH.read_text(encoding="utf-8")
+    start = source.index('if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)")')
+    end = source.index("m_file_info =", start)
+    button_block = source[start:end]
+    assert "os.remove" not in button_block
+    assert "force_retrain_once" in button_block
+    assert "st.cache_data.clear()" in button_block
 
 
 # ---------------------------------------------------------------------------

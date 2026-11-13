@@ -8,6 +8,7 @@ import html
 import json
 import os
 import time
+import tempfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -1281,17 +1282,54 @@ def _model_filename(ticker, interval):
 
 
 def _save_trained_model(model_path, payload):
-    """学習済みモデルを保存し、成功したら True、失敗したら False を返す。
-
-    保存失敗の事実だけを戻り値で知らせる。例外の詳細や保存先パスは
-    呼び出し側・画面へ伝えない（露出防止）。保存形式・保存先は従来
-    どおりで、成功時の動作は変わらない。
-    """
+    """候補モデルを検証してから原子的に保存する。失敗時は旧ファイルを保つ。"""
+    temp_path = None
     try:
-        joblib.dump(payload, model_path)
+        target_dir = os.path.dirname(os.path.abspath(model_path))
+        with tempfile.NamedTemporaryFile(
+            prefix=".aifx-model-", suffix=".tmp", dir=target_dir, delete=False
+        ) as temp_file:
+            temp_path = temp_file.name
+
+        joblib.dump(payload, temp_path)
+        verified = joblib.load(temp_path)
+        if not isinstance(verified, dict):
+            return False
+        if verified.get("version") != MODEL_VERSION:
+            return False
+        if verified.get("features") != FEATURE_COLUMNS:
+            return False
+
+        candidate = verified.get("model")
+        if not isinstance(candidate, RandomForestClassifier):
+            return False
+        try:
+            classes = list(candidate.classes_)
+            if len(classes) < 2 or any(
+                float(value) not in (-1.0, 0.0, 1.0) for value in classes
+            ):
+                return False
+            if int(candidate.n_features_in_) != len(FEATURE_COLUMNS):
+                return False
+            fitted_names = getattr(candidate, "feature_names_in_", None)
+            if fitted_names is not None and list(fitted_names) != FEATURE_COLUMNS:
+                return False
+        except Exception:
+            return False
+
+        # 一時ファイルは最終ファイルと同じディレクトリにあるため、
+        # os.replace は同一ファイルシステム内で原子的に置き換えられる。
+        os.replace(temp_path, model_path)
+        temp_path = None
         return True
     except Exception:
         return False
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 
 def _normalise_timestamp(value):
@@ -1557,12 +1595,7 @@ st.sidebar.info(f"現在の1取引あたり損失上限の目安：**{_sidebar_b
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 AIモデル管理（自己学習つき）")
 if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習 (知見反映)"):
-    model_file = _model_filename(ticker, tf_config["interval"])
-    try:
-        if os.path.exists(model_file):
-            os.remove(model_file)
-    except OSError:
-        pass
+    # 既存モデルは削除せず、品質ゲート通過後の原子的保存時だけ置き換える。
     st.cache_data.clear()
     st.session_state["force_retrain_once"] = True
     st.toast("再学習を要求しました。次の分析でモデルを再作成します。", icon="🧠")
