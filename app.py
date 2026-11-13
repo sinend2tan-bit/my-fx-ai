@@ -328,7 +328,7 @@ def load_feedback_data():
     try:
         with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
             value = json.load(f)
-        return value if isinstance(value, list) else []
+        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
     except (OSError, ValueError, TypeError):
         return []
 
@@ -346,7 +346,7 @@ def load_trade_journal():
     try:
         with open(TRADE_JOURNAL_FILE, "r", encoding="utf-8") as f:
             value = json.load(f)
-        return value if isinstance(value, list) else []
+        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
     except (OSError, ValueError, TypeError):
         return []
 
@@ -364,7 +364,7 @@ def load_entry_tracking():
     try:
         with open(ENTRY_TRACK_FILE, "r", encoding="utf-8") as f:
             value = json.load(f)
-        return value if isinstance(value, list) else []
+        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
     except (OSError, ValueError, TypeError):
         return []
 
@@ -383,7 +383,7 @@ def load_forecast_history():
     try:
         with open(FORECAST_TRACK_FILE, "r", encoding="utf-8") as f:
             value = json.load(f)
-        return value if isinstance(value, list) else []
+        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
     except (OSError, ValueError, TypeError):
         return []
 
@@ -401,7 +401,7 @@ def load_pair_scan_outcomes():
     try:
         with open(PAIR_SCAN_OUTCOME_FILE, "r", encoding="utf-8") as f:
             value = json.load(f)
-        return value if isinstance(value, list) else []
+        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
     except (OSError, ValueError, TypeError):
         return []
 
@@ -1650,8 +1650,8 @@ with st.sidebar.expander("🛠️ 更新・メンテナンス", expanded=False):
         "ニュースは15分キャッシュ、価格データは60秒キャッシュです。自動発注は行いません。"
     )
     if st.button("💾 設定を即時手動保存"):
-        save_settings()
-        st.toast("設定を保存しました！", icon="💾")
+        if save_settings():
+            st.toast("設定を保存しました！", icon="💾")
     st.markdown("**📂 設定ファイル管理 (バックアップ)**")
     safe_backup_settings = load_settings().copy()
     safe_backup_settings["webhook_url"] = ""
@@ -1684,8 +1684,7 @@ with st.sidebar.expander("🛠️ 更新・メンテナンス", expanded=False):
             if isinstance(imported_data, dict):
                 safe_data = {k: imported_data[k] for k in DEFAULT_SETTINGS if k in imported_data}
                 safe_data["webhook_url"] = ""  # Never import a webhook URL from an untrusted backup.
-                with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                    json.dump(safe_data, f, ensure_ascii=False, indent=2)
+                _atomic_write_json(SETTINGS_FILE, safe_data)
                 st.success("設定を復元しました。再読み込みしてください。")
         except Exception as exc:
             st.error(f"設定の復元に失敗しました: {exc}")
