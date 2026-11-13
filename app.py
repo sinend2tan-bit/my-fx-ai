@@ -40,6 +40,8 @@ ENTRY_TRACK_FILE = "entry_candidate_history.json"
 FORECAST_TRACK_FILE = "forecast_outcome_history.json"
 PAIR_SCAN_OUTCOME_FILE = "pair_scan_outcomes.json"
 TRADE_JOURNAL_FILE = "actual_trade_journal.json"
+# Files that failed validation must never be silently replaced by an empty/default value.
+_JSON_LOAD_ERRORS = {}
 JST = ZoneInfo("Asia/Tokyo")
 
 DEFAULT_SETTINGS = {
@@ -221,8 +223,65 @@ def _json_default(obj):
     return str(obj)
 
 
+def _expected_json_type(path):
+    expected = {
+        os.path.basename(SETTINGS_FILE): dict,
+        os.path.basename(FEEDBACK_FILE): list,
+        os.path.basename(ENTRY_TRACK_FILE): list,
+        os.path.basename(FORECAST_TRACK_FILE): list,
+        os.path.basename(PAIR_SCAN_OUTCOME_FILE): list,
+        os.path.basename(TRADE_JOURNAL_FILE): list,
+    }
+    return expected.get(os.path.basename(path))
+
+
+def _read_json_file(path, expected_type, default):
+    """Read a local JSON file and remember any corruption or schema mismatch."""
+    if not os.path.exists(path):
+        _JSON_LOAD_ERRORS.pop(path, None)
+        return default
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            value = json.load(f)
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        _JSON_LOAD_ERRORS[path] = f"読み込み失敗: {exc}"
+        return default
+    if not isinstance(value, expected_type):
+        _JSON_LOAD_ERRORS[path] = f"JSONの形式が {expected_type.__name__} ではありません"
+        return default
+    if isinstance(value, list):
+        invalid_rows = sum(not isinstance(row, dict) for row in value)
+        if invalid_rows:
+            _JSON_LOAD_ERRORS[path] = f"辞書形式ではない履歴行が {invalid_rows} 件あります"
+            return [row for row in value if isinstance(row, dict)]
+    _JSON_LOAD_ERRORS.pop(path, None)
+    return value
+
+
+def _validate_existing_json_file(path):
+    """Refuse to overwrite an existing file until its content has been validated."""
+    if path in _JSON_LOAD_ERRORS:
+        raise OSError(f"{path} は {_JSON_LOAD_ERRORS[path]}。元データ保護のため保存を停止しました。バックアップから復元してください。")
+    if not os.path.exists(path):
+        return
+    expected_type = _expected_json_type(path)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            value = json.load(f)
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        _JSON_LOAD_ERRORS[path] = f"読み込み失敗: {exc}"
+        raise OSError(f"{path} の既存データを読み取れないため、上書きを停止しました。バックアップから復元してください。") from exc
+    if expected_type is not None and not isinstance(value, expected_type):
+        _JSON_LOAD_ERRORS[path] = f"JSONの形式が {expected_type.__name__} ではありません"
+        raise OSError(f"{path} の既存データ形式が不正なため、上書きを停止しました。バックアップから復元してください。")
+    if isinstance(value, list) and any(not isinstance(row, dict) for row in value):
+        _JSON_LOAD_ERRORS[path] = "辞書形式ではない履歴行が含まれています"
+        raise OSError(f"{path} に不正な履歴行があるため、上書きを停止しました。バックアップから復元してください。")
+
+
 def _atomic_write_json(path, value):
     """Write one JSON file without truncating the previous file on write failure."""
+    _validate_existing_json_file(path)
     directory = os.path.dirname(os.path.abspath(path)) or "."
     fd, temp_path = tempfile.mkstemp(prefix=".aifx-save-", suffix=".tmp", dir=directory)
     try:
@@ -243,15 +302,10 @@ def _atomic_write_json(path, value):
 
 def load_settings():
     result = DEFAULT_SETTINGS.copy()
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-        if isinstance(loaded, dict):
-            for key in DEFAULT_SETTINGS:
-                if key in loaded:
-                    result[key] = loaded[key]
-    except (OSError, ValueError, TypeError):
-        pass
+    loaded = _read_json_file(SETTINGS_FILE, dict, {})
+    for key in DEFAULT_SETTINGS:
+        if key in loaded:
+            result[key] = loaded[key]
     # Validate persisted values before they are passed to Streamlit widgets.
     try:
         result["account_balance"] = int(np.clip(float(result.get("account_balance", 500000)), 10000, 100000000000))
@@ -325,12 +379,7 @@ def reset_settings_callback():
 
 
 def load_feedback_data():
-    try:
-        with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
-            value = json.load(f)
-        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
-    except (OSError, ValueError, TypeError):
-        return []
+    return _read_json_file(FEEDBACK_FILE, list, [])
 
 
 def save_feedback_data(items):
@@ -343,12 +392,7 @@ def save_feedback_data(items):
 
 def load_trade_journal():
     """Load manually confirmed realized trade results; never treated as model labels."""
-    try:
-        with open(TRADE_JOURNAL_FILE, "r", encoding="utf-8") as f:
-            value = json.load(f)
-        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
-    except (OSError, ValueError, TypeError):
-        return []
+    return _read_json_file(TRADE_JOURNAL_FILE, list, [])
 
 
 def save_trade_journal(items):
@@ -361,12 +405,7 @@ def save_trade_journal(items):
 
 def load_entry_tracking():
     """Load persisted candidate-price observations; these are not broker executions."""
-    try:
-        with open(ENTRY_TRACK_FILE, "r", encoding="utf-8") as f:
-            value = json.load(f)
-        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
-    except (OSError, ValueError, TypeError):
-        return []
+    return _read_json_file(ENTRY_TRACK_FILE, list, [])
 
 
 def save_entry_tracking(items):
@@ -380,12 +419,7 @@ def save_entry_tracking(items):
 
 def load_forecast_history():
     """Load automatic signal-evaluation records; these are not broker trade results."""
-    try:
-        with open(FORECAST_TRACK_FILE, "r", encoding="utf-8") as f:
-            value = json.load(f)
-        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
-    except (OSError, ValueError, TypeError):
-        return []
+    return _read_json_file(FORECAST_TRACK_FILE, list, [])
 
 
 def save_forecast_history(items):
@@ -398,29 +432,31 @@ def save_forecast_history(items):
 
 def load_pair_scan_outcomes():
     """Load candidate outcome tracking rows (post-candidate auto scoring)."""
-    try:
-        with open(PAIR_SCAN_OUTCOME_FILE, "r", encoding="utf-8") as f:
-            value = json.load(f)
-        return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
-    except (OSError, ValueError, TypeError):
-        return []
+    return _read_json_file(PAIR_SCAN_OUTCOME_FILE, list, [])
 
 
 def build_data_backup_bundle():
     """Export user settings and local logs; secrets such as webhook URLs are excluded."""
     settings = load_settings().copy()
     settings["webhook_url"] = ""
+    forecast_history = load_forecast_history()
+    entry_tracking = load_entry_tracking()
+    trade_journal = load_trade_journal()
+    feedback_history = load_feedback_data()
+    pair_scan_outcomes = load_pair_scan_outcomes()
+    if _JSON_LOAD_ERRORS:
+        return None
     return {
         "format": "ai_fx_analyzer_backup",
         "version": 1,
         "created_at": datetime.now(JST).isoformat(),
         "notice": "Webhook URL and credentials are intentionally excluded.",
         "settings": settings,
-        "forecast_history": load_forecast_history(),
-        "entry_tracking": load_entry_tracking(),
-        "trade_journal": load_trade_journal(),
-        "feedback_history": load_feedback_data(),
-        "pair_scan_outcomes": load_pair_scan_outcomes(),
+        "forecast_history": forecast_history,
+        "entry_tracking": entry_tracking,
+        "trade_journal": trade_journal,
+        "feedback_history": feedback_history,
+        "pair_scan_outcomes": pair_scan_outcomes,
     }
 
 
@@ -507,6 +543,8 @@ def restore_data_backup_bundle(bundle):
                     f"復元に失敗し、一部ファイルの原状回復も失敗しました: {'; '.join(rollback_errors)}"
                 ) from write_error
             raise
+        for filename in payloads:
+            _JSON_LOAD_ERRORS.pop(filename, None)
     finally:
         for temp_path in staged.values():
             if os.path.exists(temp_path):
@@ -1655,16 +1693,22 @@ with st.sidebar.expander("🛠️ 更新・メンテナンス", expanded=False):
     st.markdown("**📂 設定ファイル管理 (バックアップ)**")
     safe_backup_settings = load_settings().copy()
     safe_backup_settings["webhook_url"] = ""
-    st.download_button("📥 設定をバックアップ (.json)", data=json.dumps(safe_backup_settings, ensure_ascii=False, indent=2).encode("utf-8"),
-                       file_name="fx_analyzer_settings.json", mime="application/json", use_container_width=True)
+    if SETTINGS_FILE not in _JSON_LOAD_ERRORS:
+        st.download_button("📥 設定をバックアップ (.json)", data=json.dumps(safe_backup_settings, ensure_ascii=False, indent=2).encode("utf-8"),
+                           file_name="fx_analyzer_settings.json", mime="application/json", use_container_width=True)
+    else:
+        st.warning("設定ファイルを正常に読み取れないため、設定バックアップを停止しました。元ファイルは上書きせず、既存バックアップから復元してください。")
     _full_backup = build_data_backup_bundle()
-    st.download_button(
-        "🗃️ 設定・予測履歴・取引記録をまとめて保存",
-        data=json.dumps(_full_backup, ensure_ascii=False, indent=2, default=_json_default).encode("utf-8"),
-        file_name=f"ai_fx_full_backup_{datetime.now(JST).strftime('%Y%m%d')}.json",
-        mime="application/json", use_container_width=True,
-        help="設定、予測検証履歴、注文候補の検証履歴、候補後の自動採点、実取引記録、フィードバックを保存します。Webhook URLは含めません。",
-    )
+    if _full_backup is not None:
+        st.download_button(
+            "🗃️ 設定・予測履歴・取引記録をまとめて保存",
+            data=json.dumps(_full_backup, ensure_ascii=False, indent=2, default=_json_default).encode("utf-8"),
+            file_name=f"ai_fx_full_backup_{datetime.now(JST).strftime('%Y%m%d')}.json",
+            mime="application/json", use_container_width=True,
+            help="設定、予測検証履歴、注文候補の検証履歴、候補後の自動採点、実取引記録、フィードバックを保存します。Webhook URLは含めません。",
+        )
+    else:
+        st.warning("一部の保存データを正常に読み取れないため、完全バックアップを停止しました。元ファイルは上書きせず、既存バックアップから復元してください。")
     st.caption("端末変更・アプリ更新前に、まとめてバックアップを保存してください。Webhook URLはセキュリティのため保存対象外です。")
     full_backup_upload = st.file_uploader("📤 まとめて保存したバックアップを復元", type=["json"], key="full_data_backup_upload")
     if full_backup_upload is not None:
