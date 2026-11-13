@@ -1,3 +1,0 @@
-ChatGPT GitHub write-permission test.
-Created on isolated branch test/chatgpt-github-write-20261113.
-This file is temporary and must be removed after verification.
