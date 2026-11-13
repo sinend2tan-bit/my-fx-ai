@@ -160,6 +160,7 @@ def test_two_sections_and_removed_displays(rig):
     # メイン上部の「分析モデルについて」説明は表示されない。
     assert any("AIモデル管理" in lb for lb in expander_labels), expander_labels
     assert any("更新・メンテナンス" in lb for lb in expander_labels), expander_labels
+    assert any("取引記録・振り返り" in lb for lb in expander_labels), expander_labels
     assert "分析モデルについて" not in body
 
     # リピート注文の設定表示が残っている。
