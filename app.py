@@ -1352,7 +1352,15 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
         low_values = low.to_numpy(dtype=float)
         target = np.full(len(df), np.nan, dtype=float)
         usable = max(0, len(df) - LOOKAHEAD_BARS)
+        discontinuous_label_timestamps = set()
         for i in range(usable):
+            # 1時間足の学習ラベルは、シグナル足から未来8本までの
+            # 全隣接時刻が連続している場合だけ生成する。週末休場は許容する。
+            if interval == "1h" and not has_contiguous_hourly_window(
+                df.index[i:i + LOOKAHEAD_BARS + 1]
+            ):
+                discontinuous_label_timestamps.add(df.index[i])
+                continue
             distance = barrier[i] + spread
             upper_barrier = close_values[i] + distance
             lower_barrier = close_values[i] - distance
@@ -1374,22 +1382,24 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
         df = df.replace([np.inf, -np.inf], np.nan)
         result = df.dropna(subset=FEATURE_COLUMNS + ["Close", "ATR"])
         if data_quality is not None:
-            # (4) 特徴量計算による除外と、ラベル判定段階の計上。
-            # ラベル判定段階は段階1では現行判定の記録のみ（ラベル定義・
-            # 8本窓の定義は変更しない）。App の現行ラベル計算は対象行に
-            # 必ずラベルを付けるため、不連続・その他の理由でラベルが
-            # 無効になる行は存在せず、末尾の未来窓不足の行だけが
-            # ラベルなしで残る。
+            # (4) 特徴量計算による除外と、ラベル判定段階の理由別計上。
+            # 不連続ラベル行は特徴量が有効な行に限って計上し、末尾の
+            # 未来窓不足と二重計上しない。
             data_quality["dropped_feature_nan"] = int(len(df) - len(result))
             data_quality["feature_rows"] = int(len(result))
-            data_quality["dropped_label_discontinuous"] = 0
+            data_quality["dropped_label_discontinuous"] = int(
+                result.index.isin(discontinuous_label_timestamps).sum()
+            )
             data_quality["dropped_label_insufficient_future"] = int(
                 result["Target"].isna().sum()
+                - data_quality["dropped_label_discontinuous"]
             )
             data_quality["dropped_label_other"] = 0
             data_quality["trainable_rows"] = int(
                 data_quality["feature_rows"]
+                - data_quality["dropped_label_discontinuous"]
                 - data_quality["dropped_label_insufficient_future"]
+                - data_quality["dropped_label_other"]
             )
             result.attrs["data_quality"] = data_quality
         return result, None
