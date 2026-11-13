@@ -1209,11 +1209,11 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             # 日足は段階1の適用範囲外（ChatGPT 再レビューによる適用
             # 範囲の是正）: 入力検証・C-1 カウンタ・data_quality は
             # 適用せず、従来（base）の処理順序・データ加工に戻す。
-            # ここで維持するのはタイムゾーン安全停止仕様のみで、
-            # DatetimeIndex でない場合と tz-naive の場合は停止し、
-            # 理由を返す（日足は段階0で全ペア tz-naive と確認されて
-            # おり、根拠が得られるまで停止対象）。tz-aware の日足は
-            # tz 変換も含めて従来経路で処理する。
+            # 日足取得では yf.download(ignore_tz=False) を明示し、
+            # Yahooのexchange timezone metadataを保持する。日足indexは
+            # yfinanceが配信元timezoneの暦日ラベルとして返すため、
+            # UTC/JSTへ推定変換せず、そのtimezoneをそのまま維持する。
+            # DatetimeIndexでない場合、またはtz-naiveが残る場合は停止する。
             if not isinstance(df.index, pd.DatetimeIndex):
                 return None, {
                     "code": "timestamp_format_unconfirmed",
