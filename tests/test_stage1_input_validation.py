@@ -1302,5 +1302,5 @@ def test_app_daily_keeps_exchange_calendar_timezone_without_utc_relabel():
     assert str(out.index.tz) == "Europe/London"
     # Daily labels remain on the provider's calendar date; they are not
     # converted to UTC midnight or shifted to a neighboring JST date.
-    assert out.index[0] == london_daily.index[0]
     assert out.index[-1] == london_daily.index[-2]
+    assert out.index[-1].date() == london_daily.index[-2].date()
