@@ -1422,26 +1422,54 @@ def _model_filename(ticker, interval):
 
 
 def _save_trained_model(model_path, payload):
-    """学習済みモデルを同じディレクトリの一時ファイル経由で安全に保存する。"""
+    """候補モデルを検証してから原子的に保存する。失敗時は旧ファイルを保つ。"""
     temp_path = None
     try:
-        directory = os.path.dirname(os.path.abspath(model_path)) or "."
-        fd, temp_path = tempfile.mkstemp(
-            prefix=".aifx-model-", suffix=".tmp", dir=directory
-        )
-        with os.fdopen(fd, "wb") as model_file:
-            joblib.dump(payload, model_file)
-            model_file.flush()
-            os.fsync(model_file.fileno())
+        target_dir = os.path.dirname(os.path.abspath(model_path))
+        with tempfile.NamedTemporaryFile(
+            prefix=".aifx-model-", suffix=".tmp", dir=target_dir, delete=False
+        ) as temp_file:
+            temp_path = temp_file.name
+
+        joblib.dump(payload, temp_path)
+        verified = joblib.load(temp_path)
+        if not isinstance(verified, dict):
+            return False
+        if verified.get("version") != MODEL_VERSION:
+            return False
+        if verified.get("features") != FEATURE_COLUMNS:
+            return False
+
+        candidate = verified.get("model")
+        if not isinstance(candidate, RandomForestClassifier):
+            return False
+        try:
+            classes = list(candidate.classes_)
+            if len(classes) < 2 or any(
+                float(value) not in (-1.0, 0.0, 1.0) for value in classes
+            ):
+                return False
+            if int(candidate.n_features_in_) != len(FEATURE_COLUMNS):
+                return False
+            fitted_names = getattr(candidate, "feature_names_in_", None)
+            if fitted_names is not None and list(fitted_names) != FEATURE_COLUMNS:
+                return False
+        except Exception:
+            return False
+
+        # 一時ファイルは最終ファイルと同じディレクトリにあるため、
+        # os.replace は同一ファイルシステム内で原子的に置き換えられる。
         os.replace(temp_path, model_path)
+        temp_path = None
         return True
     except Exception:
+        return False
+    finally:
         if temp_path and os.path.exists(temp_path):
             try:
-                os.remove(temp_path)
+                os.unlink(temp_path)
             except OSError:
                 pass
-        return False
 
 
 def _normalise_timestamp(value):
@@ -1458,6 +1486,9 @@ def _normalise_timestamp(value):
 
 def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
     """Returns the same tuple shape expected by the UI."""
+    # 保存失敗の警告は直近の分析実行だけを示す。前回の状態を引き継がない。
+    st.session_state.pop("model_save_status", None)
+    st.session_state.pop("model_eval_metrics", None)
     st.session_state.pop("model_eval_metrics", None)
     fallback = ("WAIT (様子見)", 0.0, 0, 0.0, "データ不足",
                 {"buy": 0, "sell": 0, "wait": 100}, pd.Series(dtype=float), pd.Series(dtype=int))
