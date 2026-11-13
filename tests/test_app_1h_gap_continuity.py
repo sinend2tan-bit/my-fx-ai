@@ -77,6 +77,7 @@ def _forecast_namespace():
         "np": np,
         "datetime": datetime,
         "JST": ZoneInfo("Asia/Tokyo"),
+        "LOOKAHEAD_BARS": 8,
         "_normalise_timestamp": lambda value: pd.Timestamp(value).isoformat(),
         "save_forecast_history": lambda items: None,
     }
