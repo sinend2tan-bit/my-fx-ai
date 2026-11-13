@@ -1851,7 +1851,7 @@ def _render_main_area():
     if _single_direction == "買い方向":
         st.success("方向：買い方向（上昇トレンド）")
     elif _single_direction == "売り方向":
-        st.error("方向：売り方向（下降トレンド）")
+        st.markdown('<div class="badge-sell">方向：売り方向（下降トレンド）</div>', unsafe_allow_html=True)
     else:
         st.warning("方向：判断保留")
         st.caption(_single_reason)
