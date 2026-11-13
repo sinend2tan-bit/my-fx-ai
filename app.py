@@ -1751,6 +1751,12 @@ def _render_main_area():
     # Stale/unknown timestamps must not create apparently actionable forecast records.
     if not data_is_stale and freshness_check_ok:
         record_forecast_and_update(data, ticker, tf_config["interval"], status, prob_dict, LOOKAHEAD_BARS)
+        # Continue evaluating previously saved candidate-price records even though
+        # their history display was removed from the simplified UI. This preserves
+        # forward outcome tracking without creating candidates or changing signals.
+        update_entry_tracking_outcomes(
+            load_entry_tracking(), data, ticker, tf_config["interval"], LOOKAHEAD_BARS
+        )
 
     std_series = clean_series(data["Close"]).rolling(20, min_periods=1).std()
     band_width_pct = float((std_series.iloc[-1] * 4.0) / (latest_price + 1e-10) * 100)
