@@ -145,8 +145,9 @@ def read_metadata_after_history(ticker) -> dict:
 
 
 
-def compare_daily_to_ny_close_hourly(ticker, daily: pd.DataFrame) -> dict:
-    """Compare Yahoo daily OHLC with 1h bars grouped into 17:00 New York sessions."""
+
+def compare_daily_to_hourly_boundaries(ticker, daily: pd.DataFrame) -> dict:
+    """Compare daily OHLC against hourly aggregation under three date boundaries."""
     try:
         hourly = ticker.history(
             period="3mo", interval="1h", auto_adjust=False, actions=False,
@@ -167,55 +168,62 @@ def compare_daily_to_ny_close_hourly(ticker, daily: pd.DataFrame) -> dict:
     if not isinstance(daily.index, pd.DatetimeIndex) or daily.index.tz is None:
         return {"available": False, "reason": "daily_index_not_timezone_aware"}
 
-    ny_index = hourly.index.tz_convert("America/New_York")
-    # Hourly timestamps label the bar open. Subtracting 17 hours groups each
-    # bar into the FX session that starts at 17:00 New York.
-    session_dates = (ny_index - pd.Timedelta(hours=17)).strftime("%Y-%m-%d")
-    source = hourly[OHLC].copy()
-    source["session_date"] = session_dates
-    grouped = source.groupby("session_date", sort=True).agg(
-        Open=("Open", "first"),
-        High=("High", "max"),
-        Low=("Low", "min"),
-        Close=("Close", "last"),
-        hourly_rows=("Close", "count"),
-    )
-    grouped = grouped[grouped["hourly_rows"] >= 20].copy()
-
     daily_frame = daily[OHLC].copy()
     daily_frame.index = pd.Index(daily_frame.index.strftime("%Y-%m-%d"), name="date")
     daily_frame = daily_frame[~daily_frame.index.duplicated(keep="last")]
-    # Exclude the newest daily bar because it may still be forming.
     if len(daily_frame):
         daily_frame = daily_frame.loc[daily_frame.index < daily_frame.index.max()]
     daily_frame = daily_frame.apply(pd.to_numeric, errors="coerce")
 
-    comparisons = []
-    for shift_days in (-1, 0, 1):
-        candidate = grouped[OHLC].copy()
-        candidate.index = (
-            pd.to_datetime(candidate.index) + pd.Timedelta(days=shift_days)
-        ).strftime("%Y-%m-%d")
-        common = daily_frame.index.intersection(candidate.index)
-        if len(common) == 0:
+    boundary_keys = {
+        "London_calendar_day": hourly.index.strftime("%Y-%m-%d"),
+        "UTC_calendar_day": hourly.index.tz_convert("UTC").strftime("%Y-%m-%d"),
+        "New_York_17h_session": (
+            hourly.index.tz_convert("America/New_York") - pd.Timedelta(hours=17)
+        ).strftime("%Y-%m-%d"),
+    }
+    boundary_results = {}
+    for boundary_name, keys in boundary_keys.items():
+        source = hourly[OHLC].copy()
+        source["group_date"] = keys
+        grouped = source.groupby("group_date", sort=True).agg(
+            Open=("Open", "first"),
+            High=("High", "max"),
+            Low=("Low", "min"),
+            Close=("Close", "last"),
+            hourly_rows=("Close", "count"),
+        )
+        grouped = grouped[grouped["hourly_rows"] >= 20].copy()
+        comparisons = []
+        for shift_days in (-1, 0, 1):
+            candidate = grouped[OHLC].copy()
+            candidate.index = (
+                pd.to_datetime(candidate.index) + pd.Timedelta(days=shift_days)
+            ).strftime("%Y-%m-%d")
+            common = daily_frame.index.intersection(candidate.index)
+            if len(common) == 0:
+                comparisons.append({
+                    "daily_label_shift_days": shift_days,
+                    "overlap_dates": 0,
+                    "equal_ohlc_rows": 0,
+                    "different_ohlc_rows": 0,
+                })
+                continue
+            left = daily_frame.loc[common]
+            right = candidate.loc[common].apply(pd.to_numeric, errors="coerce")
+            delta = (left - right).abs()
+            equal = delta.le(1e-8).all(axis=1) & left.notna().all(axis=1) & right.notna().all(axis=1)
             comparisons.append({
                 "daily_label_shift_days": shift_days,
-                "overlap_dates": 0,
-                "equal_ohlc_rows": 0,
-                "different_ohlc_rows": 0,
+                "overlap_dates": int(len(common)),
+                "equal_ohlc_rows": int(equal.sum()),
+                "different_ohlc_rows": int((~equal).sum()),
+                "max_absolute_ohlc_difference": float(delta.max().max()) if not delta.empty else None,
             })
-            continue
-        left = daily_frame.loc[common]
-        right = candidate.loc[common].apply(pd.to_numeric, errors="coerce")
-        delta = (left - right).abs()
-        equal = delta.le(1e-8).all(axis=1) & left.notna().all(axis=1) & right.notna().all(axis=1)
-        comparisons.append({
-            "daily_label_shift_days": shift_days,
-            "overlap_dates": int(len(common)),
-            "equal_ohlc_rows": int(equal.sum()),
-            "different_ohlc_rows": int((~equal).sum()),
-            "max_absolute_ohlc_difference": float(delta.max().max()) if not delta.empty else None,
-        })
+        boundary_results[boundary_name] = {
+            "eligible_hourly_groups": int(len(grouped)),
+            "comparisons": comparisons,
+        }
 
     return {
         "available": True,
@@ -224,11 +232,9 @@ def compare_daily_to_ny_close_hourly(ticker, daily: pd.DataFrame) -> dict:
         "hourly_start": str(hourly.index.min()),
         "hourly_end": str(hourly.index.max()),
         "daily_index_timezone": str(daily.index.tz),
-        "eligible_hourly_session_groups": int(len(grouped)),
-        "comparisons": comparisons,
-        "note": "17:00 America/New_York grouping is a hypothesis check; matching does not prove broker equivalence.",
+        "boundaries": boundary_results,
+        "note": "Hourly aggregation is a diagnostic proxy; partial/missing hourly bars can prevent exact OHLC matching.",
     }
-
 
 def diagnose(symbol: str) -> dict:
     result = {"symbol": symbol}
@@ -247,7 +253,7 @@ def diagnose(symbol: str) -> dict:
     # In current yfinance, metadata may be a lazy Mapping rather than dict.
     # Read only base fields after history(); do not touch lazy tradingPeriods.
     result.update(read_metadata_after_history(ticker))
-    result["ny_close_hourly_comparison"] = compare_daily_to_ny_close_hourly(ticker, hist)
+    result["hourly_boundary_comparison"] = compare_daily_to_hourly_boundaries(ticker, hist)
 
     frames = {}
     for mode, kwargs in (
