@@ -27,6 +27,7 @@ JST = ZoneInfo("Asia/Tokyo")
 STATE_FILE = "scan_state.json"
 _STATE_LOAD_ERROR = None
 LOOKAHEAD_BARS = 8
+LIVE_DIRECTION_PROBABILITY_THRESHOLD = 0.55  # AppのBUY/SELL候補条件と同じ55%
 # 特徴量計算に必要な最小の足本数（加工後）。最も遅い指標である EMA200 が
 # 有効になるには 200 本が必要で、残りは他の指標とラベル付けの余裕分。
 # bars() の事前チェックも、この値を基準に経路ごとに算出する。
@@ -1843,6 +1844,27 @@ def bars(ticker, interval="1h", period="60d"):
 
 # =========================================================
 # 時系列検証
+def apply_live_probability_threshold(predictions, aligned_probabilities, threshold=LIVE_DIRECTION_PROBABILITY_THRESHOLD):
+    """Appと同じ方向別55%条件をOOF予測に適用する診断用フィルター。
+
+    aligned_probabilities の列順は SELL(-1), NEUTRAL(0), BUY(1)。
+    閾値未満の方向予測は0（取引なし）にする。元の予測配列は変更しない。
+    """
+    predictions = np.asarray(predictions, dtype=int)
+    probabilities = np.asarray(aligned_probabilities, dtype=float)
+    if probabilities.ndim != 2 or probabilities.shape != (len(predictions), 3):
+        raise ValueError("aligned_probabilities must have shape (n_predictions, 3)")
+    if not 0.0 <= float(threshold) <= 1.0:
+        raise ValueError("threshold must be between 0 and 1")
+
+    filtered = np.zeros(len(predictions), dtype=int)
+    sell_mask = predictions == -1
+    buy_mask = predictions == 1
+    filtered[sell_mask & (probabilities[:, 0] >= threshold)] = -1
+    filtered[buy_mask & (probabilities[:, 2] >= threshold)] = 1
+    return filtered
+
+
 def walk_forward_validation(df, pair_name="通貨ペア不明"):
     """時系列検証と、各クラスの予測件数を通貨ペア名付きで記録する。"""
 
@@ -2016,6 +2038,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     all_probability_rows = []
     fold_details = []
     simulated_trade_rows = []
+    live_probability_trade_rows = []
     pair_config = PAIRS.get(pair_name, {})
     spread_pips = safe_float(pair_config.get("spread_pips"), 0.0) or 0.0
     pip_size = safe_float(pair_config.get("pip"), 0.0) or 0.0
@@ -2100,8 +2123,19 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 spread_pips,
                 pip_size,
             )
+            # 実運用の方向別55%条件を適用した参考損益。既存損益・合否ゲートには使わない。
+            live_probability_pred = apply_live_probability_threshold(
+                pred, aligned_proba, LIVE_DIRECTION_PROBABILITY_THRESHOLD
+            )
+            fold_live_probability_pnl, fold_live_probability_trades = simulated_pnl(
+                live_probability_pred,
+                df.loc[test_X.index],
+                spread_pips,
+                pip_size,
+            )
             # 各foldで選ばれた非重複取引だけを全体集計に使う。
             simulated_trade_rows.extend(fold_trades)
+            live_probability_trade_rows.extend(fold_live_probability_trades)
 
             importances = model.feature_importances_
             top_idx = np.argsort(importances)[::-1][:5]
@@ -2189,6 +2223,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "confusion_matrix": cm,
                 "brier_score_raw_probability_diagnostic": round(fold_brier, 5) if fold_brier is not None else None,
                 "simulated_pnl": fold_pnl,
+                "simulated_pnl_live_probability_55_reference": fold_live_probability_pnl,
             }
 
             fold_details.append(detail)
@@ -2332,6 +2367,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
     # 各fold内で非重複かつ決済がfold内に収まる取引だけを合算する。
     total_pnl = summarize_trade_results(simulated_trade_rows)
+    live_probability_reference_pnl = summarize_trade_results(live_probability_trade_rows)
 
     # 買い・売りを分けて評価する。片方の成績が悪い場合に、その方向だけ保留できるようにする。
     directional_pnl = {}
@@ -2494,6 +2530,17 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     )
 
     print(
+        f"[LIVE 55% REFERENCE PNL] pair={pair_name}, "
+        f"trades={live_probability_reference_pnl['trades']}, "
+        f"net_pips={live_probability_reference_pnl['net_pips']}, "
+        f"win_rate={live_probability_reference_pnl['win_rate_pct']}, "
+        f"avg_pips={live_probability_reference_pnl['avg_pips_per_trade']}, "
+        f"max_drawdown_pips={live_probability_reference_pnl['max_drawdown_pips']}, "
+        f"threshold={LIVE_DIRECTION_PROBABILITY_THRESHOLD:.0%}, "
+        f"note=diagnostic reference only; raw RandomForest scores are not calibrated probabilities; does not affect validation gates"
+    )
+
+    print(
         f"[SIMULATED PNL SUMMARY] pair={pair_name}, "
         f"trades={total_pnl['trades']}, "
         f"net_pips={total_pnl['net_pips']}, "
@@ -2539,6 +2586,13 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "folds": used_folds,
         "fold_details": fold_details,
         "simulated_pnl": total_pnl,
+        "simulated_pnl_live_probability_55_reference": {
+            **live_probability_reference_pnl,
+            "threshold": LIVE_DIRECTION_PROBABILITY_THRESHOLD,
+            "diagnostic_only": True,
+            "probability_calibrated": False,
+            "note": "Appと同じ方向別55%条件を適用した参考値。既存の合否ゲート・候補条件には使用しない。",
+        },
         "directional_pnl": directional_pnl,
         "class_counts": {
             "actual": actual_counts,
