@@ -1489,7 +1489,6 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
     # 保存失敗の警告は直近の分析実行だけを示す。前回の状態を引き継がない。
     st.session_state.pop("model_save_status", None)
     st.session_state.pop("model_eval_metrics", None)
-    st.session_state.pop("model_eval_metrics", None)
     fallback = ("WAIT (様子見)", 0.0, 0, 0.0, "データ不足",
                 {"buy": 0, "sell": 0, "wait": 100}, pd.Series(dtype=float), pd.Series(dtype=int))
     if df_current is None or len(df_current) < 180:
