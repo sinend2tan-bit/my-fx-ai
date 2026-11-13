@@ -1980,6 +1980,161 @@ def _render_main_area():
         "松井証券FXの最新条件と注文画面で最終確認してください。"
     )
 
+    # 手動記録は通常画面を2機能に保つため、初期状態で閉じた領域に隔離する。
+    with st.expander("🗂️ 取引記録・振り返り（必要なときだけ）", expanded=False):
+        st.caption(
+            "以下は任意の記録機能です。通常画面には表示しません。"
+            "利益・損失のフィードバックや実取引損益は市場ラベル・AI再学習データに自動投入しません。"
+        )
+        st.markdown("##### 📝 分析結果へのフィードバック")
+        st.caption(
+            "現在の足と実際の取引条件が一致するとは限らないため、"
+            "参考メモとして保存します。"
+        )
+        feedback_ts = _normalise_timestamp(data.index[-1])
+
+        def record_feedback(is_win):
+            fb_list = load_feedback_data()
+            existing = [
+                x for x in fb_list
+                if x.get("ticker") == ticker
+                and x.get("interval") == tf_config["interval"]
+                and _normalise_timestamp(x.get("timestamp")) == feedback_ts
+            ]
+            if existing:
+                for item in fb_list:
+                    if (
+                        item.get("ticker") == ticker
+                        and item.get("interval") == tf_config["interval"]
+                        and _normalise_timestamp(item.get("timestamp")) == feedback_ts
+                    ):
+                        item["is_win"] = bool(is_win)
+                        item["updated_at"] = datetime.now(JST).isoformat()
+            else:
+                fb_list.append({
+                    "ticker": ticker,
+                    "interval": tf_config["interval"],
+                    "timestamp": feedback_ts,
+                    "is_win": bool(is_win),
+                    "signal": status,
+                    "reference_close": latest_price,
+                    "created_at": datetime.now(JST).isoformat(),
+                })
+            save_feedback_data(fb_list)
+
+        fb_col1, fb_col2 = st.columns(2)
+        with fb_col1:
+            if st.button("👍 利益になった結果を記録", use_container_width=True, key="record_feedback_win"):
+                record_feedback(True)
+                st.success("結果を記録しました。AIの再学習データには自動投入しません。")
+        with fb_col2:
+            if st.button("👎 損失になった結果を記録", use_container_width=True, key="record_feedback_loss"):
+                record_feedback(False)
+                st.warning("結果を記録しました。AIの再学習データには自動投入しません。")
+
+        st.markdown("##### 📒 実取引の損益記録")
+        st.caption(
+            "証券会社の約定履歴・実現損益を見ながら手入力してください。"
+            "保存した結果はAIの再学習には自動投入しません。"
+        )
+        journal_col1, journal_col2 = st.columns(2)
+        with journal_col1:
+            journal_pair = st.selectbox(
+                "記録する通貨ペア", list(PAIRS.keys()),
+                index=list(PAIRS.keys()).index(selected_label), key="journal_pair"
+            )
+            journal_side = st.radio(
+                "売買方向", ["買い", "売り"], horizontal=True, key="journal_side"
+            )
+            journal_qty = st.number_input(
+                "約定数量（万通貨）", min_value=0.01, max_value=1000.0,
+                value=float(st.session_state.get("quantity_wan", 0.10)),
+                step=0.01, key="journal_qty"
+            )
+        with journal_col2:
+            journal_entry = st.number_input(
+                "実際の新規約定価格", min_value=0.0, value=0.0,
+                step=0.01 if "JPY" in PAIRS[journal_pair] else 0.0001,
+                format="%.3f" if "JPY" in PAIRS[journal_pair] else "%.5f",
+                key="journal_entry"
+            )
+            journal_exit = st.number_input(
+                "実際の決済約定価格", min_value=0.0, value=0.0,
+                step=0.01 if "JPY" in PAIRS[journal_pair] else 0.0001,
+                format="%.3f" if "JPY" in PAIRS[journal_pair] else "%.5f",
+                key="journal_exit"
+            )
+            journal_pnl = st.number_input(
+                "実現損益（円・手数料等反映後）", value=0.0,
+                step=100.0, key="journal_pnl",
+                help="実際の実現損益を入力してください。利益はプラス、損失はマイナスです。"
+            )
+        journal_note = st.text_input(
+            "メモ（任意）", max_chars=300, key="journal_note",
+            placeholder="例：経済指標前、成行、予定より早く決済"
+        )
+        if st.button("💾 この実取引を保存", key="save_actual_trade_journal", use_container_width=True):
+            if journal_entry <= 0 or journal_exit <= 0 or journal_qty <= 0:
+                st.error("新規価格・決済価格・数量を確認してください。すべて正の値が必要です。")
+            else:
+                journal_items = load_trade_journal()
+                journal_items.append({
+                    "id": datetime.now(JST).strftime("%Y%m%d%H%M%S%f"),
+                    "recorded_at": datetime.now(JST).isoformat(timespec="seconds"),
+                    "pair": journal_pair,
+                    "ticker": PAIRS[journal_pair],
+                    "side": journal_side,
+                    "quantity_wan": float(journal_qty),
+                    "entry_price": float(journal_entry),
+                    "exit_price": float(journal_exit),
+                    "realized_pnl_yen": float(journal_pnl),
+                    "result": "利益" if journal_pnl > 0 else "損失" if journal_pnl < 0 else "±0円",
+                    "note": journal_note.strip(),
+                })
+                save_trade_journal(journal_items)
+                st.success("実取引記録を保存しました。次の再表示でも履歴を読み込みます。")
+
+        journal_items = load_trade_journal()
+        if journal_items:
+            journal_df = pd.DataFrame(journal_items)
+            pnl_values = pd.to_numeric(
+                journal_df.get("realized_pnl_yen", pd.Series(dtype=float)),
+                errors="coerce"
+            ).fillna(0)
+            wins = int((pnl_values > 0).sum())
+            settled = int((pnl_values != 0).sum())
+            jm1, jm2, jm3 = st.columns(3)
+            jm1.metric("記録件数", f"{len(journal_df)}件")
+            jm2.metric("実現損益合計", f"{pnl_values.sum():+,.0f}円")
+            jm3.metric(
+                "利益取引率", f"{wins / settled * 100:.1f}%" if settled else "—",
+                help="±0円の取引は分母から除外。過去記録の集計であり将来の勝率を示しません。"
+            )
+            journal_view = journal_df.rename(columns={
+                "recorded_at": "記録日時", "pair": "通貨ペア", "side": "方向",
+                "quantity_wan": "数量(万通貨)", "entry_price": "新規価格",
+                "exit_price": "決済価格", "realized_pnl_yen": "実現損益(円)",
+                "result": "結果", "note": "メモ"
+            })
+            display_cols = [
+                c for c in [
+                    "記録日時", "通貨ペア", "方向", "数量(万通貨)",
+                    "新規価格", "決済価格", "実現損益(円)", "結果", "メモ"
+                ] if c in journal_view.columns
+            ]
+            st.dataframe(
+                journal_view[display_cols].tail(30),
+                use_container_width=True, hide_index=True
+            )
+            st.download_button(
+                "📥 実取引記録をCSV保存",
+                data=journal_view[display_cols].to_csv(index=False).encode("utf-8-sig"),
+                file_name="actual_trade_journal.csv", mime="text/csv",
+                key="download_actual_trade_journal"
+            )
+        else:
+            st.info("まだ実取引記録はありません。決済後に実現損益を入力すると履歴を確認できます。")
+
 
 # Streamlit fragments keep the sidebar/navigation stable during periodic updates.
 # On older Streamlit versions, fall back to normal manual reruns rather than failing to start.
