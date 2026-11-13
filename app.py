@@ -1280,6 +1280,20 @@ def _model_filename(ticker, interval):
     return f"model_{clean_ticker}_{interval}.joblib"
 
 
+def _save_trained_model(model_path, payload):
+    """学習済みモデルを保存し、成功したら True、失敗したら False を返す。
+
+    保存失敗の事実だけを戻り値で知らせる。例外の詳細や保存先パスは
+    呼び出し側・画面へ伝えない（露出防止）。保存形式・保存先は従来
+    どおりで、成功時の動作は変わらない。
+    """
+    try:
+        joblib.dump(payload, model_path)
+        return True
+    except Exception:
+        return False
+
+
 def _normalise_timestamp(value):
     try:
         ts = pd.Timestamp(value)
@@ -1391,14 +1405,19 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             candidate_model.fit(X, y, sample_weight=sw)
             if model_quality_ok:
                 model = candidate_model
-                try:
-                    joblib.dump({"version": MODEL_VERSION, "features": FEATURE_COLUMNS,
-                                 "model": model, "trained_at": datetime.now(JST).isoformat(),
-                                 "validation_balanced_accuracy": balanced_accuracy,
-                                 "baseline_balanced_accuracy": baseline_balanced_accuracy,
-                                 "feedback_applied": 0}, model_path)
-                except Exception:
-                    pass
+                saved_ok = _save_trained_model(model_path, {
+                    "version": MODEL_VERSION, "features": FEATURE_COLUMNS,
+                    "model": model, "trained_at": datetime.now(JST).isoformat(),
+                    "validation_balanced_accuracy": balanced_accuracy,
+                    "baseline_balanced_accuracy": baseline_balanced_accuracy,
+                    "feedback_applied": 0})
+                # 保存の成否だけを記録する（例外詳細・パスは保持しない）。
+                # 表示はメイン表示領域とサイドバーのモデル状態表示で行う。
+                st.session_state["model_save_status"] = {
+                    "ticker": ticker,
+                    "interval": interval,
+                    "saved": bool(saved_ok),
+                }
             else:
                 # Use the validation-only model for this run; do not save/promote
                 # the full-data candidate when its holdout result is weak.
@@ -1562,6 +1581,16 @@ if os.path.exists(m_file_info):
 else:
     st.sidebar.caption("🤖 現在のモデル状態: `初回自動作成待ち`")
     st.sidebar.caption("※十分な価格データを取得できた次回分析時にモデルを作成します。")
+_save_status = st.session_state.get("model_save_status") or {}
+if (
+    _save_status.get("saved") is False
+    and _save_status.get("ticker") == ticker
+    and _save_status.get("interval") == tf_config["interval"]
+):
+    st.sidebar.warning(
+        "学習したモデルを保存できませんでした。"
+        "今回の分析には利用できますが、アプリを再起動するとモデルは残りません。"
+    )
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 更新・メンテナンス")
 st.sidebar.checkbox(
@@ -1715,6 +1744,18 @@ def _render_main_area():
     status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(
         data, data_htf, ticker, tf_config["interval"], force_retrain=force_retrain
     )
+    # モデル保存に失敗した場合は、その場でも知らせる（サイドバーにも
+    # 次回描画時に残る）。例外詳細・保存先パスは表示しない。
+    _save_status_main = st.session_state.get("model_save_status") or {}
+    if (
+        _save_status_main.get("saved") is False
+        and _save_status_main.get("ticker") == ticker
+        and _save_status_main.get("interval") == tf_config["interval"]
+    ):
+        st.warning(
+            "学習したモデルを保存できませんでした。"
+            "今回の分析には利用できますが、アプリを再起動するとモデルは残りません。"
+        )
     raw_model_status = status
     if data_is_stale:
         status = "WAIT（データ鮮度未確認）"
