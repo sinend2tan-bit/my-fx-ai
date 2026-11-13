@@ -18,8 +18,9 @@
   AST で対象関数定義だけを抽出し、必要な依存（numpy / pandas /
   ダウンロード stub / flatten_yf_df / 定数）を明示した namespace で実行する。
   これは元関数の「抽出実行」であり、Streamlit の cache ラッパ等は含まない。
-  - load_and_process_data には @st.cache_data(ttl=60) デコレータが付いている。
-    抽出時はデコレータを取り除き、関数本体のみを実行する（記録済み）。
+  - 現行コードでは cache デコレータは _load_and_process_data_cached にあり、
+    load_and_process_data は公開ラッパーである。抽出時は cache デコレータを
+    取り除き、キャッシュ関数・停止理由関数・公開ラッパーを一緒に実行する。
   - 抽出した各関数のソース断片 SHA-256 と AST dump の SHA-256 は
     EXTRACTION_INFO に記録し、レポートへ残す。
 - ネットワークは fail-closed: autouse fixture が socket / DNS / urllib の
