@@ -1397,7 +1397,8 @@ def load_and_process_data(ticker, period, interval, label=""):
         warn_key = (interval, stop_reason.get("code"))
         if warn_key not in _LOAD_STOP_WARNED:
             _LOAD_STOP_WARNED.add(warn_key)
-            st.warning(stop_reason["message"])
+            # どの時間足の取得が停止したかを画面上で区別できるようにする。
+            st.warning(f"{label or interval}: {stop_reason['message']}")
     else:
         _LOAD_STOP_REASONS.pop(key, None)
     return result
