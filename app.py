@@ -1623,8 +1623,6 @@ def _render_main_area():
         news_items = news_result.get("items", []) if isinstance(news_result, dict) else []
         news_status = news_result.get("status", "ニュース取得状況は不明です") if isinstance(news_result, dict) else "ニュース取得状況は不明です"
         news_errors = news_result.get("errors", []) if isinstance(news_result, dict) else []
-    if data_4h is None and data is not None:
-        data_4h = data
     if data is None or data.empty:
         st.error("データの取得に失敗したか、分析に必要な本数が不足しています。時間をおいて更新してください。")
         st.stop()
