@@ -69,7 +69,7 @@ class _FakeResponse:
         pass
 
 
-def _make_download(tail_1h=0.0, tail_4h_source=0.0, stale_main=False):
+def _make_download(tail_1h=0.0, tail_4h_source=0.0, stale_main=False, stale_4h_source=False):
     now_h = pd.Timestamp.now(tz="UTC").floor("h")
 
     def fake_download(*args, **kwargs):
@@ -81,7 +81,8 @@ def _make_download(tail_1h=0.0, tail_4h_source=0.0, stale_main=False):
             return _frame(500, "15min", now_h)
         # 1h 系: period=90d は4時間足の元データ、60d は1時間足（メイン含む）
         if period == "90d":
-            return _frame(600, "1h", now_h, tail=tail_4h_source)
+            end4 = now_h - pd.Timedelta(days=2) if stale_4h_source else now_h
+            return _frame(600, "1h", end4, tail=tail_4h_source)
         end = now_h - pd.Timedelta(days=10) if stale_main else now_h
         return _frame(600, "1h", end, tail=tail_1h)
 
@@ -145,6 +146,11 @@ def test_two_sections_and_removed_displays(rig):
     # AI検証の詳細などの削除対象 expander がない。
     expander_labels = [str(w.label) for w in at.expander]
     assert not any("AI検証" in lb for lb in expander_labels), expander_labels
+    # モデル管理・メンテナンスは通常画面の見出しではなく折りたたみに整理され、
+    # メイン上部の「分析モデルについて」説明は表示されない。
+    assert any("AIモデル管理" in lb for lb in expander_labels), expander_labels
+    assert any("更新・メンテナンス" in lb for lb in expander_labels), expander_labels
+    assert "分析モデルについて" not in body
 
     # リピート注文の設定表示が残っている。
     assert any("ハーフ＆ハーフ" in c and "買いレンジ" in c for c in _texts(at, "code"))
@@ -168,11 +174,23 @@ def test_direction_buy_when_trends_agree_up(rig):
     assert any("方向：買い方向" in s for s in _texts(at, "success")), _texts(at, "success")
 
 
-def test_direction_hold_when_stale(rig):
+def test_direction_hold_when_only_1h_stale(rig):
+    # 4時間足は新鮮でも、1時間足だけ古ければ判断保留（鮮度は系列ごとに検証）。
     at = rig(tail_1h=-0.45, tail_4h_source=-0.45, stale_main=True)
     assert not at.exception
     assert any("方向：判断保留" in w for w in _texts(at, "warning"))
     assert any("鮮度" in c for c in _texts(at, "caption"))
+    assert not any("方向：売り方向" in e for e in _texts(at, "error"))
+
+
+def test_direction_hold_when_only_4h_stale(rig):
+    # 選択中の時間足（1時間足）は新鮮でも、4時間足だけ古ければ判断保留。
+    # 修正前は選択中時間足の鮮度判定を流用していたため取りこぼしていた。
+    at = rig(tail_1h=-0.45, tail_4h_source=-0.45, stale_4h_source=True)
+    assert not at.exception
+    assert any("方向：判断保留" in w for w in _texts(at, "warning"))
+    assert any("鮮度" in c for c in _texts(at, "caption"))
+    assert not any("方向：売り方向" in e for e in _texts(at, "error"))
 
 
 def test_direction_hold_when_timeframes_disagree(rig):

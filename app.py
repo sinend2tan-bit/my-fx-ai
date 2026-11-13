@@ -1486,7 +1486,6 @@ if "settings_loaded" not in st.session_state:
 
 st.title("AI FX分析ツール")
 st.caption("単発トレードの方向判断と、リピート注文（ハーフ＆ハーフ）の設定支援専用です。口座接続・自動発注は行いません。通貨ペアと時間足を選び、方向とデータ鮮度を確認してください。")
-st.caption("【分析モデルについて】アプリ内分析とクラウド側の定期スキャン（FX Cloud Scan）は、異なるモデル・判定基準を使用しています。特徴量や学習ラベルの定義も異なるため、分析結果や売買判断が一致しない場合があります。フォワード検証の結果は、クラウド側のスキャン方式に対する検証であり、アプリ内分析の精度を直接保証するものではありません。")
 
 # iPad / スマートフォンで selectbox の検索キーボードが出る不便さを避けるため、
 # 通貨ペア・時間足はタップで切り替えるラジオボタンにする。
@@ -1520,32 +1519,32 @@ st.sidebar.number_input("1注文の基本数量 (万通貨)", min_value=0.01, st
 st.sidebar.markdown("---")
 trade_style = str(st.session_state.get("trade_style", "デイトレード（当日決済）"))
 st.sidebar.markdown("---")
-st.sidebar.header("🔄 AIモデル管理")
-if st.sidebar.button("🧠 AIモデルを今すぐ強制再学習"):
-    model_file = _model_filename(ticker, tf_config["interval"])
-    try:
-        if os.path.exists(model_file):
-            os.remove(model_file)
-    except OSError:
-        pass
-    st.cache_data.clear()
-    st.session_state["force_retrain_once"] = True
-    st.toast("再学習を要求しました。次の分析でモデルを再作成します。", icon="🧠")
-    st.rerun()
-m_file_info = _model_filename(ticker, tf_config["interval"])
-if os.path.exists(m_file_info):
-    m_time_dt = datetime.fromtimestamp(os.path.getmtime(m_file_info), tz=JST)
-    m_time = m_time_dt.strftime("%Y-%m-%d %H:%M")
-    model_age_hours = max(0.0, (time.time() - os.path.getmtime(m_file_info)) / 3600)
-    st.sidebar.caption(f"🤖 最終学習日時: `{m_time}`")
-    if model_age_hours > 4:
-        st.sidebar.warning("モデルが4時間以上経過しています。次回分析時に再学習されます。")
+with st.sidebar.expander("🔄 AIモデル管理", expanded=False):
+    if st.button("🧠 AIモデルを今すぐ強制再学習"):
+        model_file = _model_filename(ticker, tf_config["interval"])
+        try:
+            if os.path.exists(model_file):
+                os.remove(model_file)
+        except OSError:
+            pass
+        st.cache_data.clear()
+        st.session_state["force_retrain_once"] = True
+        st.toast("再学習を要求しました。次の分析でモデルを再作成します。", icon="🧠")
+        st.rerun()
+    m_file_info = _model_filename(ticker, tf_config["interval"])
+    if os.path.exists(m_file_info):
+        m_time_dt = datetime.fromtimestamp(os.path.getmtime(m_file_info), tz=JST)
+        m_time = m_time_dt.strftime("%Y-%m-%d %H:%M")
+        model_age_hours = max(0.0, (time.time() - os.path.getmtime(m_file_info)) / 3600)
+        st.caption(f"🤖 最終学習日時: `{m_time}`")
+        if model_age_hours > 4:
+            st.warning("モデルが4時間以上経過しています。次回分析時に再学習されます。")
+        else:
+            st.caption(f"モデル経過時間: 約 {model_age_hours:.1f} 時間")
+        st.caption("※再学習はアプリが実行・再分析された時に行われます。取引結果の記録だけでは学習されません。")
     else:
-        st.sidebar.caption(f"モデル経過時間: 約 {model_age_hours:.1f} 時間")
-    st.sidebar.caption("※再学習はアプリが実行・再分析された時に行われます。取引結果の記録だけでは学習されません。")
-else:
-    st.sidebar.caption("🤖 現在のモデル状態: `初回自動作成待ち`")
-    st.sidebar.caption("※十分な価格データを取得できた次回分析時にモデルを作成します。")
+        st.caption("🤖 現在のモデル状態: `初回自動作成待ち`")
+        st.caption("※十分な価格データを取得できた次回分析時にモデルを作成します。")
 _save_status = st.session_state.get("model_save_status") or {}
 if (
     _save_status.get("saved") is False
@@ -1556,22 +1555,21 @@ if (
         "学習したモデルを保存できませんでした。"
         "今回の分析には利用できますが、アプリを再起動するとモデルは残りません。"
     )
-st.sidebar.markdown("---")
-st.sidebar.header("🔄 更新・メンテナンス")
-st.sidebar.checkbox(
-    "5分ごとに自動更新（画面維持）",
-    key="auto_refresh",
-    on_change=save_settings,
-    help="対応するStreamlitではメイン表示領域だけを5分ごとに再実行します。AI分析も再計算される場合があります。初期設定はオフです。",
-)
-st.sidebar.info(
-    "自動更新は初期設定でオフです。オンにすると対応環境ではメイン表示領域だけを5分ごとに更新します。 "
-    "ニュースは15分キャッシュ、価格データは60秒キャッシュです。自動発注は行いません。"
-)
-if st.sidebar.button("💾 設定を即時手動保存"):
-    save_settings()
-    st.toast("設定を保存しました！", icon="💾")
-with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", expanded=False):
+with st.sidebar.expander("🛠️ 更新・メンテナンス", expanded=False):
+    st.checkbox(
+        "5分ごとに自動更新（画面維持）",
+        key="auto_refresh",
+        on_change=save_settings,
+        help="対応するStreamlitではメイン表示領域だけを5分ごとに再実行します。AI分析も再計算される場合があります。初期設定はオフです。",
+    )
+    st.info(
+        "自動更新は初期設定でオフです。オンにすると対応環境ではメイン表示領域だけを5分ごとに更新します。 "
+        "ニュースは15分キャッシュ、価格データは60秒キャッシュです。自動発注は行いません。"
+    )
+    if st.button("💾 設定を即時手動保存"):
+        save_settings()
+        st.toast("設定を保存しました！", icon="💾")
+    st.markdown("**📂 設定ファイル管理 (バックアップ)**")
     safe_backup_settings = load_settings().copy()
     safe_backup_settings["webhook_url"] = ""
     st.download_button("📥 設定をバックアップ (.json)", data=json.dumps(safe_backup_settings, ensure_ascii=False, indent=2).encode("utf-8"),
@@ -1608,11 +1606,11 @@ with st.sidebar.expander("📂 設定ファイル管理 (バックアップ)", e
                 st.success("設定を復元しました。再読み込みしてください。")
         except Exception as exc:
             st.error(f"設定の復元に失敗しました: {exc}")
-st.sidebar.button("🔄 設定を初期値にリセット", on_click=reset_settings_callback)
-if st.sidebar.button("🔄 最新データに更新"):
-    st.cache_data.clear()
-    st.rerun()
-st.sidebar.caption("更新ボタンは価格・ニュースのキャッシュを消して再取得します。選択中の画面は維持されます。連続して押す必要はありません。")
+    st.button("🔄 設定を初期値にリセット", on_click=reset_settings_callback)
+    if st.button("🔄 最新データに更新"):
+        st.cache_data.clear()
+        st.rerun()
+    st.caption("更新ボタンは価格・ニュースのキャッシュを消して再取得します。選択中の画面は維持されます。連続して押す必要はありません。")
 
 def _render_main_area():
     with st.spinner("最新相場データ & ニュースを取得中..."):
@@ -1805,12 +1803,35 @@ def _render_main_area():
         except Exception:
             return "判定不可", None
 
+    def _series_fresh(frame, interval):
+        """方向判断に使う系列の鮮度を、選択中の時間足と同じ基準で個別に確認する。
+
+        鮮度が「確認できた場合のみ」True。データなし・時刻のタイムゾーン
+        不明・検証例外・基準超過はいずれも False（=判断保留側に倒す）。
+        """
+        try:
+            if frame is None or frame.empty:
+                return False
+            last_idx = frame.index[-1]
+            if last_idx.tzinfo is None:
+                return False
+            age = max(
+                0.0,
+                (pd.Timestamp.now(tz="UTC") - last_idx.tz_convert("UTC")).total_seconds() / 60.0,
+            )
+            limits = {"5m": 25, "15m": 60, "1h": 210, "4h": 600, "1d": 2160}
+            return age <= limits.get(interval, 210)
+        except Exception:
+            return False
+
     st.markdown("---")
     st.markdown("## 🎯 単発トレード")
     _core_trends = [(name, *_trend_summary(frame)) for name, frame in (("4時間足", data_4h), ("1時間足", data_1h))]
-    if data_is_stale or not freshness_check_ok:
+    # 方向判断に使う4時間足・1時間足の鮮度を、それぞれ独立に検証する。
+    # 選択中の時間足が新しくても、片方でも鮮度を確認できなければ保留する。
+    if not (_series_fresh(data_4h, "4h") and _series_fresh(data_1h, "1h")):
         _single_direction = "判断保留"
-        _single_reason = "データ鮮度が確認できないため、方向判断を保留します。"
+        _single_reason = "4時間足・1時間足のデータ鮮度が確認できないため、方向判断を保留します。"
     elif any(sign is None for _, _, sign in _core_trends):
         _single_direction = "判断保留"
         _single_reason = "方向判断に使う時間足のデータが不足しているため、保留します。"

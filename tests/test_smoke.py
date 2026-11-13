@@ -1112,14 +1112,14 @@ def test_simple_scanner_requirements_cover_imports():
 # アプリ画面の注記（アプリ内分析とクラウドスキャンは別モデル）の確認
 # =========================================================
 
-def test_app_shows_separate_model_note():
+def test_app_model_note_removed_from_main_screen():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
-    # タイトル直下の注記が残っていること（誤って消えていないこと）を確認する。
-    assert "【分析モデルについて】" in source
-    assert "異なるモデル・判定基準を使用しています" in source
-    assert "アプリ内分析の精度を直接保証するものではありません" in source
+    # 画面簡素化のレビュー指示（PR #34）により、タイトル直下の
+    # 「分析モデルについて」注記は通常画面から外した。内部のモデル処理・
+    # 学習・記録は無変更で、このテストは表示文言の不在だけを確認する。
+    assert "【分析モデルについて】" not in source
 
 
 def test_build_feature_snapshot_covers_all_feature_columns():
