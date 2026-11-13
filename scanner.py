@@ -1855,6 +1855,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             "class_recall_pct": {},
             "folds": folds,
             "fold_details": details or [],
+            "simulated_pnl_live55_reference": None,
             "class_counts": {},
         }
 
@@ -2016,6 +2017,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     all_probability_rows = []
     fold_details = []
     simulated_trade_rows = []
+    simulated_trade_rows_live55_reference = []
     pair_config = PAIRS.get(pair_name, {})
     spread_pips = safe_float(pair_config.get("spread_pips"), 0.0) or 0.0
     pip_size = safe_float(pair_config.get("pip"), 0.0) or 0.0
@@ -2100,8 +2102,27 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 spread_pips,
                 pip_size,
             )
-            # 各foldで選ばれた非重複取引だけを全体集計に使う。
+            # 現行のライブ方向判定（BUY/SELLが55%以上かつ相手方向より高い）
+            # をそのまま適用した参考損益。既存のpred/損益/ゲートには触れない。
+            buy_pct = aligned_proba[:, 2] * 100.0
+            sell_pct = aligned_proba[:, 0] * 100.0
+            live55_predictions = np.zeros(len(test_X), dtype=int)
+            live55_predictions[
+                (buy_pct >= 55.0) & (buy_pct > sell_pct)
+            ] = 1
+            live55_predictions[
+                (sell_pct >= 55.0) & (sell_pct > buy_pct)
+            ] = -1
+            fold_pnl_live55_reference, fold_trades_live55_reference = simulated_pnl(
+                live55_predictions,
+                df.loc[test_X.index],
+                spread_pips,
+                pip_size,
+            )
+
+            # 既存の全方向予測による損益と、55%条件適用の参考損益を別々に保持する。
             simulated_trade_rows.extend(fold_trades)
+            simulated_trade_rows_live55_reference.extend(fold_trades_live55_reference)
 
             importances = model.feature_importances_
             top_idx = np.argsort(importances)[::-1][:5]
@@ -2189,6 +2210,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "confusion_matrix": cm,
                 "brier_score_raw_probability_diagnostic": round(fold_brier, 5) if fold_brier is not None else None,
                 "simulated_pnl": fold_pnl,
+                "simulated_pnl_live55_reference": fold_pnl_live55_reference,
             }
 
             fold_details.append(detail)
@@ -2214,6 +2236,8 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 f"sim_win_rate={fold_pnl['win_rate_pct']}, "
                 f"sim_avg_pips={fold_pnl['avg_pips_per_trade']}, "
                 f"sim_max_dd_pips={fold_pnl['max_drawdown_pips']}, "
+                f"live55_ref_trades={fold_pnl_live55_reference['trades']}, "
+                f"live55_ref_net_pips={fold_pnl_live55_reference['net_pips']}, "
                 f"purge_gap={purge_gap}"
             )
 
@@ -2332,6 +2356,15 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
     # 各fold内で非重複かつ決済がfold内に収まる取引だけを合算する。
     total_pnl = summarize_trade_results(simulated_trade_rows)
+    total_pnl_live55_reference = summarize_trade_results(
+        simulated_trade_rows_live55_reference
+    )
+    print(
+        f"[LIVE55 REFERENCE PNL] pair={pair_name}, "
+        f"trades={total_pnl_live55_reference['trades']}, "
+        f"net_pips={total_pnl_live55_reference['net_pips']}, "
+        f"threshold=55%, calibrated=False, gate_effect=False"
+    )
 
     # 買い・売りを分けて評価する。片方の成績が悪い場合に、その方向だけ保留できるようにする。
     directional_pnl = {}
@@ -2539,6 +2572,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "folds": used_folds,
         "fold_details": fold_details,
         "simulated_pnl": total_pnl,
+        "simulated_pnl_live55_reference": total_pnl_live55_reference,
         "directional_pnl": directional_pnl,
         "class_counts": {
             "actual": actual_counts,
@@ -4319,6 +4353,7 @@ def main():
     for item in pair_results:
         validation = item.get("validation") or {}
         simulated_pnl = validation.get("simulated_pnl") or {}
+        live55_reference_pnl = validation.get("simulated_pnl_live55_reference") or {}
         compact_pairs.append({
             "name": item.get("name"),
             "ticker": item.get("ticker"),
@@ -4337,6 +4372,8 @@ def main():
             "pnl_stability_ok": validation.get("pnl_stability_ok"),
             "simulated_net_pips": simulated_pnl.get("net_pips"),
             "simulated_trades": simulated_pnl.get("trades"),
+            "simulated_live55_reference_net_pips": live55_reference_pnl.get("net_pips"),
+            "simulated_live55_reference_trades": live55_reference_pnl.get("trades"),
             "directional_pnl": validation.get("directional_pnl"),
         })
 
@@ -4385,6 +4422,14 @@ def main():
             "max_age_minutes": MAX_DATA_AGE_MINUTES,
             "notice": "古いデータでは時系列検証・売買方向の算出を省略し、判定保留にします。制限時間は緩めません。",
             "stale_reason_classification": "週末・休場の可能性と市場稼働日における更新遅延を区別します。原因を確定するものではありません。",
+        },
+        "live55_reference_pnl_policy": {
+            "threshold_pct": 55.0,
+            "buy_rule": "buy_pct >= 55 and buy_pct > sell_pct",
+            "sell_rule": "sell_pct >= 55 and sell_pct > buy_pct",
+            "probabilities_calibrated": False,
+            "affects_validation_gate": False,
+            "notice": "既存の予測クラスによる仮想損益とは別の参考指標。未校正のRandomForest確率を使用し、合否判定・候補選定には使わない。",
         },
         "directional_pnl_policy": {
             "minimum_trades_per_direction": MIN_DIRECTIONAL_PNL_TRADES,
