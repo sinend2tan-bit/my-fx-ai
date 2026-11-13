@@ -170,6 +170,19 @@ code { overflow-wrap:anywhere; }
 [data-testid="stMetricValue"] { font-size: clamp(1.15rem, 2.5vw, 1.8rem) !important; }
 [data-testid="stRadio"] > div { gap: 0.35rem; }
 [data-testid="stRadio"] label { padding: 0.2rem 0.1rem; }
+/* 横並びの選択肢はiPad縦向きでも折り返し、タップ領域を確保 */
+@media (max-width: 900px) {
+    [data-testid="stRadio"] [role="radiogroup"] {
+        flex-wrap: wrap !important;
+        gap: 0.35rem 0.65rem !important;
+    }
+    [data-testid="stRadio"] label {
+        min-height: 44px;
+        padding: 0.4rem 0.45rem;
+        margin: 0;
+        align-items: center;
+    }
+}
 [data-testid="stSelectbox"] { margin-bottom: 0.25rem; }
 [data-testid="stMarkdownContainer"] h3 { margin-top: 0.65rem; }
 /* 縦向きタブレット・スマートフォンでは横幅を節約 */
