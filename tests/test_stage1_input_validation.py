@@ -582,6 +582,7 @@ def test_app_daily_non_datetime_index_stops():
 
 def _model_namespace():
     import os
+    import tempfile
     import time
     from datetime import datetime
 
@@ -591,6 +592,7 @@ def _model_namespace():
         "np": np,
         "st": st,
         "os": os,
+        "tempfile": tempfile,
         "time": time,
         "joblib": joblib,
         "RandomForestClassifier": RandomForestClassifier,
