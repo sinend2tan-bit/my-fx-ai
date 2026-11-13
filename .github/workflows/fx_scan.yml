@@ -25,13 +25,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # 認証情報をローカル Git 設定に残さない。公開は最終ステップが GH_TOKEN で独自に行う。
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
           cache: pip
@@ -44,7 +44,7 @@ jobs:
       # キーは実行ごとに変え、restore-keys で最新世代を拾う (actions/cache の標準パターン)。
       # キャッシュが無い冷間スタートでも scanner.py の load_state() が空状態で開始するため問題ない。
       - name: Restore scan state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: scan_state.json
           key: fx-scan-state-${{ github.run_id }}-${{ github.run_attempt }}
@@ -57,7 +57,7 @@ jobs:
       # 実行後、更新された状態を新しいキーで保存する。同一キーへは保存できないため、
       # 保存は復元とは別ステップ・別キーにする。
       - name: Save scan state
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: scan_state.json
           key: fx-scan-state-${{ github.run_id }}-${{ github.run_attempt }}
@@ -66,7 +66,7 @@ jobs:
       - name: Backup scan state as artifact
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: scan-state-${{ github.run_number }}
           path: scan_state.json
