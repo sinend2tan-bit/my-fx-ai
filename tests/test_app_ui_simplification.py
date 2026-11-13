@@ -84,15 +84,14 @@ def _make_download(
         period = kwargs.get("period")
         if interval == "1d":
             return _frame(500, "1d", now_h.normalize())
-        if interval == "5m":
-            return _frame(500, "5min", now_h)
         if interval == "15m":
             return _frame(500, "15min", now_h)
-        if interval == "4h":
+        # 1h 系: period=90d は4時間足の元データ、60d は1時間足（メイン含む）
+        if period == "90d":
             if missing_4h_source:
                 return pd.DataFrame()
             end4 = now_h - pd.Timedelta(days=2) if stale_4h_source else now_h
-            return _frame(600, "4h", end4, tail=tail_4h_source)
+            return _frame(600, "1h", end4, tail=tail_4h_source)
         end = now_h - pd.Timedelta(days=10) if stale_main else now_h
         return _frame(600, "1h", end, tail=tail_1h)
 
