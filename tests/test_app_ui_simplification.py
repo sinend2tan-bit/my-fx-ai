@@ -84,14 +84,15 @@ def _make_download(
         period = kwargs.get("period")
         if interval == "1d":
             return _frame(500, "1d", now_h.normalize())
+        if interval == "5m":
+            return _frame(500, "5min", now_h)
         if interval == "15m":
             return _frame(500, "15min", now_h)
-        # 1h 系: period=90d は4時間足の元データ、60d は1時間足（メイン含む）
-        if period == "90d":
+        if interval == "4h":
             if missing_4h_source:
                 return pd.DataFrame()
             end4 = now_h - pd.Timedelta(days=2) if stale_4h_source else now_h
-            return _frame(600, "1h", end4, tail=tail_4h_source)
+            return _frame(600, "4h", end4, tail=tail_4h_source)
         end = now_h - pd.Timedelta(days=10) if stale_main else now_h
         return _frame(600, "1h", end, tail=tail_1h)
 
@@ -240,3 +241,31 @@ def test_saved_candidate_outcomes_continue_without_history_ui(rig):
     assert len(saved) == 1
     assert saved[0]["status"] == "NOT_REACHED"
     assert saved[0].get("evaluated_at")
+
+
+def test_all_currency_pair_choices_keep_the_two_main_sections(rig):
+    at = rig()
+    pair_options = list(at.radio[0].options)
+    assert len(pair_options) == 5, pair_options
+
+    for pair in pair_options:
+        at.radio[0].set_value(pair)
+        at.run()
+        assert not at.exception, f"{pair}: {[e.value for e in at.exception]}"
+        body = _all_text(at)
+        assert "🎯 単発トレード" in body
+        assert "📋 リピート注文（ハーフ＆ハーフ）" in body
+
+
+def test_all_timeframe_choices_keep_the_two_main_sections(rig):
+    at = rig()
+    timeframe_options = list(at.radio[1].options)
+    assert len(timeframe_options) == 5, timeframe_options
+
+    for timeframe in timeframe_options:
+        at.radio[1].set_value(timeframe)
+        at.run()
+        assert not at.exception, f"{timeframe}: {[e.value for e in at.exception]}"
+        body = _all_text(at)
+        assert "🎯 単発トレード" in body
+        assert "📋 リピート注文（ハーフ＆ハーフ）" in body
