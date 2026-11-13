@@ -69,7 +69,13 @@ class _FakeResponse:
         pass
 
 
-def _make_download(tail_1h=0.0, tail_4h_source=0.0, stale_main=False, stale_4h_source=False, missing_4h_source=False):
+def _make_download(
+    tail_1h=0.0,
+    tail_4h_source=0.0,
+    stale_main=False,
+    stale_4h_source=False,
+    missing_4h_source=False,
+):
     now_h = pd.Timestamp.now(tz="UTC").floor("h")
 
     def fake_download(*args, **kwargs):
