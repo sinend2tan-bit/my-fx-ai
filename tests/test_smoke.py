@@ -1061,6 +1061,26 @@ def _extract_app_backup_functions(tmp_path):
     return namespace
 
 
+def _valid_app_model_payload(ns):
+    import joblib
+    from sklearn.ensemble import RandomForestClassifier
+
+    features = [
+        "Return_1", "Return_5", "Dev_SMA20", "Dev_EMA200", "Dev_EMA20_200",
+        "Vol_Ratio", "RSI", "RSI_Diff", "MACD_Hist_Ratio", "BB_PctB", "ADX",
+        "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio", "Stoch_K", "CCI", "ROC",
+    ]
+    model = RandomForestClassifier(n_estimators=2, random_state=0)
+    model.fit([[0.0] * len(features), [1.0] * len(features)], [-1, 1])
+    ns.update({
+        "joblib": joblib,
+        "MODEL_VERSION": 8,
+        "FEATURE_COLUMNS": features,
+        "RandomForestClassifier": RandomForestClassifier,
+    })
+    return {"version": 8, "features": features, "model": model}
+
+
 def test_app_model_save_uses_atomic_replace_and_preserves_old_file(tmp_path, monkeypatch):
     import os
     from types import SimpleNamespace
@@ -1069,10 +1089,11 @@ def test_app_model_save_uses_atomic_replace_and_preserves_old_file(tmp_path, mon
     ns = _extract_app_backup_functions(tmp_path)
     model_path = tmp_path / "model_USDJPY_1h.joblib"
     model_path.write_bytes(b"old-model")
-    ns["joblib"] = SimpleNamespace(dump=lambda payload, stream: stream.write(b"new-model"))
+    payload = _valid_app_model_payload(ns)
 
-    assert ns["_save_trained_model"](str(model_path), {"model": "new"}) is True
-    assert model_path.read_bytes() == b"new-model"
+    assert ns["_save_trained_model"](str(model_path), payload) is True
+    import joblib
+    assert joblib.load(model_path)["version"] == 8
     assert not list(tmp_path.glob(".aifx-model-*.tmp"))
 
 
@@ -1088,8 +1109,9 @@ def test_app_model_save_failure_preserves_old_file_and_cleans_temp(tmp_path, mon
         stream.write(b"partial-model")
         raise RuntimeError("simulated model serialization failure")
 
+    payload = _valid_app_model_payload(ns)
     ns["joblib"] = SimpleNamespace(dump=fail_after_partial_write)
-    assert ns["_save_trained_model"](str(model_path), {"model": "new"}) is False
+    assert ns["_save_trained_model"](str(model_path), payload) is False
     assert model_path.read_bytes() == b"old-model"
     assert not list(tmp_path.glob(".aifx-model-*.tmp"))
 
@@ -1102,13 +1124,13 @@ def test_app_model_save_replace_failure_preserves_old_file(tmp_path, monkeypatch
     ns = _extract_app_backup_functions(tmp_path)
     model_path = tmp_path / "model_USDJPY_1h.joblib"
     model_path.write_bytes(b"old-model")
-    ns["joblib"] = SimpleNamespace(dump=lambda payload, stream: stream.write(b"new-model"))
+    payload = _valid_app_model_payload(ns)
 
     def fail_replace(source, destination):
         raise OSError("simulated model replace failure")
 
     monkeypatch.setattr(os, "replace", fail_replace)
-    assert ns["_save_trained_model"](str(model_path), {"model": "new"}) is False
+    assert ns["_save_trained_model"](str(model_path), payload) is False
     assert model_path.read_bytes() == b"old-model"
     assert not list(tmp_path.glob(".aifx-model-*.tmp"))
 
