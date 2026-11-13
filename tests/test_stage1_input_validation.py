@@ -680,6 +680,8 @@ def test_app_clears_stale_model_save_status_at_start():
     ns["analyze_signal_with_backtest"](None, None, "USDJPY=X", "1h")
 
     assert "model_save_status" not in st.session_state
+
+
 def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     ns, st = _model_namespace()
     path = _save_model_file(ns, tmp_path, monkeypatch, 7, _tiny_model())
