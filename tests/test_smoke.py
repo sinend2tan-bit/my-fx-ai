@@ -1105,8 +1105,9 @@ def test_app_model_save_failure_preserves_old_file_and_cleans_temp(tmp_path, mon
     model_path = tmp_path / "model_USDJPY_1h.joblib"
     model_path.write_bytes(b"old-model")
 
-    def fail_after_partial_write(payload, stream):
-        stream.write(b"partial-model")
+    def fail_after_partial_write(payload, path):
+        with open(path, "wb") as stream:
+            stream.write(b"partial-model")
         raise RuntimeError("simulated model serialization failure")
 
     payload = _valid_app_model_payload(ns)
