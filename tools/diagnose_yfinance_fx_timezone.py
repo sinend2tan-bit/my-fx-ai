@@ -11,6 +11,7 @@ import json
 import math
 import platform
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -18,9 +19,18 @@ import yfinance as yf
 
 SYMBOLS = ["USDJPY=X", "GBPJPY=X", "EURJPY=X", "AUDJPY=X", "EURUSD=X"]
 OHLC = ["Open", "High", "Low", "Close"]
+METADATA_KEYS = [
+    "exchangeTimezoneName", "timezone", "currency", "exchangeName",
+    "fullExchangeName", "instrumentType", "gmtoffset", "firstTradeDate",
+]
 
 
 def json_safe(value):
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except (ValueError, TypeError):
+            pass
     if value is None or isinstance(value, (str, int, float, bool)):
         if isinstance(value, float) and not math.isfinite(value):
             return None
@@ -36,7 +46,6 @@ def flatten_download(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     if frame is None or frame.empty:
         return pd.DataFrame()
     if isinstance(frame.columns, pd.MultiIndex):
-        # yfinance may put the ticker in either level depending on version.
         for level in range(frame.columns.nlevels):
             values = frame.columns.get_level_values(level)
             if symbol in values:
@@ -76,8 +85,6 @@ def compare_by_calendar_date(left: pd.DataFrame, right: pd.DataFrame) -> dict:
 
     a = left[OHLC].copy()
     b = right[OHLC].copy()
-    # Compare calendar labels as displayed by each source; preserve original
-    # timezone information separately in frame_summary().
     a.index = pd.Index([pd.Timestamp(x).strftime("%Y-%m-%d") for x in a.index], name="date")
     b.index = pd.Index([pd.Timestamp(x).strftime("%Y-%m-%d") for x in b.index], name="date")
     a = a[~a.index.duplicated(keep="last")]
@@ -85,10 +92,20 @@ def compare_by_calendar_date(left: pd.DataFrame, right: pd.DataFrame) -> dict:
     common = a.index.intersection(b.index)
     if len(common) == 0:
         return {"comparable": True, "overlap_dates": 0, "equal_ohlc_rows": 0}
+
     aa = a.loc[common].apply(pd.to_numeric, errors="coerce")
     bb = b.loc[common].apply(pd.to_numeric, errors="coerce")
     delta = (aa - bb).abs()
     row_equal = delta.le(1e-10).all(axis=1) & aa.notna().all(axis=1) & bb.notna().all(axis=1)
+    different_dates = common[~row_equal][:5]
+    difference_samples = []
+    for date in different_dates:
+        difference_samples.append({
+            "date": str(date),
+            "left_ohlc": {col: json_safe(aa.loc[date, col]) for col in OHLC},
+            "right_ohlc": {col: json_safe(bb.loc[date, col]) for col in OHLC},
+            "absolute_difference": {col: json_safe(delta.loc[date, col]) for col in OHLC},
+        })
     max_diff = delta.max().max()
     return {
         "comparable": True,
@@ -96,27 +113,40 @@ def compare_by_calendar_date(left: pd.DataFrame, right: pd.DataFrame) -> dict:
         "equal_ohlc_rows": int(row_equal.sum()),
         "different_ohlc_rows": int((~row_equal).sum()),
         "max_absolute_ohlc_difference": float(max_diff) if pd.notna(max_diff) else None,
-        "first_5_different_dates": [str(x) for x in common[~row_equal][:5]],
+        "first_5_different_dates": [str(x) for x in different_dates],
+        "difference_samples": difference_samples,
     }
+
+
+def read_metadata_after_history(ticker) -> dict:
+    """Read cached base metadata without requesting lazy intraday tradingPeriods."""
+    result = {
+        "metadata_type": None,
+        "history_metadata_available": False,
+        "history_metadata": {key: None for key in METADATA_KEYS},
+    }
+    try:
+        getter = getattr(ticker, "get_history_metadata", None)
+        metadata = getter() if callable(getter) else getattr(ticker, "history_metadata", None)
+        result["metadata_type"] = type(metadata).__name__ if metadata is not None else None
+        if isinstance(metadata, Mapping):
+            values = {key: json_safe(metadata.get(key)) for key in METADATA_KEYS}
+            result["history_metadata"] = values
+            result["history_metadata_available"] = any(value is not None for value in values.values())
+        elif isinstance(metadata, dict):
+            values = {key: json_safe(metadata.get(key)) for key in METADATA_KEYS}
+            result["history_metadata"] = values
+            result["history_metadata_available"] = any(value is not None for value in values.values())
+        else:
+            result["metadata_type_warning"] = "metadata object is not a Mapping"
+    except Exception as exc:
+        result["history_metadata_error"] = f"{type(exc).__name__}: {exc}"
+    return result
 
 
 def diagnose(symbol: str) -> dict:
     result = {"symbol": symbol}
     ticker = yf.Ticker(symbol)
-
-    try:
-        getter = getattr(ticker, "get_history_metadata", None)
-        metadata = getter() if callable(getter) else getattr(ticker, "history_metadata", None)
-        if not isinstance(metadata, dict):
-            metadata = {}
-        keys = [
-            "exchangeTimezoneName", "timezone", "currency", "exchangeName",
-            "fullExchangeName", "instrumentType", "gmtoffset", "firstTradeDate",
-        ]
-        result["history_metadata"] = {k: json_safe(metadata.get(k)) for k in keys}
-        result["history_metadata_available"] = bool(metadata)
-    except Exception as exc:
-        result["history_metadata_error"] = f"{type(exc).__name__}: {exc}"
 
     try:
         hist = ticker.history(
@@ -128,21 +158,9 @@ def diagnose(symbol: str) -> dict:
         hist = pd.DataFrame()
         result["ticker_history_error"] = f"{type(exc).__name__}: {exc}"
 
-    # Some yfinance versions populate history_metadata only after history()
-    # has fetched the chart response; retry metadata after that first request.
-    if not result.get("history_metadata_available"):
-        try:
-            getter = getattr(ticker, "get_history_metadata", None)
-            metadata = getter() if callable(getter) else getattr(ticker, "history_metadata", None)
-            if isinstance(metadata, dict):
-                keys = [
-                    "exchangeTimezoneName", "timezone", "currency", "exchangeName",
-                    "fullExchangeName", "instrumentType", "gmtoffset", "firstTradeDate",
-                ]
-                result["history_metadata"] = {k: json_safe(metadata.get(k)) for k in keys}
-                result["history_metadata_available"] = bool(metadata)
-        except Exception as exc:
-            result["history_metadata_retry_error"] = f"{type(exc).__name__}: {exc}"
+    # In current yfinance, metadata may be a lazy Mapping rather than dict.
+    # Read only base fields after history(); do not touch lazy tradingPeriods.
+    result.update(read_metadata_after_history(ticker))
 
     frames = {}
     for mode, kwargs in (
