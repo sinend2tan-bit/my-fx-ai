@@ -987,7 +987,8 @@ def test_app_atomic_json_write_preserves_existing_file_on_replace_failure(tmp_pa
 
     monkeypatch.setattr(os, "replace", real_replace)
     assert ns["_atomic_write_json"](str(destination), {"saved": True}) is True
-    assert json.loads(destination.read_text(encoding="utf-8")) == {"saved": True}
+    import json as json_module
+    assert json_module.loads(destination.read_text(encoding="utf-8")) == {"saved": True}
 
 
 def test_app_backup_bundle_includes_pair_scan_outcomes(tmp_path, monkeypatch):
