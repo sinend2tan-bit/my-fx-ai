@@ -942,6 +942,7 @@ def _extract_app_backup_functions(tmp_path):
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     wanted = {
+        "_expected_json_type", "_read_json_file", "_validate_existing_json_file",
         "_atomic_write_json", "load_feedback_data", "load_trade_journal",
         "load_entry_tracking", "load_forecast_history", "load_pair_scan_outcomes",
         "build_data_backup_bundle", "restore_data_backup_bundle",
@@ -950,6 +951,7 @@ def _extract_app_backup_functions(tmp_path):
     assert {n.name for n in nodes} == wanted
     namespace = {
         "json": json_module,
+        "_JSON_LOAD_ERRORS": {},
         "os": os,
         "tempfile": tempfile,
         "datetime": datetime,
@@ -1020,6 +1022,47 @@ def test_app_history_loaders_ignore_non_dict_rows_without_crashing(tmp_path, mon
     }
     for key, loader_name in loaders.items():
         assert ns[loader_name]() == [{"id": "valid"}, {"id": "valid-2"}]
+
+
+def test_app_corrupt_history_is_preserved_and_blocks_overwrite(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "forecast_outcome_history.json"
+    original = '{"valid": "json but wrong top-level type"}'
+    path.write_text(original, encoding="utf-8")
+
+    # The loader may return an empty safe view, but it records the schema error.
+    assert ns["load_forecast_history"]() == []
+    with pytest.raises(OSError, match="上書きを停止"):
+        ns["_atomic_write_json"](str(path), [{"new": "row"}])
+    assert path.read_text(encoding="utf-8") == original
+    assert ns["build_data_backup_bundle"]() is None
+
+
+def test_app_malformed_history_rows_are_not_silently_discarded_on_save(tmp_path, monkeypatch):
+    import json as json_module
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "forecast_outcome_history.json"
+    original = json_module.dumps([{"id": "keep"}, "malformed-row"])
+    path.write_text(original, encoding="utf-8")
+
+    assert ns["load_forecast_history"]() == [{"id": "keep"}]
+    with pytest.raises(OSError, match="上書きを停止"):
+        ns["_atomic_write_json"](str(path), [{"id": "keep"}])
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_app_corrupt_json_is_preserved_even_without_prior_loader(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "actual_trade_journal.json"
+    original = '[{"id": 1}, broken'
+    path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(OSError, match="読み取れない"):
+        ns["_atomic_write_json"](str(path), [])
+    assert path.read_text(encoding="utf-8") == original
 
 
 def test_app_backup_bundle_includes_pair_scan_outcomes(tmp_path, monkeypatch):
