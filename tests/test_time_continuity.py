@@ -1,5 +1,6 @@
 """Regression tests for hourly forecast-window continuity."""
 
+import numpy as np
 import pandas as pd
 
 from aifx_time_validation import (
