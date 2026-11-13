@@ -4154,12 +4154,24 @@ def write_status_file(record, path=STATUS_FILE):
     行い、途中で失敗しても既存のステータスファイルを壊さない。
     """
     target = os.path.abspath(path)
-    tmp_path = target + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(record, f, ensure_ascii=False, indent=2, default=json_default)
-        f.write("\n")
-    os.replace(tmp_path, target)
-    return target
+    target_dir = os.path.dirname(target) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".aifx-status-", suffix=".tmp", dir=target_dir
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2, default=json_default)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, target)
+        return target
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def write_status_safely(started_at, pair_results, forward_summary, run_health):
