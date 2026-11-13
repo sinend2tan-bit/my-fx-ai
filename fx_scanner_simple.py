@@ -82,7 +82,18 @@ def json_default(value):
 
 
 def save_json(path, data):
-    """一時ファイルに書いてから置き換える。"""
+    """既存JSONを検証してから一時ファイル経由で置き換える。"""
+    if os.path.exists(path):
+        expected_type = dict if path == STATE_FILE else list if path == HISTORY_FILE else None
+        try:
+            with open(path, "r", encoding="utf-8") as current_file:
+                existing = json.load(current_file)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+            raise RuntimeError(f"{path} の既存データを読み取れないため、上書きを停止しました") from exc
+        if expected_type is not None and not isinstance(existing, expected_type):
+            raise RuntimeError(f"{path} の既存データ形式が不正なため、上書きを停止しました")
+        if isinstance(existing, list) and any(not isinstance(row, dict) for row in existing):
+            raise RuntimeError(f"{path} に不正な履歴行があるため、上書きを停止しました")
     temp_path = path + ".tmp"
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
