@@ -290,19 +290,30 @@ def compare_raw_daily_windows_to_hourly(ticker, symbol: str) -> dict:
         return {"available": False, "reason": "raw_daily_or_hourly_empty"}
     h = h.sort_values("timestamp")
     d = d.sort_values("timestamp")
-    hourly_times = h["timestamp"].to_numpy()
     compared = []
-    for i in range(len(d) - 1):
-        start = int(d.iloc[i]["timestamp"])
-        end = int(d.iloc[i + 1]["timestamp"])
-        bars = h[(h["timestamp"] >= start) & (h["timestamp"] < end)]
-        if len(bars) < 20:
+    exchange_tz = daily["exchange_timezone"] or "UTC"
+    for _, daily_row in d.iterrows():
+        start = int(daily_row["timestamp"])
+        local_start = pd.Timestamp(start, unit="s", tz="UTC").tz_convert(exchange_tz)
+        # A 1d candle ends at the next local calendar midnight, not at the
+        # next available daily row (which may be 72h later across weekends).
+        local_end = local_start.normalize() + pd.DateOffset(days=1)
+        end = int(local_end.tz_convert("UTC").timestamp())
+        bars = h[(h["timestamp"] >= start) & (h["timestamp"] < end)].copy()
+        bars = bars.dropna(subset=OHLC, how="all")
+        if len(bars) < 18:
+            continue
+        open_values = bars["Open"].dropna()
+        close_values = bars["Close"].dropna()
+        high_values = bars["High"].dropna()
+        low_values = bars["Low"].dropna()
+        if open_values.empty or close_values.empty or high_values.empty or low_values.empty:
             continue
         aggregate = {
-            "Open": bars["Open"].iloc[0],
-            "High": bars["High"].max(),
-            "Low": bars["Low"].min(),
-            "Close": bars["Close"].iloc[-1],
+            "Open": open_values.iloc[0],
+            "High": high_values.max(),
+            "Low": low_values.min(),
+            "Close": close_values.iloc[-1],
         }
         daily_values = {column: d.iloc[i][column] for column in OHLC}
         valid = all(pd.notna(daily_values[k]) and pd.notna(aggregate[k]) for k in OHLC)
@@ -318,6 +329,7 @@ def compare_raw_daily_windows_to_hourly(ticker, symbol: str) -> dict:
                 daily["exchange_timezone"] or "UTC"
             ).isoformat(),
             "window_end_raw_utc": pd.Timestamp(end, unit="s", tz="UTC").isoformat(),
+            "window_duration_hours": (end - start) / 3600,
             "hourly_rows": int(len(bars)),
             "matches_ohlc": bool(valid and all(v <= 1e-8 for v in deltas.values())),
             "daily_ohlc": {k: json_safe(v) for k, v in daily_values.items()},
@@ -362,7 +374,7 @@ def compare_raw_daily_windows_to_hourly(ticker, symbol: str) -> dict:
         "hourly_rows_per_daily_window_min": min((x["hourly_rows"] for x in compared), default=None),
         "hourly_rows_per_daily_window_max": max((x["hourly_rows"] for x in compared), default=None),
         "first_5_mismatch_samples": mismatch_samples,
-        "note": "This compares raw Yahoo chart epoch windows [daily timestamp, next daily timestamp) with raw hourly chart bars; it does not infer a broker's candle convention.",
+        "note": "This compares raw Yahoo chart epoch windows [daily timestamp, next local calendar midnight) with raw hourly chart bars. Weekends without daily rows are not treated as one long daily candle; this does not infer a broker's candle convention.",
     }
 
 def diagnose(symbol: str) -> dict:
