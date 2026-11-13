@@ -1113,6 +1113,22 @@ def test_app_model_save_replace_failure_preserves_old_file(tmp_path, monkeypatch
     assert not list(tmp_path.glob(".aifx-model-*.tmp"))
 
 
+def test_app_atomic_json_write_cleans_temp_after_serialization_failure(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ns = _extract_app_backup_functions(tmp_path)
+    path = tmp_path / "trade_feedback.json"
+    original = "[]"
+    path.write_text(original, encoding="utf-8")
+    cyclic = []
+    cyclic.append(cyclic)
+
+    with pytest.raises(ValueError, match="Circular reference detected"):
+        ns["_atomic_write_json"](str(path), cyclic)
+
+    assert path.read_text(encoding="utf-8") == original
+    assert not list(tmp_path.glob(".aifx-save-*.tmp"))
+
+
 def test_app_atomic_json_write_preserves_existing_file_on_replace_failure(tmp_path, monkeypatch):
     import os
     monkeypatch.chdir(tmp_path)
