@@ -1701,12 +1701,7 @@ trade_style = str(st.session_state.get("trade_style", "デイトレード（当�
 st.sidebar.markdown("---")
 with st.sidebar.expander("🔄 AIモデル管理", expanded=False):
     if st.button("🧠 AIモデルを今すぐ強制再学習"):
-        model_file = _model_filename(ticker, tf_config["interval"])
-        try:
-            if os.path.exists(model_file):
-                os.remove(model_file)
-        except OSError:
-            pass
+        # 既存モデルは削除せず、品質ゲート通過後の原子的保存時だけ置き換える。
         st.cache_data.clear()
         st.session_state["force_retrain_once"] = True
         st.toast("再学習を要求しました。次の分析でモデルを再作成します。", icon="🧠")
