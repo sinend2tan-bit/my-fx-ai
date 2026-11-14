@@ -1543,8 +1543,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             return fallback
 
         eval_model = RandomForestClassifier(
-            n_estimators=220, max_depth=7, min_samples_leaf=8,
-            class_weight="balanced_subsample", random_state=42, n_jobs=-1
+            n_estimators=220, max_depth=7, min_samples_leaf=8, random_state=42, n_jobs=-1
         )
         weights = compute_sample_weight(class_weight="balanced", y=y_train)
         eval_model.fit(X_train, y_train, sample_weight=weights)
@@ -1604,8 +1603,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         # Retrain with all eligible labelled rows. Only class-balancing sample weights are used; trade outcome feedback is stored separately and is not used in model fitting.
         if model is None or force_retrain:
             candidate_model = RandomForestClassifier(
-                n_estimators=260, max_depth=7, min_samples_leaf=8,
-                class_weight="balanced_subsample", random_state=43, n_jobs=-1
+                n_estimators=260, max_depth=7, min_samples_leaf=8, random_state=43, n_jobs=-1
             )
             # Trade outcome buttons are review logs, not reliable market labels.
             # Do not promote a new model when out-of-sample balanced accuracy fails
