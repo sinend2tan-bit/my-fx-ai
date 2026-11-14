@@ -1494,13 +1494,6 @@ def _save_trained_model(model_path, payload):
     except Exception:
         return False
     finally:
-        # 失敗時に残る一時ファイルを必ず片付ける。旧モデルは変更しない。
-        if temp_path is not None:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-    finally:
         if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
