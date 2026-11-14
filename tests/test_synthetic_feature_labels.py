@@ -1174,9 +1174,11 @@ def test_syn_fx_016_invalid_ohlc_inputs(monkeypatch):
     """016: NaN / +Inf / ゼロ価格 / High<Low / 重複・逆順 timestamp を
     1 異常ずつ投入し、各異常が最終特徴量・Target に残るかを記録する。
 
-    現行実装の監査事実として、OHLC 整合性（High>=Low 等）や価格正値を
-    包括検証する処理は両実装に無い。黙って正常扱いされるケースは
-    欠陥候補であり、本テストでは「観測された扱い」を固定して記録する。
+    現行実装の監査事実として、Stage 1 で定義された不正 OHLC 条件
+    （High<Low、High/Low と Open/Close の包含関係、非正価格など）は
+    両実装で除外される。一方、本テストで扱う NaN / Inf / 重複・逆順
+    timestamp 等の結果は個別ケースの観測であり、あらゆる OHLC 異常を
+    包括的に検証したことを意味しない。既存 Stage 1 テストとの重複もある。
     """
     base = fixture_mixed()
     mid_ts = base.index[150]
@@ -1247,10 +1249,11 @@ def test_syn_fx_016_invalid_ohlc_inputs(monkeypatch):
 def test_syn_fx_017_4h_time_boundaries(monkeypatch):
     """017: 4h 時刻境界。
 
-    Scanner は UTC origin="start_day" で集約し、H1 が 4 本そろった
-    区間だけを採用する（未確定足・不完全区間を除外）。App は
-    resample("4h") の既定動作で完全性の保証がなく、最後の resample 足を
-    一律に落とす。時刻・区間境界の差を統一済みと扱わない。
+    Scanner と App は、完全な H1 4 本で構成される 4h 区間を採用し、
+    途中に欠損を含む不完全区間を除外する。App は最後の完全区間も採用
+    する。これらの完全性・最終区間の挙動は既存 Stage 2 テストでも検証
+    されており、本テストは別の合成条件で回帰確認する。なお、時刻境界・
+    origin・timezone-naive 入力の扱いなど、両実装の差は個別に評価する。
     """
     # --- Scanner: 途中の 4h 区間から H1 を 1 本欠落させると、その区間は不採用 ---
     big = fixture_seeded_walk(1200)  # 300 区間
