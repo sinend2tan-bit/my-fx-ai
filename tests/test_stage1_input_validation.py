@@ -1252,3 +1252,70 @@ def test_app_stop_reason_cleared_on_success():
     assert out is not None
     assert ns["get_load_stop_reason"]("USDJPY=X", "1d") is None
     assert len(st.warnings) == 1
+
+# ---------------------------------------------------------------------------
+# DST boundary regression: timezone-aware 1h inputs are normalized by instant,
+# not by local wall-clock labels. Synthetic UTC hours cross UK DST transitions.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "start",
+    [
+        "2026-03-20 00:00",  # Europe/London spring-forward transition
+        "2026-10-16 00:00",  # Europe/London fall-back transition
+    ],
+)
+def test_app_and_scanner_1h_dst_inputs_normalize_to_same_utc_instants(
+    monkeypatch, start
+):
+    utc_frame = make_frame(n=500, tz="UTC", start=start, seed=29)
+    london_frame = utc_frame.copy()
+    london_frame.index = utc_frame.index.tz_convert("Europe/London")
+
+    # The London wall-clock labels include the DST jump/repeated hour, while
+    # each row still represents the same absolute instant as the UTC source.
+    assert london_frame.index.tz is not None
+    assert london_frame.index.tz_convert("UTC").equals(utc_frame.index)
+    local_wall_clock = london_frame.index.tz_localize(None)
+    if start.startswith("2026-03"):
+        # Spring-forward: 01:00 local does not exist on 2026-03-29.
+        assert pd.Timestamp("2026-03-29 01:00") not in local_wall_clock
+        before = pd.Timestamp("2026-03-29 00:00")
+        after = pd.Timestamp("2026-03-29 02:00")
+        assert after - before == pd.Timedelta(hours=2)
+    else:
+        # Fall-back: 01:00 local occurs twice on 2026-10-25.
+        repeated_hour = london_frame.index[
+            london_frame.index.strftime("%Y-%m-%d %H") == "2026-10-25 01"
+        ]
+        assert len(repeated_hour) == 2
+        assert repeated_hour[0].tz_convert("UTC") != repeated_hour[1].tz_convert("UTC")
+
+    stub_scanner_download(monkeypatch, london_frame)
+    scan = scanner.bars("USDJPY=X", interval="1h", period="180d")
+    assert scan is not None
+    scan_index = scan.attrs["latest_features"].index
+    assert scan_index.tz is not None
+    assert str(scan_index.tz) == "UTC"
+    assert scan_index.equals(utc_frame.index[19:-1])
+
+    app_ns, _st = _app_namespace(lambda: london_frame.copy())
+    app = app_ns["load_and_process_data"]("USDJPY=X", "60d", "1h")
+    assert app is not None
+    assert app.index.tz is not None
+    assert str(app.index.tz) == "UTC"
+    assert app.index.equals(utc_frame.index[15:-1])
+
+
+def test_app_daily_keeps_exchange_calendar_timezone_without_utc_relabel():
+    london_daily = make_frame(
+        n=260, tz="Europe/London", start="2026-01-01", freq="1D", seed=31
+    )
+    app_ns, _st = _app_namespace(lambda: london_daily.copy())
+    out = app_ns["load_and_process_data"]("USDJPY=X", "2y", "1d")
+    assert out is not None
+    assert str(out.index.tz) == "Europe/London"
+    # Daily labels remain on the provider's calendar date; they are not
+    # converted to UTC midnight or shifted to a neighboring JST date.
+    assert out.index[-1] == london_daily.index[-2]
+    assert out.index[-1].date() == london_daily.index[-2].date()
