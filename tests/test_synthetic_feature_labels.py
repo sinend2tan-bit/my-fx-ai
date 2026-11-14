@@ -27,9 +27,9 @@
   gethostbyname / gethostbyname_ex / gethostbyaddr / getnameinfo)、
   urllib（urlopen / urlretrieve)。requests / http.client は内部で
   socket.create_connection と getaddrinfo を使うため、これらで遮断される。
-  ガード自体の動作確認テスト（test_network_guard_blocks_*）と、suite
-  終了時に試行 0 件を確認するテスト
-  （test_network_no_attempts_during_suite）を置く。
+  ガード自体の動作確認テスト（test_network_guard_blocks_*）と、
+  pytest session 終了時に試行 0 件を確認する session fixture を置く。
+  この記録は本ファイル内で有効な autouse guard が捕捉した入口に限る。
 """
 
 import ast
@@ -62,6 +62,17 @@ START = pd.Timestamp("2026-01-05 00:00", tz=UTC)  # Monday
 # =========================================================
 
 NETWORK_ATTEMPTS = []
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _assert_no_network_attempts_at_session_end():
+    """この合成テスト群の全テスト終了後に通信試行がないことを確認する。"""
+    yield
+    assert NETWORK_ATTEMPTS == [], (
+        "network attempts were recorded during synthetic tests: "
+        f"{NETWORK_ATTEMPTS!r}"
+    )
+    print("NETWORK_ATTEMPTS at session end:", NETWORK_ATTEMPTS)
 
 
 _GUARD_MESSAGE = "network access blocked by synthetic-test guard"
@@ -1438,9 +1449,3 @@ def test_syn_fx_019_weekday_gap_vs_forward_policy(monkeypatch):
     assert outcome is not None and outcome["status"] == "NOT_REACHED"
 
 
-def test_network_no_attempts_during_suite():
-    """suite 全体（自己確認テストを除く）でネットワーク接続試行が
-    0 件だったことを、遮断ガードの記録で確認する。
-    """
-    assert NETWORK_ATTEMPTS == []
-    print("NETWORK_ATTEMPTS during suite:", NETWORK_ATTEMPTS)
