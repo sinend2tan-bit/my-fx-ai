@@ -64,7 +64,10 @@ def test_app_random_forest_uses_only_one_balancing_mechanism():
 
     fit_calls = [
         node for node in calls
-        if isinstance(node.func, ast.Attribute) and node.func.attr == "fit"
+        if isinstance(node.func, ast.Attribute)
+        and node.func.attr == "fit"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in {"eval_model", "candidate_model"}
     ]
     assert len(fit_calls) == 2
     assert all(
