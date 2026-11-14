@@ -23,6 +23,26 @@ def test_friday_to_monday_market_closure_is_allowed():
     assert has_contiguous_hourly_window(idx)
 
 
+def test_weekend_gap_exactly_80_hours_is_allowed():
+    # Friday 00:00 UTC -> Monday 08:00 UTC is exactly the configured limit.
+    idx = pd.DatetimeIndex([
+        "2026-11-06 00:00+00:00",
+        "2026-11-09 08:00+00:00",
+    ])
+    assert (idx[1] - idx[0]) == pd.Timedelta(hours=80)
+    assert has_contiguous_hourly_window(idx)
+
+
+def test_weekend_gap_over_80_hours_is_rejected():
+    # One hour beyond the configured limit must not be treated as market closure.
+    idx = pd.DatetimeIndex([
+        "2026-11-06 00:00+00:00",
+        "2026-11-09 09:00+00:00",
+    ])
+    assert (idx[1] - idx[0]) == pd.Timedelta(hours=81)
+    assert not has_contiguous_hourly_window(idx)
+
+
 def test_weekday_missing_hour_is_rejected():
     idx = pd.DatetimeIndex([
         "2026-11-09 09:00+00:00",
