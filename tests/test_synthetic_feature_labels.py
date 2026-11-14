@@ -1294,11 +1294,12 @@ def test_syn_fx_017_4h_time_boundaries(monkeypatch):
 
 
 def test_syn_fx_018_feature_nan_window_compression(monkeypatch):
-    """018: Scanner は特徴量 NaN 行を除去してから Target を作るため、
-    未来 8 本のうち 1 行が落ちると、未来窓は残存行で圧縮され元の
-    9 本目まで延びる。App は Target 作成後に特徴量 dropna を行うため、
-    同じ feature-only NaN は Target の 8 本窓から除かれない。
-    現行の順序差を再現して記録する（どちらを正解とは決めない）。
+    """018: 未来窓内の feature-only NaN に対する App / Scanner の処理差を確認する。
+
+    Scanner は特徴量 dropna 後にラベル窓を作るが、時刻連続性監査により
+    欠損時刻をまたぐ窓を discontinuous として除外する。App は Target 作成後に
+    feature dropna を行うため、特徴量行が出力から落ちても元の8本窓を維持する。
+    このテストは両経路の現行挙動を記録する（どちらを正解とは決めない）。
     """
     raw = fixture_mixed()
     feat = _scanner_feature_frame(raw)
@@ -1371,11 +1372,12 @@ def test_syn_fx_018_feature_nan_window_compression(monkeypatch):
 
 
 def test_syn_fx_019_weekday_gap_vs_forward_policy(monkeypatch):
-    """019: 欠損 H1 時刻による 8 本未来窓と forward gap policy の不一致。
+    """019: 学習ラベルと forward 評価の時刻ギャップ方針を比較する。
 
-    学習ラベル（App/Scanner）は欠損行を落として残存行で 8 本を数えるが、
-    Scanner の forward 評価は平日の時間ギャップがあると評価を保留し
-    （None）、週末の市場休場ギャップだけを許容する。現行挙動を記録する。
+    Scanner の学習ラベル生成は、特徴量行の除外で生じた平日ギャップを
+    discontinuous として対象行を除外する。forward 評価も平日ギャップを
+    検出すると保留（None）し、週末の市場休場ギャップだけを許容する。
+    現行挙動を記録する。
     """
     # --- 学習側（Scanner bars）: 平日3時間欠損を含む未来窓は除外 ---
     start_w = pd.Timestamp("2026-10-26 00:00", tz="UTC")  # Monday
