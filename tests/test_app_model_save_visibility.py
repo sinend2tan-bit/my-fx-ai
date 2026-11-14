@@ -123,6 +123,7 @@ def test_save_success_writes_file_without_warning(rig):
 
     model_files = list(rig.glob("model_*.joblib"))
     assert len(model_files) == 1
+    assert list(rig.glob(".aifx-model-*.tmp")) == []
     saved = joblib.load(model_files[0])
     assert set(saved) == {
         "version",
@@ -152,6 +153,8 @@ def test_save_failure_is_visible_without_details(rig, monkeypatch):
     assert "path" not in status
 
     assert list(rig.glob("model_*.joblib")) == []
+    # joblib.dump 失敗後も、作成済みの一時ファイルを残さない。
+    assert list(rig.glob(".aifx-model-*.tmp")) == []
 
     failures = _save_failure_warnings(at)
     assert len(failures) >= 1
