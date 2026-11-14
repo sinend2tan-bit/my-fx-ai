@@ -1841,6 +1841,28 @@ def bars(ticker, interval="1h", period="60d"):
 
 
 
+def direction_from_probabilities(sell_probability, buy_probability, threshold=0.55):
+    """Apply the same directional probability threshold used by production Scanner output.
+
+    Probabilities are raw, uncalibrated RandomForest scores; this is a signal gate,
+    not a claim that the values are true win probabilities.
+    """
+    sell_value = safe_float(sell_probability)
+    buy_value = safe_float(buy_probability)
+    if (
+        sell_value is None
+        or buy_value is None
+        or not 0.0 <= sell_value <= 1.0
+        or not 0.0 <= buy_value <= 1.0
+    ):
+        return 0
+    if buy_value >= threshold and buy_value > sell_value:
+        return 1
+    if sell_value >= threshold and sell_value > buy_value:
+        return -1
+    return 0
+
+
 # =========================================================
 # 時系列検証
 def walk_forward_validation(df, pair_name="通貨ペア不明"):
@@ -2016,6 +2038,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     all_probability_rows = []
     fold_details = []
     simulated_trade_rows = []
+    runtime_gate_trade_rows = []
     pair_config = PAIRS.get(pair_name, {})
     spread_pips = safe_float(pair_config.get("spread_pips"), 0.0) or 0.0
     pip_size = safe_float(pair_config.get("pip"), 0.0) or 0.0
@@ -2100,8 +2123,21 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 spread_pips,
                 pip_size,
             )
+            # 本番 Scanner の 55% 方向ゲートを適用した参考損益も別計算する。
+            # 既存 argmax 損益・モデル合格条件・品質ゲートは変更しない。
+            runtime_gate_pred = np.asarray([
+                direction_from_probabilities(row[0], row[2])
+                for row in aligned_proba
+            ], dtype=int)
+            runtime_gate_pnl, runtime_gate_trades = simulated_pnl(
+                runtime_gate_pred,
+                df.loc[test_X.index],
+                spread_pips,
+                pip_size,
+            )
             # 各foldで選ばれた非重複取引だけを全体集計に使う。
             simulated_trade_rows.extend(fold_trades)
+            runtime_gate_trade_rows.extend(runtime_gate_trades)
 
             importances = model.feature_importances_
             top_idx = np.argsort(importances)[::-1][:5]
@@ -2189,6 +2225,8 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "confusion_matrix": cm,
                 "brier_score_raw_probability_diagnostic": round(fold_brier, 5) if fold_brier is not None else None,
                 "simulated_pnl": fold_pnl,
+                "simulated_pnl_runtime_55pct_gate": runtime_gate_pnl,
+                "runtime_55pct_gate_prediction_counts": class_counts(runtime_gate_pred),
             }
 
             fold_details.append(detail)
@@ -2332,6 +2370,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
     # 各fold内で非重複かつ決済がfold内に収まる取引だけを合算する。
     total_pnl = summarize_trade_results(simulated_trade_rows)
+    total_pnl_runtime_gate = summarize_trade_results(runtime_gate_trade_rows)
 
     # 買い・売りを分けて評価する。片方の成績が悪い場合に、その方向だけ保留できるようにする。
     directional_pnl = {}
@@ -2505,6 +2544,16 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     )
 
     print(
+        f"[SIMULATED PNL RUNTIME 55PCT GATE] pair={pair_name}, "
+        f"trades={total_pnl_runtime_gate['trades']}, "
+        f"net_pips={total_pnl_runtime_gate['net_pips']}, "
+        f"win_rate={total_pnl_runtime_gate['win_rate_pct']}, "
+        f"avg_pips={total_pnl_runtime_gate['avg_pips_per_trade']}, "
+        f"max_drawdown_pips={total_pnl_runtime_gate['max_drawdown_pips']}, "
+        f"note=reference-only metric using the production 55% BUY/SELL threshold; raw RandomForest scores are not calibrated; does not affect any gate"
+    )
+
+    print(
         f"[VALIDATION DETAIL] pair={pair_name}, "
         f"score={score:.4f}, "
         f"baseline={baseline_score:.4f}, "
@@ -2539,6 +2588,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "folds": used_folds,
         "fold_details": fold_details,
         "simulated_pnl": total_pnl,
+        "simulated_pnl_runtime_55pct_gate": total_pnl_runtime_gate,
         "directional_pnl": directional_pnl,
         "class_counts": {
             "actual": actual_counts,
@@ -2650,9 +2700,12 @@ def analyze(df, validation):
         neutral_pct = float(class_to_probability.get(0, 0.0) * 100)
         buy_pct = float(class_to_probability.get(1, 0.0) * 100)
 
-        if buy_pct >= 55 and buy_pct > sell_pct:
+        gated_direction = direction_from_probabilities(
+            sell_pct / 100.0, buy_pct / 100.0
+        )
+        if gated_direction == 1:
             direction = "買い"
-        elif sell_pct >= 55 and sell_pct > buy_pct:
+        elif gated_direction == -1:
             direction = "売り"
         else:
             direction = "様子見"
