@@ -538,6 +538,23 @@ def test_extraction_integrity():
     ):
         assert key in EXTRACTION_INFO, key
         assert len(EXTRACTION_INFO[key]["source_sha256"]) == 64
+    # 記録したハッシュを同じ実ファイル・同じASTノードから再計算し、
+    # 抽出元との対応を検証する（単に64桁であることだけを確認しない）。
+    for key, info in EXTRACTION_INFO.items():
+        source_name, _function_path = key.split(":", 1)
+        source = (REPO_ROOT / source_name).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        candidates = [
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.lineno == info["lineno"]
+        ]
+        assert len(candidates) == 1, (key, info["lineno"], len(candidates))
+        node = candidates[0]
+        segment = ast.get_source_segment(source, node)
+        assert segment is not None, key
+        assert hashlib.sha256(segment.encode()).hexdigest() == info["source_sha256"], key
+        assert hashlib.sha256(ast.dump(node).encode()).hexdigest() == info["ast_dump_sha256"], key
     # 現行 main では内部処理関数のStreamlit cacheデコレータを抽出時に除去。
     assert EXTRACTION_INFO["app.py:_load_and_process_data_cached"]["decorators"] == [
         "st.cache_data(ttl=60, show_spinner=False)"
