@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 
+import scanner
 from aifx_time_validation import (
     forward_hourly_bar_gap_allowed,
     has_contiguous_hourly_window,
@@ -66,6 +67,26 @@ def test_sunday_to_monday_gap_is_not_assumed_to_be_weekend_closure():
         "2026-11-09 01:00+00:00",
     ])
     assert not has_contiguous_hourly_window(idx)
+
+
+
+def test_app_and_scanner_gap_rules_remain_identical():
+    """App's shared helper must not drift from Scanner's forward-evaluation rule."""
+    cases = [
+        ("2026-11-06 20:00+00:00", "2026-11-06 21:00+00:00"),
+        ("2026-11-06 00:00+00:00", "2026-11-09 08:00+00:00"),
+        ("2026-11-06 00:00+00:00", "2026-11-09 09:00+00:00"),
+        ("2026-11-09 09:00+00:00", "2026-11-09 11:00+00:00"),
+        ("2026-11-06 20:00+00:00", "2026-11-06 20:00+00:00"),
+        ("2026-11-06 21:00+00:00", "2026-11-06 20:00+00:00"),
+        ("2026-11-08 23:00+00:00", "2026-11-09 01:00+00:00"),
+    ]
+    for previous, following in cases:
+        previous = pd.Timestamp(previous)
+        following = pd.Timestamp(following)
+        assert forward_hourly_bar_gap_allowed(previous, following) == (
+            scanner._forward_bar_gap_allowed(previous, following)
+        )
 
 
 
