@@ -175,6 +175,7 @@ def legacy_training_df(raw):
                 break
         targets[i] = label
     training_df = feature_df.copy()
+    training_df["_source_bar_position"] = np.arange(len(feature_df), dtype=np.int64)
     training_df["Target"] = targets
     training_df["Future_Open_1"] = feature_df["Open"].shift(-1)
     training_df["Future_Close"] = feature_df["Close"].shift(
