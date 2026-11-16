@@ -2031,15 +2031,18 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     if "_source_bar_position" not in df.columns:
         return failure("元bar位置メタデータ不足のためpurge境界を検証できません")
     try:
-        source_positions = pd.to_numeric(
+        source_numeric = pd.to_numeric(
             df["_source_bar_position"], errors="raise"
-        ).to_numpy(dtype=np.int64)
+        ).to_numpy(dtype=float)
         if (
-            len(source_positions) != len(df)
-            or len(source_positions) == 0
-            or np.any(np.diff(source_positions) <= 0)
+            len(source_numeric) != len(df)
+            or len(source_numeric) == 0
+            or not np.isfinite(source_numeric).all()
+            or not np.equal(source_numeric, np.floor(source_numeric)).all()
+            or np.any(np.diff(source_numeric) <= 0)
         ):
-            return failure("元bar位置メタデータが一意・昇順ではありません")
+            return failure("元bar位置メタデータが整数・一意・昇順ではありません")
+        source_positions = source_numeric.astype(np.int64)
     except Exception as exc:
         return failure(
             f"元bar位置メタデータが不正です: {type(exc).__name__}"
