@@ -68,3 +68,41 @@ def test_app_model_version_invalidates_models_trained_with_double_weighting():
         and any(isinstance(target, ast.Name) and target.id == "MODEL_VERSION" for target in node.targets)
     )
     assert version == 9
+def _extract_purge_helper():
+    tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
+    node = next(
+        item for item in tree.body
+        if isinstance(item, ast.FunctionDef)
+        and item.name == "_purged_train_mask"
+    )
+    namespace = {"pd": __import__("pandas")}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(APP_PATH), "exec"), namespace)
+    return namespace["_purged_train_mask"]
+
+
+def test_embargo_uses_original_bar_positions_when_feature_rows_are_missing():
+    import pandas as pd
+
+    purge = _extract_purge_helper()
+    original = pd.date_range("2026-01-01", periods=20, freq="h", tz="UTC")
+    # Feature/label filtering removed original bars 4 and 7.
+    eligible_train = original[[0, 1, 2, 3, 5, 6, 8, 9, 10]]
+    test_start = original[12]
+    keep = purge(original, eligible_train, test_start, lookahead=2)
+    kept = eligible_train[keep]
+    assert list(kept) == list(original[[0, 1, 2, 3, 5, 6, 8, 9]])
+    # The final retained train label ends at original bar 11, before test bar 12.
+    assert original.get_loc(kept[-1]) + 2 < original.get_loc(test_start)
+
+
+def test_embargo_fails_closed_for_unknown_or_duplicate_original_timestamps():
+    import pandas as pd
+    import pytest
+
+    purge = _extract_purge_helper()
+    original = pd.date_range("2026-01-01", periods=5, freq="h", tz="UTC")
+    with pytest.raises(ValueError):
+        purge(original, pd.DatetimeIndex([original[0], original[8]]), original[4], 2)
+    duplicate = original.insert(2, original[1])
+    with pytest.raises(Exception):
+        purge(duplicate, pd.DatetimeIndex([original[0]]), original[4], 2)
