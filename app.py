@@ -93,7 +93,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 8
+MODEL_VERSION = 9
 
 st.markdown("""
 <style>
