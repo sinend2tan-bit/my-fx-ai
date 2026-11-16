@@ -68,6 +68,8 @@ def test_app_model_version_invalidates_models_trained_with_double_weighting():
         and any(isinstance(target, ast.Name) and target.id == "MODEL_VERSION" for target in node.targets)
     )
     assert version == 9
+
+
 def _extract_purge_helper():
     tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
     node = next(
@@ -102,7 +104,7 @@ def test_embargo_fails_closed_for_unknown_or_duplicate_original_timestamps():
     purge = _extract_purge_helper()
     original = pd.date_range("2026-01-01", periods=5, freq="h", tz="UTC")
     with pytest.raises(ValueError):
-        purge(original, pd.DatetimeIndex([original[0], original[8]]), original[4], 2)
+        purge(original, pd.DatetimeIndex([original[0], original[-1] + pd.Timedelta(hours=1)]), original[4], 2)
     duplicate = original.insert(2, original[1])
-    with pytest.raises(Exception):
+    with pytest.raises(pd.errors.InvalidIndexError):
         purge(duplicate, pd.DatetimeIndex([original[0]]), original[4], 2)
