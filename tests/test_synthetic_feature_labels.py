@@ -1068,6 +1068,7 @@ def _wf_frame(n=400):
     rng = np.random.default_rng(42)
     data = {c: rng.normal(0, 1, n) for c in scanner.FEATURE_COLUMNS}
     df = pd.DataFrame(data, index=_idx(n))
+    df["_source_bar_position"] = np.arange(n, dtype=np.int64)
     df["Target"] = np.resize([1, -1, 0], n)
     df["ATR"] = 0.01
     df["Close"] = 100.0
