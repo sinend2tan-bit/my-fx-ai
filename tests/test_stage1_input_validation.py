@@ -632,7 +632,7 @@ def _model_namespace():
     }
     # AIFX-APP-PERSIST-20261113-01: 保存処理が _save_trained_model に
     # 分離されたため、抽出対象へ追加する（依存の列挙は従来どおり）。
-    for fname in ("_model_filename", "_save_trained_model", "analyze_signal_with_backtest"):
+    for fname in ("_model_filename", "_save_trained_model", "_purged_train_mask", "analyze_signal_with_backtest"):
         code = compile(
             ast.Module(body=[_extract_function(fname)], type_ignores=[]),
             "app_extract",
