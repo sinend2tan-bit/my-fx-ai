@@ -6,6 +6,7 @@ download market data, fit a real model, or change validation thresholds.
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import scanner
 
