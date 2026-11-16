@@ -46,6 +46,7 @@ def _synthetic_walk_forward_frame():
     # First test fold is rows 60..119 and deliberately has no NEUTRAL labels.
     labels[60:120] = np.tile(np.array([-1, 1], dtype=int), 30)
     data["Target"] = labels
+    data["_source_bar_position"] = np.arange(rows, dtype=np.int64)
     data["ATR"] = np.ones(rows, dtype=float)
     data["ADX"] = np.full(rows, 20.0, dtype=float)
     data["ATR_Ratio"] = np.full(rows, 0.01, dtype=float)
@@ -97,3 +98,33 @@ def test_walk_forward_reports_missing_fold_class_without_hiding_recall(
     # therefore still reports NEUTRAL explicitly.
     assert result["class_counts"]["actual"]["neutral"] > 0
     assert result["class_recall_pct"]["neutral"] == 0.0
+
+
+
+def test_purge_uses_original_bar_positions_after_rows_are_removed():
+    """Filtered rows do not consume the purge horizon; original bar positions do."""
+    positions = np.array([*range(0, 50), *range(70, 80)], dtype=np.int64)
+    keep = scanner._purged_train_mask(
+        positions, test_start_position=80, lookahead=scanner.LOOKAHEAD_BARS
+    )
+    # Source positions 70 and 71 end their 8-bar label window before bar 80.
+    assert positions[keep].tolist()[-2:] == [70, 71]
+    assert positions[~keep].tolist() == list(range(72, 80))
+
+
+def test_purge_rejects_missing_duplicate_or_reversed_source_positions():
+    """Unverifiable source ordering must fail closed."""
+    with pytest.raises(ValueError):
+        scanner._purged_train_mask([1, 2, np.nan], 12, 8)
+    with pytest.raises(ValueError):
+        scanner._purged_train_mask([1, 2, 2, 3], 12, 8)
+    with pytest.raises(ValueError):
+        scanner._purged_train_mask([1, 3, 2], 12, 8)
+
+
+def test_walk_forward_fails_closed_without_source_position_metadata(monkeypatch):
+    frame = _synthetic_walk_forward_frame().drop(columns=["_source_bar_position"])
+    monkeypatch.setattr(scanner, "MIN_TRAIN_ROWS", 20)
+    result = scanner.walk_forward_validation(frame, pair_name="synthetic")
+    assert result["passed"] is False
+    assert "元bar位置メタデータ不足" in result["reason"]
