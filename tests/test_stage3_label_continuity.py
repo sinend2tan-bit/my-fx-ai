@@ -949,6 +949,7 @@ def _validation_frame():
             target[i] = -1
     data["Return_1"] = ret
     df = pd.DataFrame(data, index=index)
+    df["_source_bar_position"] = np.arange(n, dtype=np.int64)
     df["Target"] = target
     df["ATR"] = 0.10
     df["Future_Open_1"] = 150.0
