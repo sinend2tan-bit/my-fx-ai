@@ -56,3 +56,15 @@ def test_app_random_forest_uses_only_one_balancing_mechanism():
     ]
     assert len(fit_calls) == 2
     assert all(any(keyword.arg == "sample_weight" for keyword in call.keywords) for call in fit_calls)
+
+
+
+def test_app_model_version_invalidates_models_trained_with_double_weighting():
+    tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
+    version = next(
+        node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "MODEL_VERSION" for target in node.targets)
+    )
+    assert version == 9
