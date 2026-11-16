@@ -1635,6 +1635,9 @@ def bars(ticker, interval="1h", period="60d"):
             neutral_kinds[i] = neutral_kind
 
     training_df = feature_df.copy()
+    # 元の feature_df 上のbar位置。dropna後も保持し、検証purgeにだけ使う。
+    # FEATURE_COLUMNSには含めず、モデル入力・予測出力には混入させない。
+    training_df["_source_bar_position"] = np.arange(len(feature_df), dtype=np.int64)
     training_df["Target"] = targets
     # 検証専用の仮想損益計算用。モデルの特徴量には絶対に含めない。
     # 学習ラベルと同じく、エントリー時ATRを基準に、今後8本の高値・安値で
@@ -1841,6 +1844,30 @@ def bars(ticker, interval="1h", period="60d"):
 
 
 
+def _purged_train_mask(source_positions, test_start_position, lookahead):
+    """元のfeature_df位置で、ラベル窓がtest開始より前に終わる行だけ残す。
+
+    source_positions はdropna前のfeature_df上の位置。欠損・非整数・重複・
+    逆順は境界を証明できないため例外にしてfail-closedとする。
+    """
+    values = np.asarray(source_positions)
+    if values.ndim != 1 or values.size == 0:
+        raise ValueError("source positions must be a non-empty one-dimensional array")
+    numeric = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(numeric).all():
+        raise ValueError("source positions contain missing or non-finite values")
+    if not np.equal(numeric, np.floor(numeric)).all():
+        raise ValueError("source positions must be integers")
+    positions = numeric.astype(np.int64)
+    if np.any(np.diff(positions) <= 0):
+        raise ValueError("source positions must be unique and strictly increasing")
+    boundary = int(test_start_position)
+    horizon = int(lookahead)
+    if horizon < 0:
+        raise ValueError("lookahead must not be negative")
+    return positions + horizon < boundary
+
+
 # =========================================================
 # 時系列検証
 def walk_forward_validation(df, pair_name="通貨ペア不明"):
@@ -2000,6 +2027,24 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     X = df[FEATURE_COLUMNS]
     y = df["Target"].astype(int)
 
+    # 元bar位置がないデータは、時系列境界のpurgeを保証できないため検証しない。
+    if "_source_bar_position" not in df.columns:
+        return failure("元bar位置メタデータ不足のためpurge境界を検証できません")
+    try:
+        source_positions = pd.to_numeric(
+            df["_source_bar_position"], errors="raise"
+        ).to_numpy(dtype=np.int64)
+        if (
+            len(source_positions) != len(df)
+            or len(source_positions) == 0
+            or np.any(np.diff(source_positions) <= 0)
+        ):
+            return failure("元bar位置メタデータが一意・昇順ではありません")
+    except Exception as exc:
+        return failure(
+            f"元bar位置メタデータが不正です: {type(exc).__name__}"
+        )
+
     if y.nunique() < 2:
         return failure("目的変数の種類が不足")
 
@@ -2031,10 +2076,23 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             len(df),
         )
 
-        train_cutoff = max(0, train_end - purge_gap)
+        train_source_positions = source_positions[:train_end]
+        test_start_source_position = int(source_positions[train_end])
+        try:
+            keep_train = _purged_train_mask(
+                train_source_positions,
+                test_start_source_position,
+                purge_gap,
+            )
+        except Exception as exc:
+            return failure(
+                f"元bar位置に基づくpurgeを実行できません: {type(exc).__name__}",
+                used_folds,
+                fold_details,
+            )
 
-        train_X = X.iloc[:train_cutoff]
-        train_y = y.iloc[:train_cutoff]
+        train_X = X.iloc[:train_end].iloc[np.flatnonzero(keep_train)]
+        train_y = y.iloc[:train_end].iloc[np.flatnonzero(keep_train)]
 
         test_X = X.iloc[train_end:test_end]
         test_y = y.iloc[train_end:test_end]
@@ -2174,6 +2232,9 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "train_rows": int(len(train_X)),
                 "test_rows": int(len(test_X)),
                 "purge_gap": int(purge_gap),
+                "purged_train_rows": int((~keep_train).sum()),
+                "train_source_end": int(train_source_positions[keep_train][-1]),
+                "test_source_start": int(test_start_source_position),
                 "test_start": fold_start,
                 "test_end": fold_end_time,
                 "balanced_accuracy": round(
