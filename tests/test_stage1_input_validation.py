@@ -27,7 +27,7 @@
   App 4h は段階1では従来どおりだったが、段階2（SYN-FX-017）で UTC
   統一・完全性判定に変更された（tests/test_stage2_4h_aggregation.py）。
   どちらの段階でも 4h に data_quality は付かない。
-- モデル版管理: App MODEL_VERSION 8（段階1で 6→7、段階2で 7→8）/
+- モデル版管理: App MODEL_VERSION 9（段階1で 6→7、段階2で 7→8、二重重み付け修正で 8→9）/
   Scanner MODEL_VERSION 21。
   旧版（App version 7）の保存済みモデルは再利用されない。品質ゲートを
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
@@ -689,9 +689,9 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
     return tmp_path / filename
 
 
-def test_app_model_version_is_8():
-    # 段階1で 6→7、段階2（SYN-FX-017）で 7→8。
-    assert _app_literal("MODEL_VERSION") == 8
+def test_app_model_version_is_9():
+    # 段階1で 6→7、段階2（SYN-FX-017）で 7→8、重み付け修正で 8→9。
+    assert _app_literal("MODEL_VERSION") == 9
 
 
 def test_app_clears_stale_model_save_status_at_start():
@@ -708,16 +708,16 @@ def test_app_clears_stale_model_save_status_at_start():
 
 def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 7, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
     assert result is not None
-    # 学習可能なデータでは品質ゲートを通過し、新版（8）で保存し直される。
+    # 学習可能なデータでは品質ゲートを通過し、新版（9）で保存し直される。
     # 旧版ファイルが再利用されていれば、この保存は起きない。
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 8
+    assert saved["version"] == 9
     assert saved["model"].n_estimators == 260  # 新規学習した候補モデル
 
 
@@ -726,7 +726,7 @@ def test_app_gate_failure_no_fallback_to_old_model(tmp_path, monkeypatch):
     # 旧版モデルは単一クラスだけを返す物にする。再利用（フォールバック）
     # されれば特徴量重要度が全て 0 になるため、混入を検出できる。
     path = _save_model_file(
-        ns, tmp_path, monkeypatch, 7, _tiny_model(single_class=True)
+        ns, tmp_path, monkeypatch, 8, _tiny_model(single_class=True)
     )
     before = path.read_bytes()
     result = ns["analyze_signal_with_backtest"](
@@ -766,7 +766,7 @@ def test_app_forced_retrain_replaces_old_model_only_after_validation(tmp_path, m
     assert result is not None
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 8
+    assert saved["version"] == 9
     assert saved["model"].n_estimators == 260
     assert path.read_bytes() != before
     assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
@@ -797,7 +797,7 @@ def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch)
 
     monkeypatch.setattr(ns["joblib"], "dump", fail_dump)
     payload = {
-        "version": 8,
+        "version": 9,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -834,7 +834,7 @@ def test_app_atomic_save_rejects_invalid_candidate_and_preserves_old_model(
     before = path.read_bytes()
     candidate = _tiny_model(single_class=(invalid_kind == "single_class"))
     payload = {
-        "version": 7 if invalid_kind == "version" else 8,
+        "version": 7 if invalid_kind == "version" else 9,
         "features": ["wrong"] if invalid_kind == "features" else _app_literal("FEATURE_COLUMNS"),
         "model": object() if invalid_kind == "model_type" else candidate,
     }
