@@ -321,8 +321,8 @@ def test_app_does_not_bridge_return_features_across_weekday_gap():
     # The first bar after the gap has no prior adjacent bar in its own segment.
     assert idx[245] not in output.index
     # A later eligible bar uses only the immediately preceding post-gap bar.
-    expected = close[253] / close[252] - 1.0
-    assert np.isclose(output.loc[idx[253], "Return_1"], expected)
+    expected = close[260] / close[259] - 1.0
+    assert np.isclose(output.loc[idx[260], "Return_1"], expected)
 
 
 def test_app_fails_closed_when_latest_segment_is_too_short():
