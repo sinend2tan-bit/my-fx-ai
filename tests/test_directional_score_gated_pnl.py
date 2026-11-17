@@ -9,8 +9,8 @@ def test_score_gate_matches_live_buy_sell_threshold_and_tie_behavior():
     scores = np.array([
         [0.10, 0.20, 0.70],  # BUY above threshold
         [0.65, 0.20, 0.15],  # SELL above threshold
-        [0.54, 0.10, 0.55],  # BUY qualifies and beats SELL
-        [0.55, 0.10, 0.55],  # tie: no direction
+        [0.40, 0.05, 0.55],  # BUY qualifies and beats SELL
+        [0.45, 0.10, 0.45],  # tie: no direction
         [0.54, 0.40, 0.06],  # SELL below threshold
         [0.20, 0.60, 0.20],  # neutral dominant
     ])
