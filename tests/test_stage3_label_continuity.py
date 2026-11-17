@@ -14,7 +14,7 @@
   insufficient_future → discontinuous → other）で計上する。
 - 監査フレームは training_df.attrs["label_audit"] に保持し、特徴量・
   予測記録・永続化データ・公開ステータスには混入させない。
-- Scanner MODEL_VERSION は 23、App は 10。
+- Scanner MODEL_VERSION は 24、App は 11。
 
 注記:
 - T-L10 は仕様書どおり T-D 系列へ移行したため、ここには置かない。
@@ -1305,8 +1305,8 @@ def _app_literal(name):
 
 def test_tv1_model_versions():
     """T-V1: Scanner は 23、App は 10。"""
-    assert scanner.MODEL_VERSION == 23
-    assert _app_literal("MODEL_VERSION") == 10
+    assert scanner.MODEL_VERSION == 24
+    assert _app_literal("MODEL_VERSION") == 11
 
 
 def test_tv2_constants_and_features_unchanged():
