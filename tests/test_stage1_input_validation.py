@@ -71,7 +71,11 @@ from sklearn.utils.class_weight import compute_sample_weight
 
 import scanner
 from aifx_time_validation import has_contiguous_hourly_window
-from aifx_ohlc_validation import ohlc_valid_mask
+from aifx_ohlc_validation import (
+    add_4h_bucket_diagnostics,
+    clean_ohlc_source,
+    ohlc_valid_mask,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = REPO_ROOT / "app.py"
@@ -381,6 +385,8 @@ def _app_namespace(frame_factory):
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
         "has_contiguous_hourly_window": has_contiguous_hourly_window,
         "ohlc_valid_mask": ohlc_valid_mask,
+        "clean_ohlc_source": clean_ohlc_source,
+        "add_4h_bucket_diagnostics": add_4h_bucket_diagnostics,
         # 停止理由の記録はテストごとに新しい空のレジストリを使う。
         "_LOAD_STOP_REASONS": {},
         "_LOAD_STOP_WARNED": set(),
