@@ -2325,6 +2325,8 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "simulated_pnl": fold_pnl,
             }
 
+            if private_diagnostic_enabled:
+                detail["simulated_pnl_after_55pct_score_gate_diagnostic"] = fold_score_gated_pnl
             fold_details.append(detail)
 
             print(
@@ -2681,6 +2683,11 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             "predicted": predicted_counts,
         },
     }
+    if private_diagnostic_enabled:
+        result["simulated_pnl_after_55pct_score_gate_diagnostic"] = score_gated_total_pnl
+    return result
+
+
 def fast_move_detected(df):
     if df is None or len(df) < 4:
         return False, None
