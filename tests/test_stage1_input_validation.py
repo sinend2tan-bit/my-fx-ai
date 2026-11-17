@@ -27,8 +27,8 @@
   App 4h は段階1では従来どおりだったが、段階2（SYN-FX-017）で UTC
   統一・完全性判定に変更された（tests/test_stage2_4h_aggregation.py）。
   どちらの段階でも 4h に data_quality は付かない。
-- モデル版管理: App MODEL_VERSION 10（段階1で 6→7、段階2で 7→8）/
-  Scanner MODEL_VERSION 23。
+- モデル版管理: App MODEL_VERSION 10（段階1で 6→7、段階2で 7→8、RSI修正で 8→9、1h区間分離で 9→10）/
+  Scanner MODEL_VERSION 23（RSI修正で 21→22、1h区間分離で 22→23）。
   旧版（App version 9）の保存済みモデルは再利用されない。品質ゲートを
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
   評価モデルが使われ、旧ファイルは上書きされない。新版（10）の保存済み
