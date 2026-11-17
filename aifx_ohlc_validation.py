@@ -72,12 +72,11 @@ def clean_ohlc_source(frame, required=None):
         "dropped_non_four_4h_buckets": 0,
     }
 
+    if not isinstance(cleaned.index, pd.DatetimeIndex):
+        raise ValueError("4h source index must be a DatetimeIndex")
     valid_timestamp = cleaned.index.notna()
     diagnostics["dropped_invalid_timestamp"] = int((~valid_timestamp).sum())
     cleaned = cleaned.loc[valid_timestamp].copy()
-
-    if not isinstance(cleaned.index, pd.DatetimeIndex):
-        raise ValueError("4h source index must be a DatetimeIndex")
     if cleaned.index.tz is None:
         raise ValueError("4h source index must be timezone-aware")
     # Normalize inside the shared helper as well as at the callers. This keeps
