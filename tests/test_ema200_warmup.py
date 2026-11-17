@@ -14,6 +14,26 @@ def test_ema200_is_unavailable_until_200_observations():
     assert np.isfinite(result.iloc[199])
 
 
+def test_200_observation_gate_is_not_full_ema_convergence():
+    def seed_residual(observations):
+        baseline = pd.Series(np.full(observations, 100.0))
+        perturbed = baseline.copy()
+        perturbed.iloc[0] = 200.0
+        baseline_ema = ema_with_warmup(baseline, 200).iloc[-1]
+        perturbed_ema = ema_with_warmup(perturbed, 200).iloc[-1]
+        return float(perturbed_ema - baseline_ema)
+
+    # At the first visible output, the initial seed still contributes ~13.67%.
+    assert seed_residual(200) == pytest.approx(
+        100.0 * (1.0 - 2.0 / 201.0) ** 199
+    )
+    assert seed_residual(200) > 13.0
+    # The contribution is still just above 1% at 461 observations, and
+    # falls below 1% at 462 observations.
+    assert seed_residual(461) > 1.0
+    assert seed_residual(462) < 1.0
+
+
 def test_short_segment_never_emits_a_partial_ema200():
     prices = pd.Series(np.linspace(100.0, 110.0, 199))
     result = ema_with_warmup(prices, 200)
