@@ -117,6 +117,7 @@ def _extract_app_forecast_updater():
         "LOOKAHEAD_BARS": 8,
         "has_contiguous_hourly_window": has_contiguous_hourly_window,
         "split_hourly_segments": split_hourly_segments,
+        "split_hourly_segments": split_hourly_segments,
         "_normalise_timestamp": lambda value: pd.Timestamp(value).isoformat(),
         "save_forecast_history": lambda _items: None,
     }
@@ -256,7 +257,7 @@ def test_app_training_labels_skip_weekday_gap_and_count_reason():
     assert st.warnings == []
     quality = output.attrs["data_quality"]
     assert quality["hourly_segment_count"] == 2
-    assert quality["dropped_label_discontinuous"] == 0
+    assert quality["dropped_label_discontinuous"] > 0
     assert quality["dropped_label_insufficient_future"] == 8
     assert quality["trainable_rows"] == (
         quality["feature_rows"]
@@ -298,3 +299,46 @@ def test_hourly_segment_split_rejects_duplicate_or_reverse_timestamps():
         hourly_segment_slices(duplicate)
     with pytest.raises(ValueError):
         hourly_segment_slices(reverse)
+
+
+def test_app_does_not_bridge_return_features_across_weekday_gap():
+    idx = pd.date_range("2026-01-05 00:00", periods=500, freq="h", tz="UTC")
+    increments = np.resize(np.array([0.03, -0.02, 0.01, -0.01]), len(idx))
+    close = 150.0 + np.cumsum(increments)
+    open_ = np.concatenate(([close[0]], close[:-1]))
+    frame = pd.DataFrame(
+        {
+            "Open": open_,
+            "High": np.maximum(open_, close) + 0.08,
+            "Low": np.minimum(open_, close) - 0.08,
+            "Close": close,
+            "Volume": np.full(len(idx), 1_000_000.0),
+        },
+        index=idx,
+    ).drop(index=idx[244])
+    output, _ = _app_load_and_process_with_frame(frame)
+    assert output is not None
+    # The first bar after the gap has no prior adjacent bar in its own segment.
+    assert idx[245] not in output.index
+    # A later eligible bar uses only the immediately preceding post-gap bar.
+    expected = close[253] / close[252] - 1.0
+    assert np.isclose(output.loc[idx[253], "Return_1"], expected)
+
+
+def test_app_fails_closed_when_latest_segment_is_too_short():
+    idx = pd.date_range("2026-01-05 00:00", periods=500, freq="h", tz="UTC")
+    increments = np.resize(np.array([0.03, -0.02, 0.01, -0.01]), len(idx))
+    close = 150.0 + np.cumsum(increments)
+    open_ = np.concatenate(([close[0]], close[:-1]))
+    frame = pd.DataFrame(
+        {
+            "Open": open_,
+            "High": np.maximum(open_, close) + 0.08,
+            "Low": np.minimum(open_, close) - 0.08,
+            "Close": close,
+            "Volume": np.full(len(idx), 1_000_000.0),
+        },
+        index=idx,
+    ).drop(index=idx[490])
+    output, _ = _app_load_and_process_with_frame(frame)
+    assert output is None
