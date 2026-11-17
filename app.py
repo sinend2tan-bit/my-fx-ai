@@ -1432,6 +1432,24 @@ def load_and_process_data(ticker, period, interval, label=""):
     return result
 
 
+def format_uncalibrated_direction_alert(direction, value):
+    """Format a directional model score without presenting it as a calibrated probability."""
+    labels = {
+        "buy": ("買い方向", "上方ブレイク"),
+        "sell": ("売り方向", "下方ブレイク"),
+    }
+    if direction not in labels:
+        raise ValueError("direction must be 'buy' or 'sell'")
+    score = int(value)
+    if score < 0 or score > 100:
+        raise ValueError("model output must be between 0 and 100")
+    direction_label, alert_label = labels[direction]
+    return (
+        f"⚠️ 【急変動・{alert_label}警戒】"
+        f"{direction_label}モデル出力値（未校正） {score}%"
+        "（勝率・実際の発生確率ではありません）"
+    )
+
 def send_webhook_alert(url, message):
     if not url or requests is None:
         return False
@@ -1645,14 +1663,14 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         adx = float(data["ADX"].iloc[-1]) if "ADX" in data else 20.0
                 # 売買判定とは別に、方向候補を表示するための参考情報
         candidate = None
-        candidate_reason = "買い・売りの確率差が小さい"
+        candidate_reason = "買い・売りのモデル出力差が小さい"
 
         if buy_p >= 0.40 and buy_p > sell_p + 0.08 and rsi < 80:
             candidate = "買い候補"
-            candidate_reason = "買い確率が売り確率を8ポイント超上回る"
+            candidate_reason = "買い方向の未校正モデル出力値が売り方向を8ポイント超上回る"
         elif sell_p >= 0.40 and sell_p > buy_p + 0.08 and rsi > 20:
             candidate = "売り候補"
-            candidate_reason = "売り確率が買い確率を8ポイント超上回る"
+            candidate_reason = "売り方向の未校正モデル出力値が買い方向を8ポイント超上回る"
 
         st.session_state["directional_candidate"] = {
             "ticker": ticker,
@@ -1982,9 +2000,9 @@ def _render_main_area():
     vol_alert_msg = None
     if is_volatility_expanding or adx_val_curr > 28.0:
         if prob_dict["buy"] > prob_dict["sell"]:
-            vol_alert_msg = f"⚠️ 【急変動・上方ブレイク警戒】買い方向確率 {prob_dict['buy']}%（予測保証ではありません）"
+            vol_alert_msg = format_uncalibrated_direction_alert("buy", prob_dict["buy"])
         else:
-            vol_alert_msg = f"⚠️ 【急変動・下方ブレイク警戒】売り方向確率 {prob_dict['sell']}%（予測保証ではありません）"
+            vol_alert_msg = format_uncalibrated_direction_alert("sell", prob_dict["sell"])
     elif is_squeeze:
         vol_alert_msg = f"⚡ 【ボラティリティ収縮】ボリンジャー幅が狭くなっています（{band_width_pct:.2f}%）。急変動を予測・保証するものではありません。"
     if vol_alert_msg:
