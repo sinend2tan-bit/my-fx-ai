@@ -17,8 +17,8 @@ def model_matches_contract(
 ):
     """Return True only when a fitted model matches its feature/class contract.
 
-    Missing feature_names_in_ is accepted for models fitted from NumPy arrays;
-    when names are present they must match exactly and in order.
+    Feature names are mandatory: feature count alone cannot prove that a
+    persisted model was trained with the current feature order.
     """
     if not isinstance(model, model_type):
         return False
@@ -47,11 +47,12 @@ def model_matches_contract(
         return False
 
     fitted_names = getattr(model, "feature_names_in_", None)
-    if fitted_names is not None:
-        try:
-            if list(fitted_names) != features:
-                return False
-        except Exception:
+    if fitted_names is None:
+        return False
+    try:
+        if list(fitted_names) != features:
             return False
+    except Exception:
+        return False
 
     return True
