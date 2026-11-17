@@ -1,6 +1,7 @@
 """Synthetic-only tests for fail-closed walk-forward fold completeness."""
 
 import scanner
+import pytest
 
 
 def _fold(fold, sell=5, neutral=5, buy=5):
@@ -88,3 +89,45 @@ def test_undefined_fold_or_baseline_metric_fails_closed_even_with_all_classes_pr
 
     assert result["complete"] is False
     assert [item["fold"] for item in result["incomplete_folds"]] == [2]
+
+@pytest.mark.parametrize("bad_fold", [1.5, True, "1", None])
+def test_malformed_fold_ids_fail_closed_without_integer_coercion(bad_fold):
+    details = [_fold(bad_fold), _fold(2), _fold(3)]
+
+    result = scanner._fold_completeness_diagnostics(details, required_folds=3)
+
+    assert result["complete"] is False
+    assert result["invalid_fold_ids"] == [repr(bad_fold)]
+    assert result["missing_folds"] == [1]
+
+
+@pytest.mark.parametrize("bad_count", ["5", 1.5, True, -1, "not-a-count"])
+def test_malformed_class_counts_fail_closed_without_raising(bad_count):
+    details = [_fold(1), _fold(2), _fold(3)]
+    details[1]["actual_class_counts"]["buy"] = bad_count
+
+    result = scanner._fold_completeness_diagnostics(details, required_folds=3)
+
+    assert result["complete"] is False
+    assert result["incomplete_folds"][0]["fold"] == 2
+    assert "buy" in result["incomplete_folds"][0]["invalid_class_counts"]
+    assert result["incomplete_folds"][0]["actual_class_counts"]["buy"] == 0
+
+
+@pytest.mark.parametrize("bad_metric", [float("nan"), float("inf"), "0.4", -0.1, 1.1, True])
+def test_nonfinite_nonnumeric_or_out_of_range_metrics_fail_closed(bad_metric):
+    details = [_fold(1), _fold(2), _fold(3)]
+    details[1]["balanced_accuracy"] = bad_metric
+
+    result = scanner._fold_completeness_diagnostics(details, required_folds=3)
+
+    assert result["complete"] is False
+    assert result["incomplete_folds"][0]["fold"] == 2
+    assert result["incomplete_folds"][0]["balanced_accuracy"] is None
+
+
+def test_required_fold_count_must_be_a_positive_integer():
+    with pytest.raises(ValueError):
+        scanner._fold_completeness_diagnostics([], required_folds=1.5)
+    with pytest.raises(ValueError):
+        scanner._fold_completeness_diagnostics([], required_folds=True)
