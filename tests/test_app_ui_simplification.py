@@ -76,6 +76,7 @@ def _make_download(
     stale_main=False,
     stale_4h_source=False,
     missing_4h_source=False,
+    zero_4h_atr=False,
 ):
     now_h = pd.Timestamp.now(tz="UTC").floor("h")
 
@@ -95,7 +96,11 @@ def _make_download(
             end4 = now_h - pd.Timedelta(days=2) if stale_4h_source else now_h
             # 4h remains on its legacy EMA path; 600 hourly observations
             # provide 150 complete 4h bins, above the existing 80-bin minimum.
-            return _frame(600, "1h", end4, tail=tail_4h_source, tail_bars=30)
+            frame = _frame(600, "1h", end4, tail=tail_4h_source, tail_bars=30)
+            if zero_4h_atr:
+                # A flat but valid OHLC source produces zero 4h ATR.
+                frame.loc[:, ["Open", "High", "Low", "Close"]] = 150.0
+            return frame
         end = now_h - pd.Timedelta(days=10) if stale_main else now_h
         return _frame(600, "1h", end, tail=tail_1h)
 
@@ -227,6 +232,15 @@ def test_direction_hold_when_4h_data_is_missing(rig):
     if settings_path.exists():
         saved = json.loads(settings_path.read_text(encoding="utf-8"))
         assert "USDJPY=X" not in saved.get("ranges", {})
+
+
+def test_repeat_order_assist_fails_closed_when_4h_atr_is_zero(rig):
+    at = rig(zero_4h_atr=True)
+    assert not at.exception, f"app raised: {[e.value for e in at.exception]}"
+    body = _all_text(at)
+    assert "4時間足の高値・安値またはATRを確認できないため" in body
+    assert "📋 リピート注文（ハーフ＆ハーフ）" not in body
+    assert not any("注文幅" in str(w.label) for w in at.number_input)
 
 
 def test_direction_hold_when_timeframes_disagree(rig):
