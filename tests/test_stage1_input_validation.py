@@ -708,7 +708,7 @@ def test_app_clears_stale_model_save_status_at_start():
 
 def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
@@ -743,7 +743,7 @@ def test_app_gate_failure_no_fallback_to_old_model(tmp_path, monkeypatch):
 
 def test_app_current_version_model_reused(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
     before = path.read_bytes()
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
@@ -756,7 +756,7 @@ def test_app_current_version_model_reused(tmp_path, monkeypatch):
 
 def test_app_forced_retrain_replaces_old_model_only_after_validation(tmp_path, monkeypatch):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
     before = path.read_bytes()
 
     result = ns["analyze_signal_with_backtest"](
@@ -766,7 +766,7 @@ def test_app_forced_retrain_replaces_old_model_only_after_validation(tmp_path, m
     assert result is not None
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 8
+    assert saved["version"] == 9
     assert saved["model"].n_estimators == 260
     assert path.read_bytes() != before
     assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
@@ -774,7 +774,7 @@ def test_app_forced_retrain_replaces_old_model_only_after_validation(tmp_path, m
 
 def test_app_forced_retrain_gate_failure_preserves_old_model(tmp_path, monkeypatch):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
     before = path.read_bytes()
 
     result = ns["analyze_signal_with_backtest"](
@@ -789,7 +789,7 @@ def test_app_forced_retrain_gate_failure_preserves_old_model(tmp_path, monkeypat
 
 def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
     before = path.read_bytes()
 
     def fail_dump(*args, **kwargs):
@@ -808,7 +808,7 @@ def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch)
 
 def test_app_atomic_save_reload_failure_preserves_old_model(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
     before = path.read_bytes()
 
     def fail_load(*args, **kwargs):
@@ -830,7 +830,7 @@ def test_app_atomic_save_rejects_invalid_candidate_and_preserves_old_model(
     tmp_path, monkeypatch, invalid_kind
 ):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
     before = path.read_bytes()
     candidate = _tiny_model(single_class=(invalid_kind == "single_class"))
     payload = {
@@ -851,7 +851,7 @@ def test_app_atomic_save_rejects_invalid_candidate_and_preserves_old_model(
 
 def test_app_atomic_save_replace_failure_preserves_old_model(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
     before = path.read_bytes()
 
     def fail_replace(*args, **kwargs):
@@ -859,7 +859,7 @@ def test_app_atomic_save_replace_failure_preserves_old_model(tmp_path, monkeypat
 
     monkeypatch.setattr(ns["os"], "replace", fail_replace)
     payload = {
-        "version": 8,
+        "version": 9,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -879,7 +879,7 @@ def test_app_atomic_save_without_old_model_leaves_no_partial_file_on_failure(
 
     monkeypatch.setattr(ns["os"], "replace", fail_replace)
     payload = {
-        "version": 8,
+        "version": 9,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
