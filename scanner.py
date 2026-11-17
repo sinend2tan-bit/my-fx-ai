@@ -1492,6 +1492,7 @@ def bars(ticker, interval="1h", period="60d"):
             f"[4H SOURCE QUALITY] {ticker}: "
             f"input={source_ohlc_diagnostics['input_rows']}, "
             f"invalid_timestamp={source_ohlc_diagnostics['dropped_invalid_timestamp']}, "
+            f"off_hour_grid={source_ohlc_diagnostics['dropped_off_hour_grid_timestamp']}, "
             f"missing_nonfinite={source_ohlc_diagnostics['dropped_missing_or_nonfinite']}, "
             f"duplicates={source_ohlc_diagnostics['dropped_duplicate_timestamp']}, "
             f"invalid_ohlc={source_ohlc_diagnostics['dropped_invalid_ohlc']}, "
