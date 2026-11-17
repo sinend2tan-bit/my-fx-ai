@@ -78,6 +78,11 @@ def clean_ohlc_source(frame, required=None):
 
     if not isinstance(cleaned.index, pd.DatetimeIndex):
         raise ValueError("4h source index must be a DatetimeIndex")
+    if cleaned.index.tz is None:
+        raise ValueError("4h source index must be timezone-aware")
+    # Normalize inside the shared helper as well as at the callers. This keeps
+    # the UTC-grid contract fail-closed if a future caller omits normalization.
+    cleaned.index = cleaned.index.tz_convert("UTC")
     on_hour_grid = (
         (cleaned.index.minute == 0)
         & (cleaned.index.second == 0)
