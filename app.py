@@ -21,6 +21,7 @@ import streamlit as st
 import yfinance as yf
 
 from aifx_time_validation import has_contiguous_hourly_window
+from model_artifacts import model_matches_contract
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
@@ -1508,20 +1509,13 @@ def _save_trained_model(model_path, payload):
             return False
 
         candidate = verified.get("model")
-        if not isinstance(candidate, RandomForestClassifier):
-            return False
-        try:
-            classes = list(candidate.classes_)
-            if len(classes) < 2 or any(
-                float(value) not in (-1.0, 0.0, 1.0) for value in classes
-            ):
-                return False
-            if int(candidate.n_features_in_) != len(FEATURE_COLUMNS):
-                return False
-            fitted_names = getattr(candidate, "feature_names_in_", None)
-            if fitted_names is not None and list(fitted_names) != FEATURE_COLUMNS:
-                return False
-        except Exception:
+        if not model_matches_contract(
+            candidate,
+            expected_features=FEATURE_COLUMNS,
+            allowed_classes=(-1, 0, 1),
+            model_type=RandomForestClassifier,
+            require_all_classes=False,
+        ):
             return False
 
         # 一時ファイルは最終ファイルと同じディレクトリにあるため、
@@ -1694,10 +1688,18 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         if not force_retrain and os.path.exists(model_path):
             try:
                 saved = joblib.load(model_path)
-                if (isinstance(saved, dict) and saved.get("version") == MODEL_VERSION
+                if (
+                    isinstance(saved, dict)
+                    and saved.get("version") == MODEL_VERSION
                     and saved.get("features") == FEATURE_COLUMNS
-                    and isinstance(saved.get("model"), RandomForestClassifier)
-                    and set(int(c) for c in saved["model"].classes_) == set(APP_CLASS_LABELS)):
+                    and model_matches_contract(
+                        saved.get("model"),
+                        expected_features=FEATURE_COLUMNS,
+                        allowed_classes=APP_CLASS_LABELS,
+                        model_type=RandomForestClassifier,
+                        require_all_classes=True,
+                    )
+                ):
                     age_hours = (time.time() - os.path.getmtime(model_path)) / 3600
                     if age_hours <= 4:
                         model = saved["model"]
