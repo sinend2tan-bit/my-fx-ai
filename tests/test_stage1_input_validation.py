@@ -669,7 +669,9 @@ def _model_df(mode, n=500, seed=3):
 def _tiny_model(n_estimators=10, single_class=False, seed=3):
     rng = np.random.default_rng(seed)
     columns = _app_literal("FEATURE_COLUMNS")
-    X = rng.normal(0, 1, (60, len(columns)))
+    X = pd.DataFrame(
+        rng.normal(0, 1, (60, len(columns))), columns=columns
+    )
     if single_class:
         y = np.ones(60, dtype=int)
     else:
