@@ -60,7 +60,7 @@ FORWARD_PREDICTIONS_MAX = 200
 # 猶予。記録日時（recorded_at_jst、無ければ signal_bar_time）からの暦日。
 FORWARD_UNEVALUABLE_AFTER_DAYS = 14
 
-MODEL_VERSION = 22
+MODEL_VERSION = 23
 
 # 仮想検証用の追加コスト（実際の松井証券FXの約定・スワップ値ではありません）。
 # スリッページは往復合計の保守的な仮定。スワップは保有時間・方向・日々の値で変動するため、
@@ -1546,7 +1546,11 @@ def bars(ticker, interval="1h", period="60d"):
     # rolling/EMA/return状態を引き継がず、週末休場だけを許容する。
     latest_confirmed_index = raw.index[-1] if interval == "1h" else None
     rows_before_features = len(raw) if data_quality is not None else None
-    feature_df = add_indicators(raw, segment_hourly=(interval == "1h"))
+    feature_df = (
+        add_indicators(raw, segment_hourly=True)
+        if interval == "1h"
+        else add_indicators(raw)
+    )
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
     # Vol_Ratioは診断用に残すが、定数になりやすいため学習特徴量から除外する。
