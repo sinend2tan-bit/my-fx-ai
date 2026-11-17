@@ -1315,14 +1315,18 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             df = df.iloc[:-1]
         if len(df) < 80:
             return None, None
-        def _calculate_app_segment_features(segment):
+        def _calculate_app_segment_features(segment, require_full_ema200=False):
             close = segment["Close"]
             high = segment["High"]
             low = segment["Low"]
             opn = segment["Open"]
             segment["SMA_20"] = close.rolling(20, min_periods=10).mean()
             segment["EMA_20"] = close.ewm(span=20, adjust=False).mean()
-            segment["EMA_200"] = ema_with_warmup(close, 200)
+            segment["EMA_200"] = (
+                ema_with_warmup(close, 200)
+                if require_full_ema200
+                else close.ewm(span=200, adjust=False).mean()
+            )
             prev = close.shift(1)
             tr = pd.concat([(high-low), (high-prev).abs(), (low-prev).abs()], axis=1).max(axis=1)
             segment["ATR"] = tr.rolling(14, min_periods=7).mean()
@@ -1391,10 +1395,10 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             if not segments:
                 return None, None
             df = pd.concat(
-                [_calculate_app_segment_features(segment) for segment in segments]
+                [_calculate_app_segment_features(segment, require_full_ema200=True) for segment in segments]
             ).sort_index()
         else:
-            df = _calculate_app_segment_features(df)
+            df = _calculate_app_segment_features(df, require_full_ema200=False)
 
         close, high, low = df["Close"], df["High"], df["Low"]
 
