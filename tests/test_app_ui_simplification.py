@@ -197,6 +197,8 @@ def test_direction_hold_when_only_1h_stale(rig):
     assert any("方向：判断保留" in w for w in _texts(at, "warning"))
     assert any("鮮度" in c for c in _texts(at, "caption"))
     assert not any("方向：売り方向" in e for e in _texts(at, "error"))
+    assert "📋 リピート注文（ハーフ＆ハーフ）" not in _all_text(at)
+    assert not any("注文幅" in str(w.label) for w in at.number_input)
 
 
 def test_direction_hold_when_only_4h_stale(rig):
@@ -207,6 +209,8 @@ def test_direction_hold_when_only_4h_stale(rig):
     assert any("方向：判断保留" in w for w in _texts(at, "warning"))
     assert any("鮮度" in c for c in _texts(at, "caption"))
     assert not any("方向：売り方向" in e for e in _texts(at, "error"))
+    assert "📋 リピート注文（ハーフ＆ハーフ）" not in _all_text(at)
+    assert not any("注文幅" in str(w.label) for w in at.number_input)
 
 
 def test_direction_hold_when_4h_data_is_missing(rig):
