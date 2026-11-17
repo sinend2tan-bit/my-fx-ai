@@ -52,6 +52,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import scanner  # noqa: E402
+from aifx_indicator_utils import ema_with_warmup  # noqa: E402
 from aifx_time_validation import has_contiguous_hourly_window  # noqa: E402
 
 UTC = "UTC"
@@ -284,7 +285,7 @@ def fixture_f2_falling(n=260):
     )
 
 
-def fixture_mixed(n=280, start=START):
+def fixture_mixed(n=500, start=START):
     """増減混在の決定論的系列。RSI 等が定義でき、ATR は約 0.01。"""
     pattern = np.array(
         [0.004, 0.002, -0.003, 0.001, -0.002, 0.003, -0.001, 0.002]
@@ -446,6 +447,7 @@ class _LoadStreamlitStub:
 APP_LOAD_NS = {
     "np": np,
     "pd": pd,
+    "ema_with_warmup": ema_with_warmup,
     "yf": _yf_app,
     "st": _LoadStreamlitStub(),
     "has_contiguous_hourly_window": has_contiguous_hourly_window,
@@ -697,6 +699,9 @@ def test_syn_fx_005_warmup_boundaries():
     定義どおりであることを記録する。"""
     s1 = scanner.add_indicators(fixture_f1_rising())
     s2 = scanner.add_indicators(fixture_f2_falling())
+    s1_strict = scanner.add_indicators(
+        fixture_f1_rising(), require_full_ema200=True
+    )
     # Scanner: ATR は Wilder EWM min_periods=14 → 位置 13。
     assert _first_valid_pos(s1["ATR"]) == 13
     # Scanner: RSI は delta 先頭 NaN + min_periods=14 → 位置 14、RSI_Diff は diff(3) → 17。
@@ -710,35 +715,34 @@ def test_syn_fx_005_warmup_boundaries():
     assert _first_valid_pos(s1["Stoch_K"]) == 13
     assert _first_valid_pos(s1["Return_5"]) == 5
     assert _first_valid_pos(s1["ROC"]) == 10
-    # EMA 系は min_periods 指定がなく初期行から値が出る（200 本 warm-up ではない）。
+    # 直接の legacy 計算は従来どおり。1h bars() の厳格経路では199行後に有効。
     assert _first_valid_pos(s1["Dev_EMA200"]) == 0
+    assert _first_valid_pos(s1_strict["Dev_EMA200"]) == 199
     assert _first_valid_pos(s1["MACD_Hist_Ratio"]) == 0
     # 長さ境界: 13 本では ATR 有効行 0、14 本で 1 行。
     assert scanner.add_indicators(fixture_f1_rising(13))["ATR"].notna().sum() == 0
     assert scanner.add_indicators(fixture_f1_rising(14))["ATR"].notna().sum() == 1
 
-    # App: 返却 DataFrame の先頭行は、最も遅い Vol_Ratio
-    # （ATR rolling 50 / min_periods=10、ATR 自体は位置 6 から有効）のため
-    # 元系列の位置 15 になる。
+    # App 1h: EMA200 が最も遅いため、返却 DataFrame の先頭行は元系列の位置199。
     raw = fixture_f1_rising()
     app_res = run_app_load(raw)
-    assert raw.index.get_loc(app_res.index[0]) == 15
-    # App は加工後 80 本未満なら None（入力 80 本 → 末尾除外で 79 本 → None）。
-    assert run_app_load(fixture_f1_rising(80)) is None
-    assert run_app_load(fixture_f1_rising(81)) is not None
+    assert raw.index.get_loc(app_res.index[0]) == 199
+    # 最新足を除いた200本がEMA200の最小条件（入力201本）。
+    assert run_app_load(fixture_f1_rising(200)) is None
+    assert run_app_load(fixture_f1_rising(201)) is not None
 
 
 def test_syn_fx_006_no_future_leakage():
     """006: signal bar 以降の OHLC だけを変更しても、それ以前の特徴量は不変。
     変化した場合は未来情報混入として失敗する。Target は未来窓依存なので対象外。"""
     full = fixture_mixed()
-    t_pos = 150
+    t_pos = 220
     ts_t = full.index[t_pos]
     alt = full.copy()
     alt.iloc[t_pos + 1:] = alt.iloc[t_pos + 1:] * 1.05
 
-    s_full = scanner.add_indicators(full)
-    s_alt = scanner.add_indicators(alt)
+    s_full = scanner.add_indicators(full, require_full_ema200=True)
+    s_alt = scanner.add_indicators(alt, require_full_ema200=True)
     assert np.allclose(
         s_full.loc[:ts_t, scanner.FEATURE_COLUMNS].to_numpy(dtype=float),
         s_alt.loc[:ts_t, scanner.FEATURE_COLUMNS].to_numpy(dtype=float),
@@ -774,7 +778,9 @@ def test_syn_fx_006_no_future_leakage():
 
 def _scanner_feature_frame(raw):
     """bars() 内部と同じ手順で feature_df を再現する（第1パス用）。"""
-    return scanner.add_indicators(raw.iloc[:-1]).dropna(
+    return scanner.add_indicators(
+        raw.iloc[:-1], require_full_ema200=True
+    ).dropna(
         subset=scanner.FEATURE_COLUMNS + ["ATR", "Close"]
     )
 
