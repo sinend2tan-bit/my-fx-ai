@@ -20,7 +20,10 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-from aifx_time_validation import has_contiguous_hourly_window
+from aifx_time_validation import (
+    has_contiguous_hourly_window,
+    split_hourly_segments,
+)
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
@@ -1314,93 +1317,115 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             df = df.iloc[:-1]
         if len(df) < 80:
             return None, None
-        close, high, low, opn = df["Close"], df["High"], df["Low"], df["Open"]
-        df["SMA_20"] = close.rolling(20, min_periods=10).mean()
-        df["EMA_20"] = close.ewm(span=20, adjust=False).mean()
-        df["EMA_200"] = close.ewm(span=200, adjust=False).mean()
-        prev = close.shift(1)
-        tr = pd.concat([(high-low), (high-prev).abs(), (low-prev).abs()], axis=1).max(axis=1)
-        df["ATR"] = tr.rolling(14, min_periods=7).mean()
-        delta = close.diff()
-        gain = delta.clip(lower=0).rolling(14, min_periods=7).mean()
-        loss = (-delta.clip(upper=0)).rolling(14, min_periods=7).mean()
-        rs = gain / loss.replace(0, np.nan)
-        df["RSI"] = (100 - 100/(1+rs)).fillna(50)
-        df["RSI_Diff"] = df["RSI"].diff()
-        ema12, ema26 = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
-        df["MACD"] = ema12 - ema26
-        df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
-        df["MACD_Hist"] = df["MACD"] - df["MACD_Signal"]
-        df["MACD_Hist_Ratio"] = df["MACD_Hist"] / close.replace(0, np.nan)
-        std = close.rolling(20, min_periods=10).std()
-        df["Upper_Band"], df["Lower_Band"] = df["SMA_20"] + 2*std, df["SMA_20"] - 2*std
-        df["BB_PctB"] = (close - df["Lower_Band"]) / (df["Upper_Band"] - df["Lower_Band"]).replace(0, np.nan)
-        df["Return_1"] = close.pct_change()
-        df["Return_5"] = close.pct_change(5)
-        df["Dev_SMA20"] = (close - df["SMA_20"]) / close.replace(0, np.nan)
-        df["Dev_EMA200"] = (close - df["EMA_200"]) / close.replace(0, np.nan)
-        df["Dev_EMA20_200"] = (df["EMA_20"] - df["EMA_200"]) / close.replace(0, np.nan)
-        df["ATR_Ratio"] = df["ATR"] / close.replace(0, np.nan)
-        df["Vol_Ratio"] = df["ATR"] / df["ATR"].rolling(50, min_periods=10).mean().replace(0, np.nan)
-        up_move, down_move = high.diff(), -low.diff()
-        plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
-        minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
-        atr_safe = df["ATR"].replace(0, np.nan)
-        plus_di = 100 * plus_dm.rolling(14, min_periods=7).mean() / atr_safe
-        minus_di = 100 * minus_dm.rolling(14, min_periods=7).mean() / atr_safe
-        dx = 100 * (plus_di-minus_di).abs() / (plus_di+minus_di).replace(0, np.nan)
-        df["ADX"] = dx.rolling(14, min_periods=7).mean().fillna(20)
-        rng = (high-low).replace(0, np.nan)
-        df["Upper_Wick_Ratio"] = (high - pd.concat([opn, close], axis=1).max(axis=1)) / rng
-        df["Lower_Wick_Ratio"] = (pd.concat([opn, close], axis=1).min(axis=1) - low) / rng
-        low14, high14 = low.rolling(14, min_periods=7).min(), high.rolling(14, min_periods=7).max()
-        df["Stoch_K"] = 100 * (close-low14)/(high14-low14).replace(0, np.nan)
-        tp = (high+low+close)/3
-        tp_sma = tp.rolling(20, min_periods=10).mean()
-        mad = tp.rolling(20, min_periods=10).apply(lambda x: np.mean(np.abs(x-np.mean(x))), raw=True)
-        df["CCI"] = (tp-tp_sma)/(0.015*mad.replace(0, np.nan))
-        df["ROC"] = close.pct_change(10)*100
-
-        # First-touch labels: determine which barrier is touched first in the next N bars.
-        # If both barriers are touched within the same OHLC bar, intrabar order is unknowable,
-        # so that sample is labeled WAIT (0) rather than guessing.
-        pip_unit = 0.01 if "JPY" in ticker else 0.0001
-        spread = DEFAULT_SPREAD_PIPS.get(ticker, 0.5) * pip_unit
-        barrier = (df["ATR"] * 1.0).clip(lower=spread * 2).to_numpy(dtype=float)
-        close_values = close.to_numpy(dtype=float)
-        high_values = high.to_numpy(dtype=float)
-        low_values = low.to_numpy(dtype=float)
-        target = np.full(len(df), np.nan, dtype=float)
-        usable = max(0, len(df) - LOOKAHEAD_BARS)
+        latest_confirmed_timestamp = df.index[-1] if interval == "1h" and not df.empty else None
         discontinuous_label_timestamps = set()
-        for i in range(usable):
-            # 1時間足の学習ラベルは、シグナル足から未来8本までの
-            # 全隣接時刻が連続している場合だけ生成する。週末休場は許容する。
-            if interval == "1h" and not has_contiguous_hourly_window(
-                df.index[i:i + LOOKAHEAD_BARS + 1]
-            ):
-                discontinuous_label_timestamps.add(df.index[i])
-                continue
-            distance = barrier[i] + spread
-            upper_barrier = close_values[i] + distance
-            lower_barrier = close_values[i] - distance
-            label = 0
-            for j in range(i + 1, min(i + LOOKAHEAD_BARS + 1, len(df))):
-                hit_up = high_values[j] >= upper_barrier
-                hit_down = low_values[j] <= lower_barrier
-                if hit_up and hit_down:
-                    label = 0  # same-bar order cannot be inferred from OHLC data
-                    break
-                if hit_up:
-                    label = 1
-                    break
-                if hit_down:
-                    label = -1
-                    break
-            target[i] = label
-        df["Target"] = target
+        if interval == "1h":
+            for position in range(max(0, len(df) - LOOKAHEAD_BARS)):
+                if not has_contiguous_hourly_window(
+                    df.index[position:position + LOOKAHEAD_BARS + 1]
+                ):
+                    discontinuous_label_timestamps.add(df.index[position])
+        def _process_feature_segment(segment):
+            df = segment.copy()
+            close, high, low, opn = df["Close"], df["High"], df["Low"], df["Open"]
+            df["SMA_20"] = close.rolling(20, min_periods=10).mean()
+            df["EMA_20"] = close.ewm(span=20, adjust=False).mean()
+            df["EMA_200"] = close.ewm(span=200, adjust=False).mean()
+            prev = close.shift(1)
+            tr = pd.concat([(high-low), (high-prev).abs(), (low-prev).abs()], axis=1).max(axis=1)
+            df["ATR"] = tr.rolling(14, min_periods=7).mean()
+            delta = close.diff()
+            gain = delta.clip(lower=0).rolling(14, min_periods=7).mean()
+            loss = (-delta.clip(upper=0)).rolling(14, min_periods=7).mean()
+            rs = gain / loss.replace(0, np.nan)
+            df["RSI"] = (100 - 100/(1+rs)).fillna(50)
+            df["RSI_Diff"] = df["RSI"].diff()
+            ema12, ema26 = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
+            df["MACD"] = ema12 - ema26
+            df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+            df["MACD_Hist"] = df["MACD"] - df["MACD_Signal"]
+            df["MACD_Hist_Ratio"] = df["MACD_Hist"] / close.replace(0, np.nan)
+            std = close.rolling(20, min_periods=10).std()
+            df["Upper_Band"], df["Lower_Band"] = df["SMA_20"] + 2*std, df["SMA_20"] - 2*std
+            df["BB_PctB"] = (close - df["Lower_Band"]) / (df["Upper_Band"] - df["Lower_Band"]).replace(0, np.nan)
+            df["Return_1"] = close.pct_change()
+            df["Return_5"] = close.pct_change(5)
+            df["Dev_SMA20"] = (close - df["SMA_20"]) / close.replace(0, np.nan)
+            df["Dev_EMA200"] = (close - df["EMA_200"]) / close.replace(0, np.nan)
+            df["Dev_EMA20_200"] = (df["EMA_20"] - df["EMA_200"]) / close.replace(0, np.nan)
+            df["ATR_Ratio"] = df["ATR"] / close.replace(0, np.nan)
+            df["Vol_Ratio"] = df["ATR"] / df["ATR"].rolling(50, min_periods=10).mean().replace(0, np.nan)
+            up_move, down_move = high.diff(), -low.diff()
+            plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+            minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+            atr_safe = df["ATR"].replace(0, np.nan)
+            plus_di = 100 * plus_dm.rolling(14, min_periods=7).mean() / atr_safe
+            minus_di = 100 * minus_dm.rolling(14, min_periods=7).mean() / atr_safe
+            dx = 100 * (plus_di-minus_di).abs() / (plus_di+minus_di).replace(0, np.nan)
+            df["ADX"] = dx.rolling(14, min_periods=7).mean().fillna(20)
+            rng = (high-low).replace(0, np.nan)
+            df["Upper_Wick_Ratio"] = (high - pd.concat([opn, close], axis=1).max(axis=1)) / rng
+            df["Lower_Wick_Ratio"] = (pd.concat([opn, close], axis=1).min(axis=1) - low) / rng
+            low14, high14 = low.rolling(14, min_periods=7).min(), high.rolling(14, min_periods=7).max()
+            df["Stoch_K"] = 100 * (close-low14)/(high14-low14).replace(0, np.nan)
+            tp = (high+low+close)/3
+            tp_sma = tp.rolling(20, min_periods=10).mean()
+            mad = tp.rolling(20, min_periods=10).apply(lambda x: np.mean(np.abs(x-np.mean(x))), raw=True)
+            df["CCI"] = (tp-tp_sma)/(0.015*mad.replace(0, np.nan))
+            df["ROC"] = close.pct_change(10)*100
+    
+            # First-touch labels: determine which barrier is touched first in the next N bars.
+            # If both barriers are touched within the same OHLC bar, intrabar order is unknowable,
+            # so that sample is labeled WAIT (0) rather than guessing.
+            pip_unit = 0.01 if "JPY" in ticker else 0.0001
+            spread = DEFAULT_SPREAD_PIPS.get(ticker, 0.5) * pip_unit
+            barrier = (df["ATR"] * 1.0).clip(lower=spread * 2).to_numpy(dtype=float)
+            close_values = close.to_numpy(dtype=float)
+            high_values = high.to_numpy(dtype=float)
+            low_values = low.to_numpy(dtype=float)
+            target = np.full(len(df), np.nan, dtype=float)
+            usable = max(0, len(df) - LOOKAHEAD_BARS)
+            for i in range(usable):
+                # 1時間足の学習ラベルは、シグナル足から未来8本までの
+                # 全隣接時刻が連続している場合だけ生成する。週末休場は許容する。
+                if interval == "1h" and not has_contiguous_hourly_window(
+                    df.index[i:i + LOOKAHEAD_BARS + 1]
+                ):
+                    discontinuous_label_timestamps.add(df.index[i])
+                    continue
+                distance = barrier[i] + spread
+                upper_barrier = close_values[i] + distance
+                lower_barrier = close_values[i] - distance
+                label = 0
+                for j in range(i + 1, min(i + LOOKAHEAD_BARS + 1, len(df))):
+                    hit_up = high_values[j] >= upper_barrier
+                    hit_down = low_values[j] <= lower_barrier
+                    if hit_up and hit_down:
+                        label = 0  # same-bar order cannot be inferred from OHLC data
+                        break
+                    if hit_up:
+                        label = 1
+                        break
+                    if hit_down:
+                        label = -1
+                        break
+                target[i] = label
+            df["Target"] = target
+            return df
+        segments = split_hourly_segments(df) if interval == "1h" else [df]
+        if data_quality is not None:
+            data_quality["hourly_segment_count"] = len(segments)
+        df = pd.concat(
+            [_process_feature_segment(segment) for segment in segments]
+        ).sort_index() if segments else df.iloc[0:0].copy()
         df = df.replace([np.inf, -np.inf], np.nan)
         result = df.dropna(subset=FEATURE_COLUMNS + ["Close", "ATR"])
+        # The newest confirmed input bar must itself remain feature-eligible.
+        # Never fall back to an older segment when the latest segment is too short.
+        if interval == "1h" and (
+            result.empty or result.index[-1] != latest_confirmed_timestamp
+        ):
+            return None, None
         if data_quality is not None:
             # (4) 特徴量計算による除外と、ラベル判定段階の理由別計上。
             # 不連続ラベル行は特徴量が有効な行に限って計上し、末尾の
