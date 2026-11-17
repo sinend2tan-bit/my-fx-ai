@@ -1401,8 +1401,6 @@ def bars(ticker, interval="1h", period="60d"):
         data_quality["dropped_duplicate_timestamp"] = int(rows_before - len(raw))
         # (3) OHLC 整合性を検証する。keep="last" で残った行が不正な場合は
         # 古い重複行へ戻らず、その timestamp 自体を除外する。
-        oc_max = raw[["Open", "Close"]].max(axis=1)
-        oc_min = raw[["Open", "Close"]].min(axis=1)
         ohlc_ok = ohlc_valid_mask(raw, required).to_numpy()
         data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
         raw = raw.loc[ohlc_ok].copy()
