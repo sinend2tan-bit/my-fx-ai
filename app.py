@@ -21,6 +21,7 @@ import streamlit as st
 import yfinance as yf
 
 from aifx_time_validation import has_contiguous_hourly_window
+from aifx_indicator_utils import ema_with_warmup
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
@@ -93,7 +94,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 10
+MODEL_VERSION = 11
 
 st.markdown("""
 <style>
@@ -1321,7 +1322,7 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             opn = segment["Open"]
             segment["SMA_20"] = close.rolling(20, min_periods=10).mean()
             segment["EMA_20"] = close.ewm(span=20, adjust=False).mean()
-            segment["EMA_200"] = close.ewm(span=200, adjust=False).mean()
+            segment["EMA_200"] = ema_with_warmup(close, 200)
             prev = close.shift(1)
             tr = pd.concat([(high-low), (high-prev).abs(), (low-prev).abs()], axis=1).max(axis=1)
             segment["ATR"] = tr.rolling(14, min_periods=7).mean()
