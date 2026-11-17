@@ -1230,8 +1230,6 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             data_quality["dropped_duplicate_timestamp"] = int(rows_before - len(df))
             # (3) OHLC 整合性を検証する。keep="last" で残った行が不正な
             # 場合は古い重複行へ戻らず、その timestamp 自体を除外する。
-            oc_max = df[["Open", "Close"]].max(axis=1)
-            oc_min = df[["Open", "Close"]].min(axis=1)
             ohlc_ok = ohlc_valid_mask(df, required).to_numpy()
             data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
             df = df.loc[ohlc_ok].copy()
