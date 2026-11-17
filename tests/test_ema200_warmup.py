@@ -35,7 +35,8 @@ def test_app_and_scanner_both_use_the_shared_ema200_warmup():
     root = Path(__file__).resolve().parents[1]
     app_source = (root / "app.py").read_text(encoding="utf-8")
     scanner_source = (root / "scanner.py").read_text(encoding="utf-8")
-    assert 'ema_with_warmup(close, 200)' in app_source
+    assert "EMA200_MIN_PERIODS = 200" in app_source
+    assert 'ema_with_warmup(close, EMA200_MIN_PERIODS)' in app_source
     assert "EMA200_MIN_PERIODS = 200" in scanner_source
     assert 'ema_with_warmup(close, EMA200_MIN_PERIODS)' in scanner_source
     assert "MODEL_VERSION = 11" in app_source
