@@ -21,6 +21,7 @@ import streamlit as st
 import yfinance as yf
 
 from aifx_time_validation import has_contiguous_hourly_window
+from aifx_ohlc_validation import ohlc_valid_mask
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
@@ -1231,12 +1232,7 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             # 場合は古い重複行へ戻らず、その timestamp 自体を除外する。
             oc_max = df[["Open", "Close"]].max(axis=1)
             oc_min = df[["Open", "Close"]].min(axis=1)
-            ohlc_ok = (
-                (df["High"] >= oc_max)
-                & (df["Low"] <= oc_min)
-                & (df["High"] >= df["Low"])
-                & (df[required] > 0).all(axis=1)
-            ).to_numpy()
+            ohlc_ok = ohlc_valid_mask(df, required).to_numpy()
             data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
             df = df.loc[ohlc_ok].copy()
         elif interval == "1d":
@@ -1280,6 +1276,9 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             # Volume）も Scanner と一致する（段階2再レビュー対応・
             # 案b）。重複のないデータでは挙動は変わらない。
             df = df[~df.index.duplicated(keep="last")].sort_index()
+            # Reject invalid source 1h candles before aggregation. Otherwise max/min
+            # aggregation can hide impossible source OHLC geometry.
+            df = df.loc[ohlc_valid_mask(df, required)].copy()
         else:
             df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
         if interval == "4h":
