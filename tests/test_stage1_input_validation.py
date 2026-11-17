@@ -29,7 +29,7 @@
   どちらの段階でも 4h に data_quality は付かない。
 - モデル版管理: App MODEL_VERSION 9（段階1で 6→7、段階2で 7→8、二重重み付け修正で 8→9）/
   Scanner MODEL_VERSION 21。
-  旧版（App version 9）の保存済みモデルは再利用されない。品質ゲートを
+  旧版（App version 8）の保存済みモデルは再利用されない。品質ゲートを
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
   評価モデルが使われ、旧ファイルは上書きされない。新版（9）の保存済み
   モデルは従来どおり再利用される。
@@ -708,7 +708,7 @@ def test_app_clears_stale_model_save_status_at_start():
 
 def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
