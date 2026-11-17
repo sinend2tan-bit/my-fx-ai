@@ -1882,14 +1882,14 @@ def directional_predictions_from_scores(aligned_probabilities, threshold_pct=MIN
         raise ValueError("aligned_probabilities must have shape (n, 3)")
     if not np.isfinite(scores).all() or np.any(scores < 0.0) or np.any(scores > 1.0):
         raise ValueError("model scores must be finite values between 0 and 1")
-    threshold = float(threshold_pct) / 100.0
-    if not np.isfinite(threshold) or threshold < 0.0 or threshold > 1.0:
+    threshold = float(threshold_pct)
+    if not np.isfinite(threshold) or threshold < 0.0 or threshold > 100.0:
         raise ValueError("threshold_pct must be between 0 and 100")
     sell = scores[:, 0]
     buy = scores[:, 2]
     result = np.zeros(len(scores), dtype=int)
-    result[(buy * 100.0 >= threshold_pct) & (buy > sell)] = 1
-    result[(sell * 100.0 >= threshold_pct) & (sell > buy)] = -1
+    result[(buy * 100.0 >= threshold) & (buy > sell)] = 1
+    result[(sell * 100.0 >= threshold) & (sell > buy)] = -1
     return result
 
 # =========================================================
