@@ -58,7 +58,7 @@ FORWARD_PREDICTIONS_MAX = 200
 # 猶予。記録日時（recorded_at_jst、無ければ signal_bar_time）からの暦日。
 FORWARD_UNEVALUABLE_AFTER_DAYS = 14
 
-MODEL_VERSION = 21
+MODEL_VERSION = 22
 
 # 仮想検証用の追加コスト（実際の松井証券FXの約定・スワップ値ではありません）。
 # スリッページは往復合計の保守的な仮定。スワップは保有時間・方向・日々の値で変動するため、
@@ -1165,7 +1165,7 @@ def calculate_atr(df, period=14):
     ).mean()
 
 
-def add_indicators(df):
+def _add_indicators_single_segment(df):
     df = df.copy()
 
     close = df["Close"]
@@ -1267,6 +1267,39 @@ def add_indicators(df):
     # inplace=True を避け、pandas の将来互換性に配慮する。
     df = df.replace([np.inf, -np.inf], np.nan)
     return df
+
+
+def add_indicators(df, segment_hourly=False):
+    """Calculate indicators; reset rolling state at every invalid hourly gap."""
+    if not segment_hourly:
+        return _add_indicators_single_segment(df)
+
+    if (
+        not isinstance(df.index, pd.DatetimeIndex)
+        or df.index.tz is None
+        or df.index.hasnans
+        or df.index.has_duplicates
+        or not df.index.is_monotonic_increasing
+    ):
+        raise ValueError("hourly indicator input must have unique, ordered, timezone-aware timestamps")
+
+    segments = []
+    start = 0
+    for position in range(1, len(df)):
+        if not _forward_bar_gap_allowed(df.index[position - 1], df.index[position]):
+            if start < position:
+                segments.append(df.iloc[start:position].copy())
+            start = position
+    if start < len(df):
+        segments.append(df.iloc[start:].copy())
+
+    if not segments:
+        return df.iloc[0:0].copy()
+
+    # Compute every segment independently; keep original timestamps and order.
+    return pd.concat(
+        [_add_indicators_single_segment(segment) for segment in segments]
+    ).sort_index()
 
 
 # =========================================================
@@ -1507,9 +1540,11 @@ def bars(ticker, interval="1h", period="60d"):
         )
         return None
 
-     # ここで作る指標データは、最新の確定足を含む。
+     # 1時間足は指標計算前に連続区間へ分割する。平日欠損の前後で
+    # rolling/EMA/return状態を引き継がず、週末休場だけを許容する。
+    latest_confirmed_index = raw.index[-1] if interval == "1h" else None
     rows_before_features = len(raw) if data_quality is not None else None
-    feature_df = add_indicators(raw)
+    feature_df = add_indicators(raw, segment_hourly=(interval == "1h"))
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
     # Vol_Ratioは診断用に残すが、定数になりやすいため学習特徴量から除外する。
@@ -1526,6 +1561,15 @@ def bars(ticker, interval="1h", period="60d"):
     feature_df = feature_df.dropna(
         subset=FEATURE_COLUMNS + ["ATR", "Close"]
     )
+
+    if interval == "1h" and (
+        feature_df.empty or latest_confirmed_index not in feature_df.index
+    ):
+        print(
+            f"[LATEST SEGMENT NOT READY] {ticker} {interval}: "
+            "latest confirmed bar is not feature-eligible; refusing stale fallback"
+        )
+        return None
 
     if data_quality is not None:
         # (4) 特徴量計算による除外。
