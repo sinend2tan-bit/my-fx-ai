@@ -609,6 +609,7 @@ def _model_namespace():
     import tempfile
     import time
     from datetime import datetime
+    from model_artifacts import model_matches_contract
 
     st = _StStub()
     ns = {
