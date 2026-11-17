@@ -50,7 +50,9 @@ class ModelArtifactContractTests(unittest.TestCase):
         self.assertFalse(check(FakeModel(classes=(-1, 1))))
 
     def test_allows_two_of_three_classes_for_save_compatibility(self):
-        self.assertTrue(check(FakeModel(classes=(-1, 1)), require_all=False))
+        self.assertTrue(
+            check(FakeModel(classes=(-1, 1), names=FEATURES), require_all=False)
+        )
 
     def test_rejects_single_class_model(self):
         self.assertFalse(check(FakeModel(classes=(1,))))
