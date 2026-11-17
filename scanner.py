@@ -1424,7 +1424,17 @@ def bars(ticker, interval="1h", period="60d"):
                 raw.index = raw.index.tz_convert("UTC")
             # Keep reason-specific 4h source diagnostics separate from the
             # Stage 1 C-1 counters (which intentionally remain 1h-only).
-            raw, source_ohlc_diagnostics = clean_ohlc_source(raw, required)
+            try:
+                raw, source_ohlc_diagnostics = clean_ohlc_source(raw, required)
+            except ValueError as exc:
+                # Invalid source-index contracts are expected data-quality stops.
+                # Preserve bars()' public fail-closed behavior (return None) rather
+                # than leaking validation exceptions into the scan caller.
+                print(
+                    f"[4H SOURCE STOP] {ticker} {interval}: "
+                    f"{type(exc).__name__}: {str(exc)[:180]}"
+                )
+                return None
         else:
             raw = raw.dropna(subset=required)
             raw = raw[~raw.index.duplicated(keep="last")].sort_index()
