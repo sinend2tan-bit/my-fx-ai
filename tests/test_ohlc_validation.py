@@ -100,6 +100,7 @@ def test_clean_ohlc_source_counts_each_first_exclusion_reason():
     assert diagnostics == {
         "input_rows": 10,
         "dropped_invalid_timestamp": 1,
+        "dropped_off_hour_grid_timestamp": 0,
         "dropped_missing_or_nonfinite": 1,
         "dropped_duplicate_timestamp": 1,
         "dropped_invalid_ohlc": 1,
@@ -133,12 +134,13 @@ def test_duplicate_order_matches_legacy_missing_then_keep_last_contract():
     # non-missing row remains; impossible geometry on the last remaining
     # duplicate is rejected and does not fall back to its older duplicate.
     assert cleaned.index.tolist() == [index[0]]
+    assert diagnostics["dropped_off_hour_grid_timestamp"] == 0
     assert diagnostics["dropped_missing_or_nonfinite"] == 1
     assert diagnostics["dropped_duplicate_timestamp"] == 1
     assert diagnostics["dropped_invalid_ohlc"] == 1
     assert diagnostics["validated_source_rows"] == 1
 
-def test_4h_diagnostics_distinguish_underfull_and_overfull_buckets():
+def test_off_hour_grid_rows_are_removed_before_4h_bucket_counting():
     index = pd.DatetimeIndex([
         "2026-01-01 00:00",
         "2026-01-01 00:30",
@@ -166,9 +168,27 @@ def test_4h_diagnostics_distinguish_underfull_and_overfull_buckets():
         diagnostics, counts, pd.Timestamp("2026-01-01 08:00", tz="UTC")
     )
 
-    assert counts.tolist() == [5, 3]
+    assert counts.tolist() == [4, 3]
+    assert diagnostics["dropped_off_hour_grid_timestamp"] == 1
     assert diagnostics["completed_4h_buckets"] == 2
-    assert diagnostics["complete_4h_buckets"] == 0
+    assert diagnostics["complete_4h_buckets"] == 1
     assert diagnostics["dropped_underfull_4h_buckets"] == 1
+    assert diagnostics["dropped_overfull_4h_buckets"] == 0
+    assert diagnostics["dropped_non_four_4h_buckets"] == 1
+
+
+def test_overfull_4h_bucket_diagnostic_is_defensive():
+    counts = pd.Series(
+        [5], index=pd.DatetimeIndex(["2026-01-01 00:00"], tz="UTC")
+    )
+    diagnostics = {
+        "completed_4h_buckets": 0,
+        "complete_4h_buckets": 0,
+        "dropped_underfull_4h_buckets": 0,
+        "dropped_overfull_4h_buckets": 0,
+        "dropped_non_four_4h_buckets": 0,
+    }
+    add_4h_bucket_diagnostics(
+        diagnostics, counts, pd.Timestamp("2026-01-01 04:00", tz="UTC")
+    )
     assert diagnostics["dropped_overfull_4h_buckets"] == 1
-    assert diagnostics["dropped_non_four_4h_buckets"] == 2
