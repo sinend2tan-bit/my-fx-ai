@@ -222,3 +222,9 @@ def test_clean_ohlc_source_normalizes_aware_index_to_utc():
         pd.date_range("2026-01-01 00:00", periods=4, freq="h", tz="UTC")
     )
     assert diagnostics["validated_source_rows"] == 4
+
+def test_clean_ohlc_source_rejects_non_datetime_index():
+    data = frame([[100.0, 105.0, 95.0, 102.0]])
+
+    with pytest.raises(ValueError, match="DatetimeIndex"):
+        clean_ohlc_source(data)
