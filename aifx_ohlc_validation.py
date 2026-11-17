@@ -65,7 +65,9 @@ def clean_ohlc_source(frame, required=None):
         "validated_source_rows": 0,
         "completed_4h_buckets": 0,
         "complete_4h_buckets": 0,
-        "dropped_incomplete_4h_buckets": 0,
+        "dropped_underfull_4h_buckets": 0,
+        "dropped_overfull_4h_buckets": 0,
+        "dropped_non_four_4h_buckets": 0,
     }
 
     valid_timestamp = cleaned.index.notna()
@@ -97,5 +99,7 @@ def add_4h_bucket_diagnostics(diagnostics, hourly_counts, cutoff):
     ]
     diagnostics["completed_4h_buckets"] = int(len(completed))
     diagnostics["complete_4h_buckets"] = int((completed == 4).sum())
-    diagnostics["dropped_incomplete_4h_buckets"] = int((completed != 4).sum())
+    diagnostics["dropped_underfull_4h_buckets"] = int((completed < 4).sum())
+    diagnostics["dropped_overfull_4h_buckets"] = int((completed > 4).sum())
+    diagnostics["dropped_non_four_4h_buckets"] = int((completed != 4).sum())
     return diagnostics
