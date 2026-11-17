@@ -432,7 +432,7 @@ def _extract_scanner_nested(outer_name, inner_names):
 # --- load_and_process_data 用 namespace（yf は stub に差し替え） ---
 _yf_app = YFStub()
 _app_load_mod = _extract_app_module(
-    {"flatten_yf_df", "_load_and_process_data_cached", "load_and_process_data"},
+    {"flatten_yf_df", "calculate_rsi", "_load_and_process_data_cached", "load_and_process_data"},
     {"FEATURE_COLUMNS", "DEFAULT_SPREAD_PIPS", "LOOKAHEAD_BARS"},
 )
 class _LoadStreamlitStub:
@@ -533,6 +533,7 @@ def test_extraction_integrity():
     抽出され、hash が再現可能であることを確認する（抽出実行の明示）。"""
     for key in (
         "app.py:flatten_yf_df",
+        "app.py:calculate_rsi",
         "app.py:_load_and_process_data_cached",
         "app.py:load_and_process_data",
         "app.py:analyze_signal_with_backtest",
@@ -586,8 +587,11 @@ def test_syn_fx_001_constant_series_safety(monkeypatch):
     out = scanner.add_indicators(f0)
     numeric = out.select_dtypes("number")
     assert not np.isinf(numeric.to_numpy(dtype=float)).any()
-    # Scanner: ゼロ loss / ゼロ幅では RSI・ADX・BB_PctB・CCI は全て欠損のまま。
-    for col in ("RSI", "ADX", "BB_PctB", "CCI"):
+    # Scanner: ゼロ gain / ゼロ loss の完全なフラット窓は RSI=50。
+    assert (out["RSI"].dropna() == 50.0).all()
+    assert _first_valid_pos(out["RSI"]) == 14
+    # ADX・BB_PctB・CCI は方向/幅が定義できず欠損のまま。
+    for col in ("ADX", "BB_PctB", "CCI"):
         assert out[col].isna().all(), col
     # ATR は TR=0.02 一定で、Wilder EWM(min_periods=14) のため位置 13 から有効。
     assert _first_valid_pos(out["ATR"]) == 13
@@ -628,8 +632,9 @@ def test_syn_fx_002_monotonic_direction(monkeypatch):
     f1, f2 = fixture_f1_rising(), fixture_f2_falling()
 
     s1 = scanner.add_indicators(f1)
-    # Scanner RSI: 上昇系列は avg_loss=0 が NaN 化され、全行欠損になる現行挙動。
-    assert s1["RSI"].isna().all()
+    # Scanner RSI: 上昇系列は avg_loss=0 のため、warm-up後は100。
+    assert _first_valid_pos(s1["RSI"]) == 14
+    assert (s1["RSI"].dropna() == 100.0).all()
     assert (s1["Return_1"].iloc[1:] > 0).all()
     assert (s1["ROC"].iloc[10:] > 0).all()
 
@@ -639,10 +644,10 @@ def test_syn_fx_002_monotonic_direction(monkeypatch):
     assert (s2["RSI"].dropna() == 0).all()
     assert (s2["ROC"].iloc[10:] < 0).all()
 
-    # App RSI: loss=0 は NaN 化の後に 50 補完されるため、完全上昇でも 100 でなく 50。
+    # App RSI: loss=0 / gain>0 の完全上昇は100。
     a1 = run_app_load(f1)
     assert a1 is not None and len(a1) > 0
-    assert (a1["RSI"] == 50).all()
+    assert (a1["RSI"] == 100).all()
     assert (a1["ROC"] > 0).all()
     a2 = run_app_load(f2)
     assert (a2["RSI"] == 0).all()
