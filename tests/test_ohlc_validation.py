@@ -192,3 +192,33 @@ def test_overfull_4h_bucket_diagnostic_is_defensive():
         diagnostics, counts, pd.Timestamp("2026-01-01 04:00", tz="UTC")
     )
     assert diagnostics["dropped_overfull_4h_buckets"] == 1
+
+def test_clean_ohlc_source_rejects_timezone_naive_index():
+    data = frame([
+        [100.0, 105.0, 95.0, 102.0],
+        [102.0, 106.0, 101.0, 103.0],
+    ])
+    data.index = pd.date_range("2026-01-01 00:00", periods=2, freq="h")
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        clean_ohlc_source(data)
+
+
+def test_clean_ohlc_source_normalizes_aware_index_to_utc():
+    data = frame([
+        [100.0, 105.0, 95.0, 102.0],
+        [102.0, 106.0, 101.0, 103.0],
+        [103.0, 107.0, 102.0, 104.0],
+        [104.0, 108.0, 103.0, 105.0],
+    ])
+    data.index = pd.date_range(
+        "2026-01-01 09:00", periods=4, freq="h", tz="Asia/Tokyo"
+    )
+
+    cleaned, diagnostics = clean_ohlc_source(data)
+
+    assert str(cleaned.index.tz) == "UTC"
+    assert cleaned.index.equals(
+        pd.date_range("2026-01-01 00:00", periods=4, freq="h", tz="UTC")
+    )
+    assert diagnostics["validated_source_rows"] == 4
