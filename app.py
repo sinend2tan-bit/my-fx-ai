@@ -2304,6 +2304,7 @@ def _render_main_area():
         if key_upper not in st.session_state: st.session_state[key_upper] = float(current_range["upper"])
         st.markdown("---")
         st.markdown("## 📋 リピート注文（ハーフ＆ハーフ）")
+        st.caption("基準価格は最新確定1時間足終値、レンジ高安とATRは有効な4時間足から計算します。")
         st.caption("広めの設定レンジを基本に、買いレンジ・売りレンジ、注文幅／利確幅、1注文数量、注文本数の目安を確認します。")
         with st.expander("⚙️ リピート注文のレンジ設定", expanded=False):
             rc1, rc2 = st.columns(2)
