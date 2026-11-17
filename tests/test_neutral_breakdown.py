@@ -216,7 +216,7 @@ def test_labels_and_counters_unchanged_by_observation(monkeypatch):
     # 観測項目の追加が既存カウンタとラベル分布を変えないこと。
     out = run_bars(monkeypatch, path_frame(continuous_index()))
     dq = quality_of(out)
-    assert scanner.MODEL_VERSION == 23
+    assert scanner.MODEL_VERSION == 24
     label_check = dq["feature_rows"] - (
         dq["dropped_label_discontinuous"]
         + dq["dropped_label_insufficient_future"]
