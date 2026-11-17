@@ -1925,7 +1925,9 @@ def _fold_completeness_diagnostics(fold_details, required_folds):
             name for name in ("sell", "neutral", "buy")
             if int(counts.get(name, 0) or 0) <= 0
         ]
-        if missing_classes:
+        fold_score = detail.get("balanced_accuracy")
+        baseline_score = detail.get("baseline_balanced_accuracy")
+        if missing_classes or fold_score is None or baseline_score is None:
             incomplete_folds.append({
                 "fold": fold_id,
                 "missing_true_classes": missing_classes,
@@ -1934,9 +1936,13 @@ def _fold_completeness_diagnostics(fold_details, required_folds):
                     for name in ("sell", "neutral", "buy")
                 },
                 "predicted_class_counts": detail.get("predicted_class_counts") or {},
-                "balanced_accuracy": detail.get("balanced_accuracy"),
-                "reason": detail.get("balanced_accuracy_reason") or
-                    "true support missing for one or more fixed classes",
+                "balanced_accuracy": fold_score,
+                "baseline_balanced_accuracy": baseline_score,
+                "reason": detail.get("balanced_accuracy_reason") or (
+                    "fold or baseline balanced accuracy is undefined"
+                    if fold_score is None or baseline_score is None
+                    else "true support missing for one or more fixed classes"
+                ),
             })
 
     complete = not (
