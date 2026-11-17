@@ -1427,9 +1427,9 @@ def test_tl17_two_separated_gaps_first_bad_pair_and_single_count(monkeypatch):
     特徴量の区間分離後は、最初の欠損直後のwarm-up行が落ちるため、
     2つ目の欠損は十分に離し、両方の区間境界が特徴量フレームに残る条件にする。
     """
-    index = fx_week_index(700)
+    index = fx_week_index(1000)
     raw = path_frame(index)
-    raw = raw.drop(index=[index[200], index[250]])
+    raw = raw.drop(index=[index[300], index[600]])
     out = run_bars(monkeypatch, raw)
     dq = quality_of(out)
     audit = audit_of(out)
