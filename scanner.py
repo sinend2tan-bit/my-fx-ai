@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from aifx_ohlc_validation import ohlc_valid_mask
+
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix
@@ -1401,17 +1403,16 @@ def bars(ticker, interval="1h", period="60d"):
         # 古い重複行へ戻らず、その timestamp 自体を除外する。
         oc_max = raw[["Open", "Close"]].max(axis=1)
         oc_min = raw[["Open", "Close"]].min(axis=1)
-        ohlc_ok = (
-            (raw["High"] >= oc_max)
-            & (raw["Low"] <= oc_min)
-            & (raw["High"] >= raw["Low"])
-            & (raw[required] > 0).all(axis=1)
-        ).to_numpy()
+        ohlc_ok = ohlc_valid_mask(raw, required).to_numpy()
         data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
         raw = raw.loc[ohlc_ok].copy()
     else:
         raw = raw.dropna(subset=required)
         raw = raw[~raw.index.duplicated(keep="last")].sort_index()
+        if interval == "4h":
+            # Reject invalid source 1h candles before aggregation; otherwise the
+            # resampled high/low can conceal impossible source OHLC geometry.
+            raw = raw.loc[ohlc_valid_mask(raw, required)].copy()
 
     # timezone-aware timestamps are converted to UTC for a consistent internal index.
     # Naive timestamps are never silently assigned a timezone. For non-4h
