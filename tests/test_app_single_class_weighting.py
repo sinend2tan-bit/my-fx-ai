@@ -64,7 +64,7 @@ def test_app_model_version_invalidates_models_trained_with_double_weighting():
         if isinstance(node, ast.Assign)
         and any(isinstance(target, ast.Name) and target.id == "MODEL_VERSION" for target in node.targets)
     )
-    assert version == 9
+    assert version == 10
 
 
 def _extract_purge_helper():
@@ -103,3 +103,48 @@ def test_embargo_fails_closed_for_unknown_or_duplicate_original_timestamps():
     duplicate = original.insert(2, original[1])
     with pytest.raises(pd.errors.InvalidIndexError):
         purge(duplicate, pd.DatetimeIndex([original[0]]), original[4], 2)
+
+
+def _extract_fixed_metrics_helper():
+    import numpy as np
+
+    tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
+    node = next(
+        item for item in tree.body
+        if isinstance(item, ast.FunctionDef)
+        and item.name == "_fixed_class_metrics"
+    )
+    labels = next(
+        item.value for item in tree.body
+        if isinstance(item, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "APP_CLASS_LABELS" for target in item.targets)
+    )
+    namespace = {"np": np}
+    exec(compile(ast.Module(body=[ast.Assign(targets=[ast.Name(id="APP_CLASS_LABELS", ctx=ast.Store())], value=labels), node], type_ignores=[]), str(APP_PATH), "exec"), namespace)
+    return namespace["_fixed_class_metrics"]
+
+
+def test_app_fixed_class_balanced_accuracy_requires_all_true_classes():
+    metrics = _extract_fixed_metrics_helper()
+    balanced, recalls, complete, supports = metrics(
+        [-1, -1, 0, 0, 1, 1], [-1, 0, 0, 0, 1, -1]
+    )
+    assert complete is True
+    assert supports == [2, 2, 2]
+    assert recalls == [0.5, 1.0, 0.5]
+    assert balanced == 2.0 / 3.0
+
+    balanced, recalls, complete, supports = metrics(
+        [-1, -1, 0, 0], [-1, 0, 0, 0]
+    )
+    assert complete is False
+    assert supports == [2, 2, 0]
+    assert recalls == [0.5, 1.0, None]
+    assert balanced is None
+
+
+def test_app_holds_signal_when_three_class_holdout_is_incomplete():
+    function = _analysis_function()
+    source = ast.unparse(function)
+    assert "if not validation_complete" in source
+    assert "return fallback" in source
