@@ -12,7 +12,11 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from aifx_ohlc_validation import ohlc_valid_mask
+from aifx_ohlc_validation import (
+    add_4h_bucket_diagnostics,
+    clean_ohlc_source,
+    ohlc_valid_mask,
+)
 
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -1336,6 +1340,7 @@ def bars(ticker, interval="1h", period="60d"):
     # → (4) 特徴量計算による除外。各行は最初に該当した理由で一度だけ
     # 計上し、2つの検算式が意味的にも成立するようにする。
     data_quality = None
+    source_ohlc_diagnostics = None
     if interval == "1h":
         data_quality = {
             "input_rows": 0,
@@ -1405,12 +1410,19 @@ def bars(ticker, interval="1h", period="60d"):
         data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
         raw = raw.loc[ohlc_ok].copy()
     else:
-        raw = raw.dropna(subset=required)
-        raw = raw[~raw.index.duplicated(keep="last")].sort_index()
         if interval == "4h":
-            # Reject invalid source 1h candles before aggregation; otherwise the
-            # resampled high/low can conceal impossible source OHLC geometry.
-            raw = raw.loc[ohlc_valid_mask(raw, required)].copy()
+            if not isinstance(raw.index, pd.DatetimeIndex):
+                print(
+                    f"[TIMEZONE STOP] {ticker} {interval}: index is not a DatetimeIndex; "
+                    "cannot establish 4h bucket boundaries"
+                )
+                return None
+            # Keep reason-specific 4h source diagnostics separate from the
+            # Stage 1 C-1 counters (which intentionally remain 1h-only).
+            raw, source_ohlc_diagnostics = clean_ohlc_source(raw, required)
+        else:
+            raw = raw.dropna(subset=required)
+            raw = raw[~raw.index.duplicated(keep="last")].sort_index()
 
     # timezone-aware timestamps are converted to UTC for a consistent internal index.
     # Naive timestamps are never silently assigned a timezone. For non-4h
@@ -1475,6 +1487,18 @@ def bars(ticker, interval="1h", period="60d"):
         hourly_counts = raw["Close"].resample(
             "4h", origin="start_day"
         ).count()
+        add_4h_bucket_diagnostics(source_ohlc_diagnostics, hourly_counts, cutoff)
+        print(
+            f"[4H SOURCE QUALITY] {ticker}: "
+            f"input={source_ohlc_diagnostics['input_rows']}, "
+            f"invalid_timestamp={source_ohlc_diagnostics['dropped_invalid_timestamp']}, "
+            f"missing_nonfinite={source_ohlc_diagnostics['dropped_missing_or_nonfinite']}, "
+            f"duplicates={source_ohlc_diagnostics['dropped_duplicate_timestamp']}, "
+            f"invalid_ohlc={source_ohlc_diagnostics['dropped_invalid_ohlc']}, "
+            f"valid_source={source_ohlc_diagnostics['validated_source_rows']}, "
+            f"complete_4h={source_ohlc_diagnostics['complete_4h_buckets']}, "
+            f"incomplete_4h={source_ohlc_diagnostics['dropped_incomplete_4h_buckets']}"
+        )
 
         # UTCの4時間区間に集約する。
         raw = raw.resample("4h", origin="start_day").agg({
@@ -1509,6 +1533,8 @@ def bars(ticker, interval="1h", period="60d"):
      # ここで作る指標データは、最新の確定足を含む。
     rows_before_features = len(raw) if data_quality is not None else None
     feature_df = add_indicators(raw)
+    if source_ohlc_diagnostics is not None:
+        feature_df.attrs["source_ohlc_diagnostics"] = dict(source_ohlc_diagnostics)
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
     # Vol_Ratioは診断用に残すが、定数になりやすいため学習特徴量から除外する。
@@ -1809,6 +1835,8 @@ def bars(ticker, interval="1h", period="60d"):
     training_df.attrs["latest_features"] = feature_df.copy()
     if data_quality is not None:
         training_df.attrs["data_quality"] = data_quality
+    if source_ohlc_diagnostics is not None:
+        training_df.attrs["source_ohlc_diagnostics"] = dict(source_ohlc_diagnostics)
     # 段階3: 監査フレームは1時間足の経路でのみ生成・保持する（仕様書3.5）。
     # 4時間足・日足には付与しない。永続化せず、特徴量・予測記録・
     # 公開ステータスには含めない。
