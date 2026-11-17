@@ -30,9 +30,10 @@ JST = ZoneInfo("Asia/Tokyo")
 STATE_FILE = "scan_state.json"
 _STATE_LOAD_ERROR = None
 LOOKAHEAD_BARS = 8
-# 特徴量計算に必要な最小の足本数（加工後）。最も遅い指標である EMA200 が
-# 有効になるには 200 本が必要で、残りは他の指標とラベル付けの余裕分。
-# bars() の事前チェックも、この値を基準に経路ごとに算出する。
+# 1h の EMA200 は200観測後に有効化する。Scanner の学習行数下限を満たす
+# ための1h raw本数は、ウォームアップ199 + 未来窓8 + 学習180 = 387本。
+EMA200_MIN_PERIODS = 200
+# 非1hの従来経路で使う加工後の最低本数（4hは完成した4h足220本）。
 MIN_FEATURE_BARS = 220
 MIN_TRAIN_ROWS = 180
 N_WALK_FORWARD_FOLDS = 3
@@ -1183,7 +1184,7 @@ def add_indicators(df, require_full_ema200=False):
     sma20 = close.rolling(20).mean()
     ema20 = close.ewm(span=20, adjust=False).mean()
     ema200 = (
-        ema_with_warmup(close, 200)
+        ema_with_warmup(close, EMA200_MIN_PERIODS)
         if require_full_ema200
         else close.ewm(span=200, adjust=False).mean()
     )
@@ -1447,7 +1448,9 @@ def bars(ticker, interval="1h", period="60d"):
     if interval == "4h":
         min_raw_bars = 4 * MIN_FEATURE_BARS
     elif interval == "1h":
-        min_raw_bars = MIN_FEATURE_BARS
+        min_raw_bars = (
+            EMA200_MIN_PERIODS - 1 + MIN_TRAIN_ROWS + LOOKAHEAD_BARS
+        )
     else:
         min_raw_bars = MIN_FEATURE_BARS + 1
     if len(raw) < min_raw_bars:
