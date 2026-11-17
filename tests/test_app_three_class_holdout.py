@@ -61,4 +61,5 @@ def test_app_holds_signal_when_three_class_holdout_is_incomplete():
     assert "if not validation_complete" in source
     assert "st.warning" in source
     assert "return fallback" in source
-    assert "saved[\"model\"].classes_" in source
+    assert "classes_" in source
+    assert "APP_CLASS_LABELS" in source
