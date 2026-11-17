@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from aifx_time_validation import has_contiguous_hourly_window
+from aifx_time_validation import has_contiguous_hourly_window, split_hourly_segments
 
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -1167,7 +1167,7 @@ def calculate_atr(df, period=14):
     ).mean()
 
 
-def _add_indicators_single_segment(df):
+def add_indicators(df):
     df = df.copy()
 
     close = df["Close"]
@@ -1270,38 +1270,6 @@ def _add_indicators_single_segment(df):
     df = df.replace([np.inf, -np.inf], np.nan)
     return df
 
-
-def add_indicators(df, segment_hourly=False):
-    """Calculate indicators; reset rolling state at every invalid hourly gap."""
-    if not segment_hourly:
-        return _add_indicators_single_segment(df)
-
-    if (
-        not isinstance(df.index, pd.DatetimeIndex)
-        or df.index.tz is None
-        or df.index.hasnans
-        or df.index.has_duplicates
-        or not df.index.is_monotonic_increasing
-    ):
-        raise ValueError("hourly indicator input must have unique, ordered, timezone-aware timestamps")
-
-    segments = []
-    start = 0
-    for position in range(1, len(df)):
-        if not has_contiguous_hourly_window(df.index[position - 1:position + 1]):
-            if start < position:
-                segments.append(df.iloc[start:position].copy())
-            start = position
-    if start < len(df):
-        segments.append(df.iloc[start:].copy())
-
-    if not segments:
-        return df.iloc[0:0].copy()
-
-    # Compute every segment independently; keep original timestamps and order.
-    return pd.concat(
-        [_add_indicators_single_segment(segment) for segment in segments]
-    ).sort_index()
 
 
 # =========================================================
@@ -1546,11 +1514,15 @@ def bars(ticker, interval="1h", period="60d"):
     # rolling/EMA/return状態を引き継がず、週末休場だけを許容する。
     latest_confirmed_index = raw.index[-1] if interval == "1h" else None
     rows_before_features = len(raw) if data_quality is not None else None
-    feature_df = (
-        add_indicators(raw, segment_hourly=True)
-        if interval == "1h"
-        else add_indicators(raw)
-    )
+    if interval == "1h":
+        hourly_segments = split_hourly_segments(raw)
+        feature_df = (
+            pd.concat([add_indicators(segment) for segment in hourly_segments]).sort_index()
+            if hourly_segments
+            else raw.iloc[0:0].copy()
+        )
+    else:
+        feature_df = add_indicators(raw)
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
     # Vol_Ratioは診断用に残すが、定数になりやすいため学習特徴量から除外する。
