@@ -1073,7 +1073,13 @@ def _valid_app_model_payload(ns):
         "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio", "Stoch_K", "CCI", "ROC",
     ]
     model = RandomForestClassifier(n_estimators=2, random_state=0)
-    model.fit([[0.0] * len(features), [1.0] * len(features)], [-1, 1])
+    model.fit(
+        pd.DataFrame(
+            [[0.0] * len(features), [1.0] * len(features)],
+            columns=features,
+        ),
+        [-1, 1],
+    )
     ns.update({
         "joblib": joblib,
         "MODEL_VERSION": 8,
