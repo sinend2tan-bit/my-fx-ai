@@ -52,7 +52,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import scanner  # noqa: E402
-from aifx_time_validation import has_contiguous_hourly_window  # noqa: E402
+from aifx_time_validation import (  # noqa: E402
+    has_contiguous_hourly_window,
+    split_hourly_segments,
+)
 
 UTC = "UTC"
 START = pd.Timestamp("2026-01-05 00:00", tz=UTC)  # Monday
@@ -449,6 +452,7 @@ APP_LOAD_NS = {
     "yf": _yf_app,
     "st": _LoadStreamlitStub(),
     "has_contiguous_hourly_window": has_contiguous_hourly_window,
+    "split_hourly_segments": split_hourly_segments,
     "_LOAD_STOP_REASONS": {},
     "_LOAD_STOP_WARNED": set(),
 }
