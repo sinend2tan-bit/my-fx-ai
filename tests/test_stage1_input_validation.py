@@ -304,7 +304,7 @@ def test_scanner_4h_not_stopped_by_stage1_gate(monkeypatch):
 
 
 def test_scanner_version_and_status_record():
-    assert scanner.MODEL_VERSION == 21
+    assert scanner.MODEL_VERSION == 22
     source = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
     assert "v19_" not in source
     dq = {
@@ -694,9 +694,9 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
     return tmp_path / filename
 
 
-def test_app_model_version_is_8():
-    # 段階1で 6→7、段階2（SYN-FX-017）で 7→8。
-    assert _app_literal("MODEL_VERSION") == 8
+def test_app_model_version_is_9():
+    # 段階1/2 の 8 から、1h feature segmentation の cache invalidation で 9。
+    assert _app_literal("MODEL_VERSION") == 9
 
 
 def test_app_clears_stale_model_save_status_at_start():
@@ -713,16 +713,16 @@ def test_app_clears_stale_model_save_status_at_start():
 
 def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 7, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
     assert result is not None
-    # 学習可能なデータでは品質ゲートを通過し、新版（8）で保存し直される。
+    # 学習可能なデータでは品質ゲートを通過し、新版（9）で保存し直される。
     # 旧版ファイルが再利用されていれば、この保存は起きない。
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 8
+    assert saved["version"] == 9
     assert saved["model"].n_estimators == 260  # 新規学習した候補モデル
 
 
@@ -754,7 +754,7 @@ def test_app_current_version_model_reused(tmp_path, monkeypatch):
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
     assert result is not None
-    # 新版（8）で鮮度内の保存済みモデルは従来どおり再利用され、
+    # 新版（9）で鮮度内の保存済みモデルは従来どおり再利用され、
     # ファイルは書き換わらない（再利用の仕組み自体は壊していない）。
     assert path.read_bytes() == before
 
