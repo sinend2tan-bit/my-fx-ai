@@ -322,7 +322,8 @@ def test_app_indicators_reset_after_weekday_gap():
     assert out is not None
     assert st.warnings == []
     first_after_gap = idx[gap_pos + 1]
-    later_after_gap = idx[gap_pos + 30]
+    # 1h EMA200 は区間の先頭から200本蓄積した後に初めて有効。
+    later_after_gap = idx[gap_pos + 210]
     assert first_after_gap not in out.index
     assert later_after_gap in out.index
 
