@@ -12,6 +12,11 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from aifx_time_validation import (
+    forward_hourly_bar_gap_allowed,
+    split_hourly_segments,
+)
+
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix
@@ -1508,8 +1513,17 @@ def bars(ticker, interval="1h", period="60d"):
         return None
 
      # ここで作る指標データは、最新の確定足を含む。
+    latest_confirmed_timestamp = (
+        raw.index[-1] if interval == "1h" and not raw.empty else None
+    )
     rows_before_features = len(raw) if data_quality is not None else None
-    feature_df = add_indicators(raw)
+    if interval == "1h":
+        hourly_segments = split_hourly_segments(raw)
+        feature_df = pd.concat(
+            [add_indicators(segment) for segment in hourly_segments]
+        ).sort_index() if hourly_segments else raw.iloc[0:0].copy()
+    else:
+        feature_df = add_indicators(raw)
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
     # Vol_Ratioは診断用に残すが、定数になりやすいため学習特徴量から除外する。
@@ -1526,6 +1540,16 @@ def bars(ticker, interval="1h", period="60d"):
     feature_df = feature_df.dropna(
         subset=FEATURE_COLUMNS + ["ATR", "Close"]
     )
+
+    # Never select a stale pre-gap feature row as the current signal.
+    if interval == "1h" and (
+        feature_df.empty or feature_df.index[-1] != latest_confirmed_timestamp
+    ):
+        print(
+            f"[FEATURE STOP] {ticker} {interval}: "
+            "latest confirmed bar is not feature-eligible in its own segment"
+        )
+        return None
 
     if data_quality is not None:
         # (4) 特徴量計算による除外。
@@ -3410,29 +3434,8 @@ def normalize_forward_stats(stats):
 
 
 def _forward_bar_gap_allowed(prev_ts, next_ts):
-    """評価ウィンドウ内の隣り合う足の時刻差が許容範囲かを返す。
-
-    許容するのは次の2つだけ。
-    - ちょうど1時間（通常の連続した1時間足）
-    - 週末の市場休場をまたぐジャンプ: 前の足が金曜（または土曜）で
-      次の足が月曜、かつ差が80時間以内
-      （実データでは金曜21時→月曜0時の約51〜52時間が通常の週末休場）
-    平日の2時間以上の欠けなど、それ以外の差は欠損として扱う。
-    時刻の曜日は各タイムスタンプ自身のタイムゾーンで判定する。
-    時刻差が正でないペア（重複・逆順）は不連続として扱う。
-    """
-    diff = next_ts - prev_ts
-    # 段階3（B-2／U-1）: 時刻差が正であることを必須条件とする。重複
-    # （差がゼロ）・逆順（差が負）は週末ジャンプの判定に進まず不連続と
-    # する。正常な昇順入力に対する判定結果は従来と変わらない。
-    if diff <= pd.Timedelta(0):
-        return False
-    if diff == pd.Timedelta(hours=1):
-        return True
-    if prev_ts.weekday() in (4, 5) and next_ts.weekday() == 0:
-        return diff <= pd.Timedelta(hours=80)
-    return False
-
+    """Compatibility wrapper around the shared hourly continuity rule."""
+    return forward_hourly_bar_gap_allowed(prev_ts, next_ts)
 
 def evaluate_forward_prediction(prediction, ohlc_df):
     """PENDING予測1件を、シグナル足の直後8本の実際のOHLCで判定する。
