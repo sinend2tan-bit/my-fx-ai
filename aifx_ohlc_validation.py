@@ -36,6 +36,7 @@ def ohlc_valid_mask(frame, required=None):
     valid = finite_positive & (high >= oc_max) & (low <= oc_min) & (high >= low)
     return pd.Series(valid, index=frame.index, dtype=bool)
 
+
 def clean_ohlc_source(frame, required=None):
     """Clean 1h source rows for 4h aggregation and return reason-specific counts.
 
