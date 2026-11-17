@@ -27,8 +27,8 @@
   App 4h は段階1では従来どおりだったが、段階2（SYN-FX-017）で UTC
   統一・完全性判定に変更された（tests/test_stage2_4h_aggregation.py）。
   どちらの段階でも 4h に data_quality は付かない。
-- モデル版管理: App MODEL_VERSION 10（段階1で 6→7、段階2で 7→8、RSI修正で 8→9、1h区間分離で 9→10）/
-  Scanner MODEL_VERSION 23（RSI修正で 21→22、1h区間分離で 22→23）。
+- モデル版管理: App MODEL_VERSION 11（段階1で 6→7、段階2で 7→8、RSI修正で 8→9、1h区間分離で 9→10）/
+  Scanner MODEL_VERSION 24（RSI修正で 21→22、1h区間分離で 22→23）。
   旧版（App version 9）の保存済みモデルは再利用されない。品質ゲートを
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
   評価モデルが使われ、旧ファイルは上書きされない。新版（10）の保存済み
@@ -301,7 +301,7 @@ def test_scanner_4h_not_stopped_by_stage1_gate(monkeypatch):
 
 
 def test_scanner_version_and_status_record():
-    assert scanner.MODEL_VERSION == 23
+    assert scanner.MODEL_VERSION == 24
     source = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
     assert "v19_" not in source
     dq = {
@@ -690,9 +690,9 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
     return tmp_path / filename
 
 
-def test_app_model_version_is_10():
+def test_app_model_version_is_11():
     # 段階1で 6→7、段階2で 7→8、今回の1h gap契約で 8→9。
-    assert _app_literal("MODEL_VERSION") == 10
+    assert _app_literal("MODEL_VERSION") == 11
 
 
 def test_app_clears_stale_model_save_status_at_start():
@@ -719,7 +719,7 @@ def test_app_old_version_model_not_reused(tmp_path, monkeypatch, old_version):
     # 旧版ファイルが再利用されていれば、この保存は起きない。
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 10
+    assert saved["version"] == 11
     assert saved["model"].n_estimators == 260  # 新規学習した候補モデル
 
 
@@ -768,7 +768,7 @@ def test_app_forced_retrain_replaces_old_model_only_after_validation(tmp_path, m
     assert result is not None
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 10
+    assert saved["version"] == 11
     assert saved["model"].n_estimators == 260
     assert path.read_bytes() != before
     assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
@@ -799,7 +799,7 @@ def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch)
 
     monkeypatch.setattr(ns["joblib"], "dump", fail_dump)
     payload = {
-        "version": 10,
+        "version": 11,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -818,7 +818,7 @@ def test_app_atomic_save_reload_failure_preserves_old_model(tmp_path, monkeypatc
 
     monkeypatch.setattr(ns["joblib"], "load", fail_load)
     payload = {
-        "version": 10,
+        "version": 11,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -836,14 +836,14 @@ def test_app_atomic_save_rejects_invalid_candidate_and_preserves_old_model(
     before = path.read_bytes()
     candidate = _tiny_model(single_class=(invalid_kind == "single_class"))
     payload = {
-        "version": 9 if invalid_kind == "version" else 10,
+        "version": 10 if invalid_kind == "version" else 11,
         "features": ["wrong"] if invalid_kind == "features" else _app_literal("FEATURE_COLUMNS"),
         "model": object() if invalid_kind == "model_type" else candidate,
     }
     monkeypatch.setattr(ns["joblib"], "load", lambda _path: payload)
 
     assert ns["_save_trained_model"](str(path), {
-        "version": 10,
+        "version": 11,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": candidate,
     }) is False
@@ -861,7 +861,7 @@ def test_app_atomic_save_replace_failure_preserves_old_model(tmp_path, monkeypat
 
     monkeypatch.setattr(ns["os"], "replace", fail_replace)
     payload = {
-        "version": 10,
+        "version": 11,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -881,7 +881,7 @@ def test_app_atomic_save_without_old_model_leaves_no_partial_file_on_failure(
 
     monkeypatch.setattr(ns["os"], "replace", fail_replace)
     payload = {
-        "version": 10,
+        "version": 11,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
