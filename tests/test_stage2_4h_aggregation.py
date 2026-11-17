@@ -463,14 +463,26 @@ def _freeze_now(monkeypatch, fixed):
     )
 
 
-def test_scanner_4h_tz_naive_fails_closed_without_utc_assumption(monkeypatch):
-    frame = make_frame(n=1600, tz="UTC", seed=26)
-    frame.index = frame.index.tz_localize(None)
-    stub_scanner_download(monkeypatch, frame)
+def test_scanner_4h_tz_naive_preserves_legacy_utc_localization(monkeypatch):
+    # PR #27 / SYN-FX-017 intentionally preserves Scanner 4h's legacy
+    # UTC-localization behavior. App 4h remains fail-closed for naive input.
+    naive = make_frame(n=1600, tz="UTC", seed=26)
+    naive.index = naive.index.tz_localize(None)
+    aware = naive.copy()
+    aware.index = aware.index.tz_localize("UTC")
 
-    result = scanner.bars("USDJPY=X", interval="4h", period="90d")
+    stub_scanner_download(monkeypatch, naive)
+    naive_result = scanner.bars("USDJPY=X", interval="4h", period="90d")
+    assert naive_result is not None
 
-    assert result is None
+    stub_scanner_download(monkeypatch, aware)
+    aware_result = scanner.bars("USDJPY=X", interval="4h", period="90d")
+    assert aware_result is not None
+
+    pd.testing.assert_frame_equal(
+        naive_result.attrs["latest_features"],
+        aware_result.attrs["latest_features"],
+    )
 
 
 def _run_both_4h(monkeypatch, frame):
