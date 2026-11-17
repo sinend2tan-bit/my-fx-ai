@@ -1681,6 +1681,9 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         # Incomplete three-class evidence is not a weak pass or a usable signal.
         # Hold the App output rather than promoting or emitting a direction.
         if not validation_complete:
+            st.warning(
+                "学習期間または評価期間で売り・中立・買いの3クラスが揃わないため、今回の方向判定を保留しました。"
+            )
             return fallback
 
         # History contains only truly out-of-sample test predictions; prior bars are NaN.
