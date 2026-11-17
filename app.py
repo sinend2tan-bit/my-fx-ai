@@ -711,18 +711,38 @@ def update_entry_tracking_outcomes(items, df, ticker, interval, horizon=8):
             positions = future_positions[:horizon]
             price = float(item["candidate_price"])
             hit_position = None
+            discontinuous = False
+            previous_ts = saved_ts
+            evaluated_positions = 0
             for pos in positions:
+                current_ts = idx_utc[int(pos)]
+                # 1時間足の候補価格追跡でも、欠損時間をまたいで
+                # horizon 本を数えない。予測履歴・学習ラベルと同じ
+                # 連続性ルールを適用し、曖昧な結果は採点しない。
+                if interval == "1h" and not has_contiguous_hourly_window(
+                    pd.DatetimeIndex([previous_ts, current_ts])
+                ):
+                    item["status"] = "UNEVALUABLE_DISCONTINUOUS"
+                    item["evaluated_at"] = datetime.now(JST).isoformat()
+                    item["evaluation_note"] = "評価期間中に1時間足の不連続があるため候補価格を採点対象外"
+                    changed = True
+                    discontinuous = True
+                    break
+                previous_ts = current_ts
+                evaluated_positions += 1
                 row = df.iloc[int(pos)]
                 if float(row["Low"]) <= price <= float(row["High"]):
                     hit_position = int(pos)
                     break
+            if discontinuous:
+                continue
             if hit_position is not None:
                 item["status"] = "HIT"
                 item["bars_to_touch"] = int(np.flatnonzero(positions == hit_position)[0]) + 1
                 item["touch_bar_timestamp"] = _normalise_timestamp(idx[hit_position])
                 item["evaluated_at"] = datetime.now(JST).isoformat()
                 changed = True
-            elif len(future_positions) >= horizon:
+            elif evaluated_positions >= horizon:
                 item["status"] = "NOT_REACHED"
                 item["evaluated_at"] = datetime.now(JST).isoformat()
                 changed = True
