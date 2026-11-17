@@ -1305,7 +1305,7 @@ def _app_literal(name):
 
 
 def test_tv1_model_versions():
-    """T-V1: Scanner は 21、App は 8 のまま。"""
+    """T-V1: Scanner は 21、App は 10。"""
     assert scanner.MODEL_VERSION == 21
     assert _app_literal("MODEL_VERSION") == 10
 
