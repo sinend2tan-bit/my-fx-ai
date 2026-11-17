@@ -1868,6 +1868,24 @@ def _purged_train_mask(source_positions, test_start_position, lookahead):
     return positions + horizon < boundary
 
 
+def _fixed_class_metrics(y_true, y_pred):
+    """Return fixed-label confusion matrix and metrics only when all true classes are present.
+
+    Fold-level balanced accuracy is not comparable when a test fold omits a class:
+    sklearn's default balanced_accuracy_score silently averages only observed classes.
+    Preserve undefined per-class recall as None rather than reporting it as zero.
+    """
+    labels = [-1, 0, 1]
+    matrix = confusion_matrix(y_true, y_pred, labels=labels)
+    support = matrix.sum(axis=1)
+    recalls = [
+        None if int(support[i]) == 0 else float(matrix[i, i] / support[i])
+        for i in range(len(labels))
+    ]
+    complete = bool(np.all(support > 0))
+    score = float(np.mean(recalls)) if complete else None
+    return matrix, score, recalls
+
 # =========================================================
 # 時系列検証
 def walk_forward_validation(df, pair_name="通貨ペア不明"):
@@ -2179,9 +2197,8 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 f"fold={fold}, top5={top_features}"
             )
 
-            cm = confusion_matrix(
-                test_y, pred, labels=[-1, 0, 1]
-            ).tolist()
+            cm_array, fold_score, fold_recall = _fixed_class_metrics(test_y, pred)
+            cm = cm_array.tolist()
 
             sell_to_buy_rate = (
                 cm[0][2] / sum(cm[0]) * 100
@@ -2198,25 +2215,18 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             baseline.fit(train_X, train_y)
             baseline_pred = baseline.predict(test_X)
 
-            fold_score = balanced_accuracy_score(
-                test_y, pred
-            )
-            fold_base = balanced_accuracy_score(
-                test_y, baseline_pred
-            )
-
-            fold_recall = recall_score(
-                test_y,
-                pred,
-                labels=[-1, 0, 1],
-                average=None,
-                zero_division=0,
-            )
+            _, fold_base, _ = _fixed_class_metrics(test_y, baseline_pred)
 
             recalls = {
-                "sell": round(float(fold_recall[0] * 100), 1),
-                "neutral": round(float(fold_recall[1] * 100), 1),
-                "buy": round(float(fold_recall[2] * 100), 1),
+                "sell": None if fold_recall[0] is None else round(fold_recall[0] * 100, 1),
+                "neutral": None if fold_recall[1] is None else round(fold_recall[1] * 100, 1),
+                "buy": None if fold_recall[2] is None else round(fold_recall[2] * 100, 1),
+            }
+            fold_score_text = f"{fold_score:.4f}" if fold_score is not None else "N/A (missing true class)"
+            fold_base_text = f"{fold_base:.4f}" if fold_base is not None else "N/A (missing true class)"
+            recall_text = {
+                key: "N/A" if value is None else f"{value:.1f}%"
+                for key, value in recalls.items()
             }
 
             train_counts = class_counts(train_y)
@@ -2240,11 +2250,11 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "test_source_start": int(test_start_source_position),
                 "test_start": fold_start,
                 "test_end": fold_end_time,
-                "balanced_accuracy": round(
-                    float(fold_score), 4
-                ),
-                "baseline_balanced_accuracy": round(
-                    float(fold_base), 4
+                "balanced_accuracy": round(fold_score, 4) if fold_score is not None else None,
+                "baseline_balanced_accuracy": round(fold_base, 4) if fold_base is not None else None,
+                "balanced_accuracy_reason": (
+                    "" if fold_score is not None
+                    else "テストfoldの実測値に全クラスが揃わないため算出対象外"
                 ),
                 "class_recall_pct": recalls,
                 "train_class_counts": train_counts,
@@ -2262,10 +2272,10 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 f"test={fold_start}..{fold_end_time}, "
                 f"train_rows={len(train_X)}, "
                 f"test_rows={len(test_X)}, "
-                f"score={fold_score:.4f}, "
-                f"baseline={fold_base:.4f}, "
-                f"buy_recall={recalls['buy']:.1f}%, "
-                f"sell_recall={recalls['sell']:.1f}%, "
+                f"score={fold_score_text}, "
+                f"baseline={fold_base_text}, "
+                f"buy_recall={recall_text['buy']}, "
+                f"sell_recall={recall_text['sell']}, "
                 f"train_counts={train_counts}, "
                 f"actual_counts={true_counts}, "
                 f"predicted_counts={pred_counts}, "
