@@ -240,7 +240,7 @@ def test_saved_candidate_outcomes_continue_without_history_ui(rig):
     assert not at.exception, f"app raised: {[e.value for e in at.exception]}"
     saved = json.loads(history_path.read_text(encoding="utf-8"))
     assert len(saved) == 1
-    assert saved[0]["status"] == "NOT_REACHED"
+    assert saved[0]["status"] == "UNEVALUABLE_DISCONTINUOUS"
     assert saved[0].get("evaluated_at")
 
 
