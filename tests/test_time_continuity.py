@@ -211,6 +211,7 @@ def _app_load_and_process_with_frame(frame):
         "pd": pd,
         "np": np,
         "ema_with_warmup": ema_with_warmup,
+        "EMA200_MIN_PERIODS": literal("EMA200_MIN_PERIODS"),
         "yf": YFinanceStub,
         "st": st,
         "FEATURE_COLUMNS": literal("FEATURE_COLUMNS"),
