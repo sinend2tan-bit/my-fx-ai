@@ -434,7 +434,7 @@ def _extract_scanner_nested(outer_name, inner_names):
 _yf_app = YFStub()
 _app_load_mod = _extract_app_module(
     {"flatten_yf_df", "_load_and_process_data_cached", "load_and_process_data"},
-    {"FEATURE_COLUMNS", "DEFAULT_SPREAD_PIPS", "LOOKAHEAD_BARS"},
+    {"FEATURE_COLUMNS", "DEFAULT_SPREAD_PIPS", "LOOKAHEAD_BARS", "EMA200_MIN_PERIODS"},
 )
 class _LoadStreamlitStub:
     def __init__(self):
