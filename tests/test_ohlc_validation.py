@@ -106,7 +106,9 @@ def test_clean_ohlc_source_counts_each_first_exclusion_reason():
         "validated_source_rows": 6,
         "completed_4h_buckets": 2,
         "complete_4h_buckets": 0,
-        "dropped_incomplete_4h_buckets": 2,
+        "dropped_underfull_4h_buckets": 2,
+        "dropped_overfull_4h_buckets": 0,
+        "dropped_non_four_4h_buckets": 2,
     }
     assert hourly_counts.tolist() == [3, 3]
 
@@ -135,3 +137,38 @@ def test_duplicate_order_matches_legacy_missing_then_keep_last_contract():
     assert diagnostics["dropped_duplicate_timestamp"] == 1
     assert diagnostics["dropped_invalid_ohlc"] == 1
     assert diagnostics["validated_source_rows"] == 1
+
+def test_4h_diagnostics_distinguish_underfull_and_overfull_buckets():
+    index = pd.DatetimeIndex([
+        "2026-01-01 00:00",
+        "2026-01-01 00:30",
+        "2026-01-01 01:00",
+        "2026-01-01 02:00",
+        "2026-01-01 03:00",
+        "2026-01-01 04:00",
+        "2026-01-01 05:00",
+        "2026-01-01 06:00",
+    ], tz="UTC")
+    data = frame([
+        [100.0, 105.0, 95.0, 102.0],
+        [102.0, 106.0, 101.0, 103.0],
+        [103.0, 107.0, 102.0, 104.0],
+        [104.0, 108.0, 103.0, 105.0],
+        [105.0, 109.0, 104.0, 106.0],
+        [106.0, 110.0, 105.0, 107.0],
+        [107.0, 111.0, 106.0, 108.0],
+        [108.0, 112.0, 107.0, 109.0],
+    ])
+    data.index = index
+    cleaned, diagnostics = clean_ohlc_source(data)
+    counts = cleaned["Close"].resample("4h", origin="start_day").count()
+    add_4h_bucket_diagnostics(
+        diagnostics, counts, pd.Timestamp("2026-01-01 08:00", tz="UTC")
+    )
+
+    assert counts.tolist() == [5, 3]
+    assert diagnostics["completed_4h_buckets"] == 2
+    assert diagnostics["complete_4h_buckets"] == 0
+    assert diagnostics["dropped_underfull_4h_buckets"] == 1
+    assert diagnostics["dropped_overfull_4h_buckets"] == 1
+    assert diagnostics["dropped_non_four_4h_buckets"] == 2
