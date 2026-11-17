@@ -1414,15 +1414,10 @@ def bars(ticker, interval="1h", period="60d"):
         raw = raw[~raw.index.duplicated(keep="last")].sort_index()
 
     # timezone-aware timestamps are converted to UTC for a consistent internal index.
-    # Naive timestamps are never silently assigned a timezone. For non-4h
-    # intervals the timezone cannot be established from a naive index, so
-    # analysis/label processing is halted (stage 0 measured every 1d index as
-    # tz-naive). The 4h path keeps its existing behavior in the branch below
-    # (4h changes are stage 2 scope).
+    # A timezone-naive index cannot establish absolute 4h bucket boundaries.
+    # Fail closed for every interval rather than silently assigning UTC.
     if raw.index.tz is not None:
         raw.index = raw.index.tz_convert("UTC")
-    elif interval == "4h":
-        print(f"[TIMEZONE DIAGNOSTIC] {ticker} {interval}: index has no timezone; no implicit conversion")
     else:
         print(
             f"[TIMEZONE STOP] {ticker} {interval}: index has no timezone; "
@@ -1451,11 +1446,8 @@ def bars(ticker, interval="1h", period="60d"):
 
     if interval == "4h":
         # 4時間足は、終了時刻を過ぎた1時間足だけから作成する。
-        # Yahoo Financeの時刻をUTCに統一する。
-        if raw.index.tz is None:
-            raw.index = raw.index.tz_localize("UTC")
-        else:
-            raw.index = raw.index.tz_convert("UTC")
+        # timezone-naive index は上流で停止済み。ここではUTCへ正規化する。
+        raw.index = raw.index.tz_convert("UTC")
 
         # 配信遅延を考慮し、現在時刻より5分前を基準にする。
         cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=5)
