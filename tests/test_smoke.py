@@ -1012,6 +1012,7 @@ def _extract_app_backup_functions(tmp_path):
     import tempfile
     from datetime import datetime, timedelta, timezone
     from pathlib import Path
+    from model_artifacts import model_matches_contract
     from types import SimpleNamespace
 
     # テストの実行場所（chdir 後など）に依存しないよう、このファイルの位置から app.py を引く。
