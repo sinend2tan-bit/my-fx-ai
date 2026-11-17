@@ -471,20 +471,47 @@ def _run_both_4h(monkeypatch, frame):
 
 
 def test_invalid_source_ohlc_bar_excludes_4h_bucket_in_both_pipelines(monkeypatch):
-    # An impossible source 1h candle must be removed before resampling in both
-    # implementations. The affected 4h bucket then has only 3/4 source bars.
+    # Source-row diagnostics are separate from the 1h-only C-1 counters.
+    # Each row is counted once by its first exclusion reason; ended buckets
+    # with fewer than four valid unique timestamps are counted as incomplete.
     frame = make_frame(n=1600, tz="UTC", seed=29)
     bad_timestamp = frame.index[501]
     frame.loc[bad_timestamp, "High"] = (
         min(frame.loc[bad_timestamp, "Open"], frame.loc[bad_timestamp, "Close"])
         - 0.01
     )
-    affected_bin = bad_timestamp.floor("4h")
+    missing_timestamp = frame.index[702]
+    frame.loc[missing_timestamp, "High"] = np.nan
+    duplicate_timestamp = frame.index[903]
+    duplicate_row = frame.loc[[duplicate_timestamp]].copy()
+    nat_row = frame.iloc[[0]].copy()
+    nat_row.index = pd.DatetimeIndex([pd.NaT], tz="UTC")
+    frame = pd.concat([frame, duplicate_row, nat_row])
+
+    affected_invalid_bin = bad_timestamp.floor("4h")
+    affected_missing_bin = missing_timestamp.floor("4h")
 
     scan_series, out = _run_both_4h(monkeypatch, frame)
 
-    assert affected_bin not in scan_series.index
-    assert affected_bin not in out.index
+    assert affected_invalid_bin not in scan_series.index
+    assert affected_invalid_bin not in out.index
+    assert affected_missing_bin not in scan_series.index
+    assert affected_missing_bin not in out.index
+
+    scan_quality = scan_series.attrs["source_ohlc_diagnostics"]
+    app_quality = out.attrs["source_ohlc_diagnostics"]
+    assert scan_quality == app_quality
+    assert scan_quality == {
+        "input_rows": 1602,
+        "dropped_invalid_timestamp": 1,
+        "dropped_missing_or_nonfinite": 1,
+        "dropped_duplicate_timestamp": 1,
+        "dropped_invalid_ohlc": 1,
+        "validated_source_rows": 1598,
+        "completed_4h_buckets": 400,
+        "complete_4h_buckets": 398,
+        "dropped_incomplete_4h_buckets": 2,
+    }
 
 
 def _assert_both_agree_on_bins(scan_series, out, adopted_last_bin):
