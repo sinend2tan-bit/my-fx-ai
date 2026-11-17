@@ -1444,13 +1444,8 @@ def bars(ticker, interval="1h", period="60d"):
         return None
 
     if interval == "4h":
-        # 4時間足は、終了時刻を過ぎた1時間足だけから作成する。
-        # Yahoo Financeの時刻をUTCに統一する。
-        if raw.index.tz is None:
-            raw.index = raw.index.tz_localize("UTC")
-        else:
-            raw.index = raw.index.tz_convert("UTC")
-
+        # 4時間足は、上流の共通入力ゲートでUTC正規化済みの
+        # timezone-aware 1時間足だけから作成する。ここで再localizeしない。
         # 配信遅延を考慮し、現在時刻より5分前を基準にする。
         cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=5)
 
