@@ -2290,7 +2290,9 @@ def _render_main_area():
     st.caption("レンジが広くても、相場状況によってはレンジ外になる可能性があります。完全に防げるものではありません。")
     if latest_price < user_lower or latest_price > user_upper:
         st.markdown(f'<div class="warn-box">【レンジアウト警告】直近の確定足は設定レンジ <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_upper}</code> の外側です。</div>',unsafe_allow_html=True)
-    atr_4h_val = float(atr_4h_series.iloc[-1]) if not atr_4h_series.empty and float(atr_4h_series.iloc[-1]) > 0 else max(float(latest_atr), pip_unit * 30)
+    # Reuse the validated 4h ATR (including its finite positive fallback) above.
+    # Recomputing from latest_atr here could reintroduce NaN/invalid values.
+    atr_4h_val = atr_4h
     ai_rec_trap_pips = int(np.clip(round((atr_4h_val / pip_unit) * 0.8), 10, 500))
     trap_key = f"trap_w_{ticker}"
     if trap_key not in st.session_state:
