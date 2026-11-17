@@ -1033,6 +1033,7 @@ def _extract_app_backup_functions(tmp_path):
     namespace = {
         "json": json_module,
         "joblib": None,
+        "model_matches_contract": model_matches_contract,
         "st": SimpleNamespace(
             session_state={},
             error=lambda message: errors.append(str(message)),
