@@ -19,7 +19,7 @@ def test_directional_predictions_match_the_55_percent_score_rule():
             [0.45, 0.10, 0.45],  # tie: abstain
             [0.549, 0.001, 0.450],  # below threshold: abstain
             [0.40, 0.00, 0.60],  # BUY above threshold
-            [0.60, 0.00, 0.40],  # SELL-side comparison does not qualify
+            [0.60, 0.00, 0.40],  # SELL above threshold
         ],
         dtype=float,
     )
