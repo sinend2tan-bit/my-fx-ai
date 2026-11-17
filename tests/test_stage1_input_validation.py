@@ -27,8 +27,8 @@
   App 4h は段階1では従来どおりだったが、段階2（SYN-FX-017）で UTC
   統一・完全性判定に変更された（tests/test_stage2_4h_aggregation.py）。
   どちらの段階でも 4h に data_quality は付かない。
-- モデル版管理: App MODEL_VERSION 8（段階1で 6→7、段階2で 7→8）/
-  Scanner MODEL_VERSION 21。
+- モデル版管理: App MODEL_VERSION 9（段階1で 6→7、段階2で 7→8）/
+  Scanner MODEL_VERSION 22。
   旧版（App version 7）の保存済みモデルは再利用されない。品質ゲートを
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
   評価モデルが使われ、旧ファイルは上書きされない。新版（8）の保存済み
@@ -301,7 +301,7 @@ def test_scanner_4h_not_stopped_by_stage1_gate(monkeypatch):
 
 
 def test_scanner_version_and_status_record():
-    assert scanner.MODEL_VERSION == 21
+    assert scanner.MODEL_VERSION == 22
     source = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
     assert "v19_" not in source
     dq = {
@@ -690,9 +690,9 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
     return tmp_path / filename
 
 
-def test_app_model_version_is_8():
+def test_app_model_version_is_9():
     # 段階1で 6→7、段階2（SYN-FX-017）で 7→8。
-    assert _app_literal("MODEL_VERSION") == 8
+    assert _app_literal("MODEL_VERSION") == 9
 
 
 def test_app_clears_stale_model_save_status_at_start():
