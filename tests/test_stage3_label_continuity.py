@@ -313,7 +313,7 @@ def test_tl6_weekend_window_valid(monkeypatch):
     raw = path_frame(fx_week_index(700))
     out = run_bars(monkeypatch, raw)
     assert quality_of(out)["dropped_label_discontinuous"] == 0
-    friday_evening = pd.Timestamp("2026-01-09 20:00", tz="UTC")
+    friday_evening = pd.Timestamp("2026-01-16 20:00", tz="UTC")
     assert friday_evening in out.index
 
 
@@ -560,7 +560,7 @@ def _purge_timestamps(df, validation, fold_no):
 
 def test_tp3_purge_boundary_by_timestamps(monkeypatch):
     """T-P3: パージ境界を時刻で確認する（連続データと比較用の欠損データ）。"""
-    raw = path_frame(continuous_index(500))
+    raw = path_frame(continuous_index(700))
     out = run_bars(monkeypatch, raw)
     validation = scanner.walk_forward_validation(out, pair_name=PAIR_NAME)
     assert validation["fold_details"]
@@ -1114,7 +1114,7 @@ def test_tb5_non_utc_input_normalized_to_utc(monkeypatch):
     feature = out.attrs["latest_features"]
     assert str(feature.index.tz) == "UTC"
     assert quality_of(out)["dropped_label_discontinuous"] == 0
-    friday_evening_utc = pd.Timestamp("2026-01-09 20:00", tz="UTC")
+    friday_evening_utc = pd.Timestamp("2026-01-16 20:00", tz="UTC")
     assert friday_evening_utc in out.index
 
 
@@ -1429,7 +1429,7 @@ def test_tl17_two_separated_gaps_first_bad_pair_and_single_count(monkeypatch):
     """
     index = fx_week_index(1000)
     raw = path_frame(index)
-    raw = raw.drop(index=[index[300], index[600]])
+    raw = raw.drop(index=[index[300], index[650]])
     out = run_bars(monkeypatch, raw)
     dq = quality_of(out)
     audit = audit_of(out)
