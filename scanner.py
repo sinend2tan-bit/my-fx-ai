@@ -13,6 +13,7 @@ import pandas as pd
 import yfinance as yf
 
 from aifx_time_validation import has_contiguous_hourly_window, split_hourly_segments
+from aifx_indicator_utils import ema_with_warmup
 
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -60,7 +61,7 @@ FORWARD_PREDICTIONS_MAX = 200
 # 猶予。記録日時（recorded_at_jst、無ければ signal_bar_time）からの暦日。
 FORWARD_UNEVALUABLE_AFTER_DAYS = 14
 
-MODEL_VERSION = 23
+MODEL_VERSION = 24
 
 # 仮想検証用の追加コスト（実際の松井証券FXの約定・スワップ値ではありません）。
 # スリッページは往復合計の保守的な仮定。スワップは保有時間・方向・日々の値で変動するため、
@@ -1181,7 +1182,7 @@ def add_indicators(df):
 
     sma20 = close.rolling(20).mean()
     ema20 = close.ewm(span=20, adjust=False).mean()
-    ema200 = close.ewm(span=200, adjust=False).mean()
+    ema200 = ema_with_warmup(close, 200)
 
     df["Dev_SMA20"] = close / sma20 - 1
     df["Dev_EMA20"] = close / ema20 - 1
