@@ -14,7 +14,7 @@
   insufficient_future → discontinuous → other）で計上する。
 - 監査フレームは training_df.attrs["label_audit"] に保持し、特徴量・
   予測記録・永続化データ・公開ステータスには混入させない。
-- Scanner MODEL_VERSION は 21、App は 8 のまま。
+- Scanner MODEL_VERSION は 22、App は 9（1h segment feature pipeline の識別と旧Appモデルキャッシュ無効化）。
 
 注記:
 - T-L10 は仕様書どおり T-D 系列へ移行したため、ここには置かない。
