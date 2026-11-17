@@ -216,6 +216,14 @@ def test_direction_hold_when_4h_data_is_missing(rig):
     assert any("方向：判断保留" in w for w in _texts(at, "warning"))
     assert not any("方向：売り方向" in e for e in _texts(at, "error"))
 
+    # 4h OHLC/ATR が無効なら、暫定価格レンジや1h ATRで注文補助を捏造しない。
+    body = _all_text(at)
+    assert "📋 リピート注文（ハーフ＆ハーフ）" not in body
+    settings_path = rig.tmp_path / "user_settings.json"
+    if settings_path.exists():
+        saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert "USDJPY=X" not in saved.get("ranges", {})
+
 
 def test_direction_hold_when_timeframes_disagree(rig):
     at = rig(tail_1h=0.45, tail_4h_source=-0.45)
