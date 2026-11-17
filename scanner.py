@@ -1168,7 +1168,7 @@ def calculate_atr(df, period=14):
     ).mean()
 
 
-def add_indicators(df):
+def add_indicators(df, require_full_ema200=False):
     df = df.copy()
 
     close = df["Close"]
@@ -1182,7 +1182,11 @@ def add_indicators(df):
 
     sma20 = close.rolling(20).mean()
     ema20 = close.ewm(span=20, adjust=False).mean()
-    ema200 = ema_with_warmup(close, 200)
+    ema200 = (
+        ema_with_warmup(close, 200)
+        if require_full_ema200
+        else close.ewm(span=200, adjust=False).mean()
+    )
 
     df["Dev_SMA20"] = close / sma20 - 1
     df["Dev_EMA20"] = close / ema20 - 1
@@ -1518,12 +1522,12 @@ def bars(ticker, interval="1h", period="60d"):
     if interval == "1h":
         hourly_segments = split_hourly_segments(raw)
         feature_df = (
-            pd.concat([add_indicators(segment) for segment in hourly_segments]).sort_index()
+            pd.concat([add_indicators(segment, require_full_ema200=True) for segment in hourly_segments]).sort_index()
             if hourly_segments
             else raw.iloc[0:0].copy()
         )
     else:
-        feature_df = add_indicators(raw)
+        feature_df = add_indicators(raw, require_full_ema200=False)
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
     # Vol_Ratioは診断用に残すが、定数になりやすいため学習特徴量から除外する。
