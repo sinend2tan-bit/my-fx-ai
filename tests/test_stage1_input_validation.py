@@ -627,12 +627,13 @@ def _model_namespace():
         "FEATURE_COLUMNS": _app_literal("FEATURE_COLUMNS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
         "MODEL_VERSION": _app_literal("MODEL_VERSION"),
+        "APP_CLASS_LABELS": _app_literal("APP_CLASS_LABELS"),
         "datetime": datetime,
         "JST": ZoneInfo("Asia/Tokyo"),
     }
     # AIFX-APP-PERSIST-20261113-01: 保存処理が _save_trained_model に
     # 分離されたため、抽出対象へ追加する（依存の列挙は従来どおり）。
-    for fname in ("_model_filename", "_save_trained_model", "analyze_signal_with_backtest"):
+    for fname in ("_model_filename", "_save_trained_model", "_fixed_class_metrics", "analyze_signal_with_backtest"):
         code = compile(
             ast.Module(body=[_extract_function(fname)], type_ignores=[]),
             "app_extract",
