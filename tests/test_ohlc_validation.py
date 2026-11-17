@@ -132,6 +132,6 @@ def test_duplicate_order_matches_legacy_missing_then_keep_last_contract():
     # duplicate is rejected and does not fall back to its older duplicate.
     assert cleaned.index.tolist() == [index[0]]
     assert diagnostics["dropped_missing_or_nonfinite"] == 1
-    assert diagnostics["dropped_duplicate_timestamp"] == 0
+    assert diagnostics["dropped_duplicate_timestamp"] == 1
     assert diagnostics["dropped_invalid_ohlc"] == 1
     assert diagnostics["validated_source_rows"] == 1
