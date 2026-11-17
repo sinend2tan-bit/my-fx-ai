@@ -41,9 +41,10 @@ def clean_ohlc_source(frame, required=None):
     """Clean 1h source rows for 4h aggregation and return reason-specific counts.
 
     The order intentionally matches the existing 4h input contract:
-    invalid timestamps are removed first, then rows with missing/non-finite
-    required OHLC are removed, then remaining duplicate timestamps keep the
-    last row, and finally impossible candle geometry is rejected. Thus a
+    invalid timestamps are removed first, then timestamps not aligned to the
+    UTC hourly grid are removed, then rows with missing/non-finite required
+    OHLC are removed, then remaining duplicate timestamps keep the last row,
+    and finally impossible candle geometry is rejected. Thus a
     missing-value duplicate can fall back to an older non-missing row (as in
     the legacy dropna-before-dedup order), but a last remaining duplicate with
     impossible OHLC geometry is rejected without falling back to an older row.
@@ -59,6 +60,7 @@ def clean_ohlc_source(frame, required=None):
     diagnostics = {
         "input_rows": int(len(cleaned)),
         "dropped_invalid_timestamp": 0,
+        "dropped_off_hour_grid_timestamp": 0,
         "dropped_missing_or_nonfinite": 0,
         "dropped_duplicate_timestamp": 0,
         "dropped_invalid_ohlc": 0,
@@ -73,6 +75,17 @@ def clean_ohlc_source(frame, required=None):
     valid_timestamp = cleaned.index.notna()
     diagnostics["dropped_invalid_timestamp"] = int((~valid_timestamp).sum())
     cleaned = cleaned.loc[valid_timestamp].copy()
+
+    if not isinstance(cleaned.index, pd.DatetimeIndex):
+        raise ValueError("4h source index must be a DatetimeIndex")
+    on_hour_grid = (
+        (cleaned.index.minute == 0)
+        & (cleaned.index.second == 0)
+        & (cleaned.index.microsecond == 0)
+        & (cleaned.index.nanosecond == 0)
+    )
+    diagnostics["dropped_off_hour_grid_timestamp"] = int((~on_hour_grid).sum())
+    cleaned = cleaned.loc[on_hour_grid].copy()
 
     cleaned = cleaned.apply(pd.to_numeric, errors="coerce")
     rows_before = len(cleaned)
