@@ -93,10 +93,9 @@ def _make_download(
             if missing_4h_source:
                 return pd.DataFrame()
             end4 = now_h - pd.Timedelta(days=2) if stale_4h_source else now_h
-            # 200-bar EMA warm-up is applied after 1h→4h aggregation.
-            # Supply >800 hourly observations so the 4h fixture has >200 bars,
-            # and preserve a 30-bar directional tail at the 4h timeframe.
-            return _frame(1000, "1h", end4, tail=tail_4h_source, tail_bars=120)
+            # 4h remains on its legacy EMA path; 600 hourly observations
+            # provide 150 complete 4h bins, above the existing 80-bin minimum.
+            return _frame(600, "1h", end4, tail=tail_4h_source, tail_bars=30)
         end = now_h - pd.Timedelta(days=10) if stale_main else now_h
         return _frame(600, "1h", end, tail=tail_1h)
 
