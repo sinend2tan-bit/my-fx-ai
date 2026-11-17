@@ -463,8 +463,8 @@ def run_app_load(frame, ticker="USDJPY=X", interval="1h"):
 
 # --- analyze_signal_with_backtest 用 namespace（st は fake） ---
 _app_analyze_mod = _extract_app_module(
-    {"analyze_signal_with_backtest", "_model_filename"},
-    {"FEATURE_COLUMNS", "LOOKAHEAD_BARS", "MODEL_VERSION"},
+    {"_fixed_class_metrics", "analyze_signal_with_backtest", "_model_filename"},
+    {"FEATURE_COLUMNS", "LOOKAHEAD_BARS", "MODEL_VERSION", "APP_CLASS_LABELS"},
 )
 
 
@@ -501,6 +501,7 @@ def fresh_app_analyze():
         "datetime": datetime,
         "JST": ZoneInfo("Asia/Tokyo"),
         "st": fake_st,
+        "APP_CLASS_LABELS": (-1, 0, 1),
         "RandomForestClassifier": RandomForestClassifier,
         "DummyClassifier": DummyClassifier,
         "compute_sample_weight": compute_sample_weight,
