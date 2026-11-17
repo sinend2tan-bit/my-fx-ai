@@ -2364,7 +2364,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             f"features={importance_summary}"
         )
 
-    overall_cm, score, overall_recalls = _fixed_class_metrics(all_true, all_pred)
+    _, score, overall_recalls = _fixed_class_metrics(all_true, all_pred)
     raw_probability_brier = None
     if all_probability_rows:
         brier_values = []
