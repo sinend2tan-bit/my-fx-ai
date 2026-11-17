@@ -31,8 +31,8 @@ class ModelArtifactContractTests(unittest.TestCase):
     def test_accepts_exact_contract(self):
         self.assertTrue(check(FakeModel(names=FEATURES)))
 
-    def test_accepts_models_without_feature_names(self):
-        self.assertTrue(check(FakeModel()))
+    def test_rejects_models_without_feature_names(self):
+        self.assertFalse(check(FakeModel()))
 
     def test_rejects_feature_count_mismatch(self):
         self.assertFalse(check(FakeModel(feature_count=2)))
