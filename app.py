@@ -1965,6 +1965,7 @@ def _render_main_area():
             "4時間足の元データ品質（1時間足）: "
             f"入力 {_source_ohlc_quality['input_rows']}本 / "
             f"除外 時刻不正 {_source_ohlc_quality['dropped_invalid_timestamp']}本・"
+            f"時刻ずれ {_source_ohlc_quality['dropped_off_hour_grid_timestamp']}本・"
             f"欠損/非有限 {_source_ohlc_quality['dropped_missing_or_nonfinite']}本・"
             f"重複時刻 {_source_ohlc_quality['dropped_duplicate_timestamp']}本・"
             f"OHLC不整合 {_source_ohlc_quality['dropped_invalid_ohlc']}本 / "
