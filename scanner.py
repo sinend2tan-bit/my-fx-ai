@@ -1497,7 +1497,8 @@ def bars(ticker, interval="1h", period="60d"):
             f"invalid_ohlc={source_ohlc_diagnostics['dropped_invalid_ohlc']}, "
             f"valid_source={source_ohlc_diagnostics['validated_source_rows']}, "
             f"complete_4h={source_ohlc_diagnostics['complete_4h_buckets']}, "
-            f"incomplete_4h={source_ohlc_diagnostics['dropped_incomplete_4h_buckets']}"
+            f"underfull_4h={source_ohlc_diagnostics['dropped_underfull_4h_buckets']}, "
+            f"overfull_4h={source_ohlc_diagnostics['dropped_overfull_4h_buckets']}"
         )
 
         # UTCの4時間区間に集約する。
