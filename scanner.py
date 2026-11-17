@@ -1,4 +1,5 @@
 import json
+from numbers import Integral, Real
 import os
 import re
 import tempfile
@@ -1893,21 +1894,27 @@ def _fold_completeness_diagnostics(fold_details, required_folds):
     Every configured test fold must be present exactly once and contain true
     support for SELL / NEUTRAL / BUY. Predicted support is retained in the
     fold detail for diagnosis, but does not substitute for missing true support.
+    Malformed IDs, counts, and metrics are incomplete rather than coerced.
     """
+    if isinstance(required_folds, bool) or not isinstance(required_folds, Integral):
+        raise ValueError("required_folds must be a positive integer")
     required = int(required_folds)
     if required < 1:
-        raise ValueError("required_folds must be positive")
+        raise ValueError("required_folds must be a positive integer")
 
     details = list(fold_details or [])
     by_fold = {}
     duplicate_folds = []
     invalid_fold_ids = []
     for detail in details:
-        try:
-            fold_id = int(detail.get("fold"))
-        except (TypeError, ValueError, AttributeError):
-            invalid_fold_ids.append(None)
+        if not isinstance(detail, dict):
+            invalid_fold_ids.append(repr(detail))
             continue
+        raw_fold_id = detail.get("fold")
+        if isinstance(raw_fold_id, bool) or not isinstance(raw_fold_id, Integral):
+            invalid_fold_ids.append(repr(raw_fold_id))
+            continue
+        fold_id = int(raw_fold_id)
         if fold_id in by_fold:
             duplicate_folds.append(fold_id)
         else:
@@ -1920,28 +1927,55 @@ def _fold_completeness_diagnostics(fold_details, required_folds):
     incomplete_folds = []
     for fold_id in sorted(expected & present):
         detail = by_fold[fold_id]
-        counts = detail.get("actual_class_counts") or {}
+        raw_counts = detail.get("actual_class_counts")
+        counts = raw_counts if isinstance(raw_counts, dict) else {}
+        parsed_counts = {}
+        invalid_class_counts = []
+        for name in ("sell", "neutral", "buy"):
+            raw_count = counts.get(name, 0)
+            if (
+                isinstance(raw_count, bool)
+                or not isinstance(raw_count, Integral)
+                or int(raw_count) < 0
+            ):
+                invalid_class_counts.append(name)
+                parsed_counts[name] = 0
+            else:
+                parsed_counts[name] = int(raw_count)
         missing_classes = [
             name for name in ("sell", "neutral", "buy")
-            if int(counts.get(name, 0) or 0) <= 0
+            if parsed_counts[name] <= 0
         ]
+
         fold_score = detail.get("balanced_accuracy")
         baseline_score = detail.get("baseline_balanced_accuracy")
-        if missing_classes or fold_score is None or baseline_score is None:
+
+        def valid_metric(value):
+            return (
+                not isinstance(value, bool)
+                and isinstance(value, Real)
+                and np.isfinite(float(value))
+                and 0.0 <= float(value) <= 1.0
+            )
+
+        fold_metric_valid = valid_metric(fold_score)
+        baseline_metric_valid = valid_metric(baseline_score)
+        if (
+            missing_classes or invalid_class_counts
+            or not fold_metric_valid or not baseline_metric_valid
+        ):
             incomplete_folds.append({
                 "fold": fold_id,
                 "missing_true_classes": missing_classes,
-                "actual_class_counts": {
-                    name: int(counts.get(name, 0) or 0)
-                    for name in ("sell", "neutral", "buy")
-                },
+                "invalid_class_counts": invalid_class_counts,
+                "actual_class_counts": parsed_counts,
                 "predicted_class_counts": detail.get("predicted_class_counts") or {},
-                "balanced_accuracy": fold_score,
-                "baseline_balanced_accuracy": baseline_score,
+                "balanced_accuracy": float(fold_score) if fold_metric_valid else None,
+                "baseline_balanced_accuracy": float(baseline_score) if baseline_metric_valid else None,
                 "reason": detail.get("balanced_accuracy_reason") or (
-                    "fold or baseline balanced accuracy is undefined"
-                    if fold_score is None or baseline_score is None
-                    else "true support missing for one or more fixed classes"
+                    "fold or baseline balanced accuracy is non-finite, non-numeric, or outside [0, 1]"
+                    if not fold_metric_valid or not baseline_metric_valid
+                    else "invalid or missing true class support for one or more fixed classes"
                 ),
             })
 
