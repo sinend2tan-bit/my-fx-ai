@@ -53,7 +53,11 @@ if str(REPO_ROOT) not in sys.path:
 
 import scanner  # noqa: E402
 from aifx_time_validation import has_contiguous_hourly_window  # noqa: E402
-from aifx_ohlc_validation import ohlc_valid_mask  # noqa: E402
+from aifx_ohlc_validation import (  # noqa: E402
+    add_4h_bucket_diagnostics,
+    clean_ohlc_source,
+    ohlc_valid_mask,
+)
 
 UTC = "UTC"
 START = pd.Timestamp("2026-01-05 00:00", tz=UTC)  # Monday
@@ -451,6 +455,8 @@ APP_LOAD_NS = {
     "st": _LoadStreamlitStub(),
     "has_contiguous_hourly_window": has_contiguous_hourly_window,
     "ohlc_valid_mask": ohlc_valid_mask,
+    "clean_ohlc_source": clean_ohlc_source,
+    "add_4h_bucket_diagnostics": add_4h_bucket_diagnostics,
     "_LOAD_STOP_REASONS": {},
     "_LOAD_STOP_WARNED": set(),
 }
