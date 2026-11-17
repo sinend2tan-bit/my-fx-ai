@@ -70,7 +70,10 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score
 from sklearn.utils.class_weight import compute_sample_weight
 
 import scanner
-from aifx_time_validation import has_contiguous_hourly_window
+from aifx_time_validation import (
+    has_contiguous_hourly_window,
+    split_hourly_segments,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = REPO_ROOT / "app.py"
@@ -379,6 +382,7 @@ def _app_namespace(frame_factory):
         "DEFAULT_SPREAD_PIPS": _app_literal("DEFAULT_SPREAD_PIPS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
         "has_contiguous_hourly_window": has_contiguous_hourly_window,
+        "split_hourly_segments": split_hourly_segments,
         # 停止理由の記録はテストごとに新しい空のレジストリを使う。
         "_LOAD_STOP_REASONS": {},
         "_LOAD_STOP_WARNED": set(),
