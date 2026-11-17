@@ -1970,7 +1970,8 @@ def _render_main_area():
             f"OHLC不整合 {_source_ohlc_quality['dropped_invalid_ohlc']}本 / "
             f"有効元足 {_source_ohlc_quality['validated_source_rows']}本 / "
             f"完全4h区間 {_source_ohlc_quality['complete_4h_buckets']}件・"
-            f"不完全で除外 {_source_ohlc_quality['dropped_incomplete_4h_buckets']}件"
+            f"4本未満で除外 {_source_ohlc_quality['dropped_underfull_4h_buckets']}件・"
+            f"4本超過で除外 {_source_ohlc_quality['dropped_overfull_4h_buckets']}件"
         )
     # Timeframe-aware freshness check. Yahoo timestamps can be delayed and are not Matsui live quotes.
     data_is_stale = False
