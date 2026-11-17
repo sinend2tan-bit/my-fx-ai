@@ -1868,6 +1868,30 @@ def _purged_train_mask(source_positions, test_start_position, lookahead):
     return positions + horizon < boundary
 
 
+MIN_DIRECTIONAL_SCORE_PCT = 55.0
+
+
+def directional_predictions_from_scores(aligned_probabilities, threshold_pct=MIN_DIRECTIONAL_SCORE_PCT):
+    """Apply the live BUY/SELL score gate to OOF scores for diagnostic PnL only.
+
+    Probability columns must be ordered SELL, NEUTRAL, BUY. These raw model
+    scores are not calibrated probabilities or estimates of win probability.
+    """
+    scores = np.asarray(aligned_probabilities, dtype=float)
+    if scores.ndim != 2 or scores.shape[1] != 3:
+        raise ValueError("aligned_probabilities must have shape (n, 3)")
+    if not np.isfinite(scores).all() or np.any(scores < 0.0) or np.any(scores > 1.0):
+        raise ValueError("model scores must be finite values between 0 and 1")
+    threshold = float(threshold_pct) / 100.0
+    if not np.isfinite(threshold) or threshold < 0.0 or threshold > 1.0:
+        raise ValueError("threshold_pct must be between 0 and 100")
+    sell = scores[:, 0]
+    buy = scores[:, 2]
+    result = np.zeros(len(scores), dtype=int)
+    result[(buy * 100.0 >= threshold_pct) & (buy > sell)] = 1
+    result[(sell * 100.0 >= threshold_pct) & (sell > buy)] = -1
+    return result
+
 # =========================================================
 # 時系列検証
 def walk_forward_validation(df, pair_name="通貨ペア不明"):
@@ -2064,6 +2088,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     all_probability_rows = []
     fold_details = []
     simulated_trade_rows = []
+    score_gated_trade_rows = []
     pair_config = PAIRS.get(pair_name, {})
     spread_pips = safe_float(pair_config.get("spread_pips"), 0.0) or 0.0
     pip_size = safe_float(pair_config.get("pip"), 0.0) or 0.0
@@ -2161,8 +2186,19 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 spread_pips,
                 pip_size,
             )
-            # 各foldで選ばれた非重複取引だけを全体集計に使う。
+            # Parallel diagnostic: apply the exact live 55% BUY/SELL score gate
+            # to OOF raw scores. This does not replace or alter the existing
+            # ungated class-prediction PnL or any validation gate.
+            score_gated_pred = directional_predictions_from_scores(aligned_proba)
+            fold_score_gated_pnl, fold_score_gated_trades = simulated_pnl(
+                score_gated_pred,
+                df.loc[test_X.index],
+                spread_pips,
+                pip_size,
+            )
+            # Keep each fold's non-overlapping trades isolated before aggregation.
             simulated_trade_rows.extend(fold_trades)
+            score_gated_trade_rows.extend(fold_score_gated_trades)
 
             importances = model.feature_importances_
             top_idx = np.argsort(importances)[::-1][:5]
@@ -2253,6 +2289,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "confusion_matrix": cm,
                 "brier_score_raw_probability_diagnostic": round(fold_brier, 5) if fold_brier is not None else None,
                 "simulated_pnl": fold_pnl,
+                "simulated_pnl_after_55pct_score_gate_diagnostic": fold_score_gated_pnl,
             }
 
             fold_details.append(detail)
@@ -2396,6 +2433,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
     # 各fold内で非重複かつ決済がfold内に収まる取引だけを合算する。
     total_pnl = summarize_trade_results(simulated_trade_rows)
+    score_gated_total_pnl = summarize_trade_results(score_gated_trade_rows)
 
     # 買い・売りを分けて評価する。片方の成績が悪い場合に、その方向だけ保留できるようにする。
     directional_pnl = {}
@@ -2603,6 +2641,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "folds": used_folds,
         "fold_details": fold_details,
         "simulated_pnl": total_pnl,
+        "simulated_pnl_after_55pct_score_gate_diagnostic": score_gated_total_pnl,
         "directional_pnl": directional_pnl,
         "class_counts": {
             "actual": actual_counts,
@@ -2714,9 +2753,9 @@ def analyze(df, validation):
         neutral_pct = float(class_to_probability.get(0, 0.0) * 100)
         buy_pct = float(class_to_probability.get(1, 0.0) * 100)
 
-        if buy_pct >= 55 and buy_pct > sell_pct:
+        if buy_pct >= MIN_DIRECTIONAL_SCORE_PCT and buy_pct > sell_pct:
             direction = "買い"
-        elif sell_pct >= 55 and sell_pct > buy_pct:
+        elif sell_pct >= MIN_DIRECTIONAL_SCORE_PCT and sell_pct > buy_pct:
             direction = "売り"
         else:
             direction = "様子見"
