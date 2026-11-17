@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 import scanner
+from aifx_indicator_utils import ema_with_warmup
 from aifx_time_validation import (
     forward_hourly_bar_gap_allowed,
     has_contiguous_hourly_window,
@@ -209,6 +210,7 @@ def _app_load_and_process_with_frame(frame):
     namespace = {
         "pd": pd,
         "np": np,
+        "ema_with_warmup": ema_with_warmup,
         "yf": YFinanceStub,
         "st": st,
         "FEATURE_COLUMNS": literal("FEATURE_COLUMNS"),
@@ -312,7 +314,7 @@ def test_scanner_indicators_do_not_reset_for_allowed_friday_monday_closure():
 
 
 def test_app_indicators_reset_after_weekday_gap():
-    idx = pd.date_range("2026-01-05 00:00", periods=300, freq="h", tz="UTC")
+    idx = pd.date_range("2026-01-05 00:00", periods=400, freq="h", tz="UTC")
     gap_pos = 100
     frame = _synthetic_ohlcv(idx.delete(gap_pos))
     out, st = _app_load_and_process_with_frame(frame)
