@@ -620,6 +620,7 @@ def _model_namespace():
         "tempfile": tempfile,
         "time": time,
         "joblib": joblib,
+        "model_matches_contract": model_matches_contract,
         "RandomForestClassifier": RandomForestClassifier,
         "DummyClassifier": DummyClassifier,
         "accuracy_score": accuracy_score,
