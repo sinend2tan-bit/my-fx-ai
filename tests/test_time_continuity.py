@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 import scanner
+from aifx_ohlc_validation import ohlc_valid_mask
 from aifx_time_validation import (
     forward_hourly_bar_gap_allowed,
     has_contiguous_hourly_window,
@@ -114,6 +115,7 @@ def _extract_app_forecast_updater():
         "JST": ZoneInfo("Asia/Tokyo"),
         "LOOKAHEAD_BARS": 8,
         "has_contiguous_hourly_window": has_contiguous_hourly_window,
+        "ohlc_valid_mask": ohlc_valid_mask,
         "_normalise_timestamp": lambda value: pd.Timestamp(value).isoformat(),
         "save_forecast_history": lambda _items: None,
     }
