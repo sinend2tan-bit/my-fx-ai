@@ -2224,7 +2224,26 @@ def _render_main_area():
 
     swing_high_4h = float(clean_series(data_4h["High"]).iloc[-300:].max()) if data_4h is not None else latest_price * 1.03
     swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-300:].min()) if data_4h is not None else latest_price * 0.97
-    atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1]) if data_4h is not None and "ATR" in data_4h else latest_price * 0.005
+    atr_4h_series = (
+        clean_series(data_4h["ATR"]).dropna()
+        if data_4h is not None and "ATR" in data_4h
+        else pd.Series(dtype=float)
+    )
+    atr_4h_available = (
+        not atr_4h_series.empty
+        and np.isfinite(float(atr_4h_series.iloc[-1]))
+        and float(atr_4h_series.iloc[-1]) > 0
+    )
+    if atr_4h_available:
+        atr_4h = float(atr_4h_series.iloc[-1])
+    else:
+        fallback_atr = (
+            float(latest_atr)
+            if latest_atr is not None and np.isfinite(float(latest_atr)) and float(latest_atr) > 0
+            else latest_price * 0.005
+        )
+        atr_4h = max(fallback_atr, pip_unit * 30)
+        st.caption("4時間足ATRは履歴不足または無効値のため、暫定値で参考幅を計算しています。")
 
     def is_valid_range(r_low, r_up, current_p):
         return bool(np.isfinite([r_low, r_up, current_p]).all() and r_low > 0 and r_up > r_low
@@ -2271,7 +2290,6 @@ def _render_main_area():
     st.caption("レンジが広くても、相場状況によってはレンジ外になる可能性があります。完全に防げるものではありません。")
     if latest_price < user_lower or latest_price > user_upper:
         st.markdown(f'<div class="warn-box">【レンジアウト警告】直近の確定足は設定レンジ <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_upper}</code> の外側です。</div>',unsafe_allow_html=True)
-    atr_4h_series = clean_series(data_4h["ATR"]).dropna() if data_4h is not None and "ATR" in data_4h else pd.Series(dtype=float)
     atr_4h_val = float(atr_4h_series.iloc[-1]) if not atr_4h_series.empty and float(atr_4h_series.iloc[-1]) > 0 else max(float(latest_atr), pip_unit * 30)
     ai_rec_trap_pips = int(np.clip(round((atr_4h_val / pip_unit) * 0.8), 10, 500))
     trap_key = f"trap_w_{ticker}"
