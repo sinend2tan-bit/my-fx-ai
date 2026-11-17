@@ -516,7 +516,9 @@ def test_invalid_source_ohlc_bar_excludes_4h_bucket_in_both_pipelines(monkeypatc
         "validated_source_rows": 1598,
         "completed_4h_buckets": 400,
         "complete_4h_buckets": 398,
-        "dropped_incomplete_4h_buckets": 2,
+        "dropped_underfull_4h_buckets": 2,
+        "dropped_overfull_4h_buckets": 0,
+        "dropped_non_four_4h_buckets": 2,
     }
 
 
