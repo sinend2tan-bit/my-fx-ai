@@ -1306,7 +1306,7 @@ def _app_literal(name):
 
 def test_tv1_model_versions():
     """T-V1: Scanner は 21、App は 8 のまま。"""
-    assert scanner.MODEL_VERSION == 21
+    assert scanner.MODEL_VERSION == 23
     assert _app_literal("MODEL_VERSION") == 8
 
 
@@ -1423,50 +1423,38 @@ def test_audit_scope_1d_absent_and_processing_unchanged(monkeypatch):
 
 
 def test_tl17_two_separated_gaps_first_bad_pair_and_single_count(monkeypatch):
-    """T-L17: 1つの窓に離れた2つの欠損ペアがある場合も計上は一度だけで、
-    first_bad_pair は時系列上最初の不良ペアを指す（ChatGPT 相談への対応）。"""
+    """T-L17: 離れた2つの欠損区間は、各々独立して一度だけ計上する。
+
+    特徴量の区間分離後は、最初の欠損直後のwarm-up行が落ちるため、
+    2つ目の欠損は十分に離し、両方の区間境界が特徴量フレームに残る条件にする。
+    """
     index = fx_week_index(340)
     raw = path_frame(index)
-    # 生の位置で4本間隔の2行を落とし、特徴量フレーム上に離れた2つの
-    # 欠損ペアを作る（同じ8本窓に両方が入りうる近さにする）。
-    raw = raw.drop(index=[index[200], index[204]])
+    raw = raw.drop(index=[index[200], index[240]])
     out = run_bars(monkeypatch, raw)
     dq = quality_of(out)
     audit = audit_of(out)
     feature_index = out.attrs["latest_features"].index
 
-    # 特徴量フレーム上の不良ペア（連続性規則を満たさない隣接ペア）を特定する。
     bad_pairs = []
     for pos in range(len(feature_index) - 1):
         prev_ts, next_ts = feature_index[pos], feature_index[pos + 1]
         if not scanner._forward_bar_gap_allowed(prev_ts, next_ts):
             bad_pairs.append((pos, prev_ts, next_ts))
     assert len(bad_pairs) == 2
-    (g1_pos, g1_prev, g1_next), (g2_pos, g2_prev, g2_next) = bad_pairs
-    assert 0 < g2_pos - g1_pos <= 7
+    assert bad_pairs[1][0] - bad_pairs[0][0] > 7
 
-    # 各不良ペアを含む窓を持つシグナル行（位置 p-7..p）の和集合が無効範囲で、
-    # 重なる行も一度だけ計上される。
     expected = set()
     for pos, _, _ in bad_pairs:
-        for s in range(pos - 7, pos + 1):
-            expected.add(feature_index[s])
+        for signal_pos in range(max(0, pos - 7), pos + 1):
+            expected.add(feature_index[signal_pos])
     disc = audit[audit["invalid_reason"] == "discontinuous"]
     assert set(disc.index) == expected
     assert dq["dropped_label_discontinuous"] == len(expected)
 
-    # 両方の不良ペアを含む窓では、時系列上最初の不良ペアが記録される。
-    both = [feature_index[s] for s in range(g2_pos - 7, g1_pos + 1)]
-    assert both
-    for ts in both:
-        row = audit.loc[ts]
-        assert row["first_bad_pair_prev"] == g1_prev
-        assert row["first_bad_pair_next"] == g1_next
-
-    # 2番目のペアだけを含む窓では、2番目のペアが記録される。
-    only_second = [feature_index[s] for s in range(g1_pos + 1, g2_pos + 1)]
-    assert only_second
-    for ts in only_second:
-        row = audit.loc[ts]
-        assert row["first_bad_pair_prev"] == g2_prev
-        assert row["first_bad_pair_next"] == g2_next
+    # 各区間境界の前にある無効窓は、その境界の最初の不良ペアを記録する。
+    for pos, prev_ts, next_ts in bad_pairs:
+        for signal_pos in range(max(0, pos - 7), pos + 1):
+            row = audit.loc[feature_index[signal_pos]]
+            assert row["first_bad_pair_prev"] == prev_ts
+            assert row["first_bad_pair_next"] == next_ts
