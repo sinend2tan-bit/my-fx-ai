@@ -522,6 +522,31 @@ def test_invalid_source_ohlc_bar_excludes_4h_bucket_in_both_pipelines(monkeypatc
     }
 
 
+def test_off_hour_source_timestamp_cannot_replace_missing_hour(monkeypatch):
+    # A 00:30 timestamp must not make a 4h bucket appear complete when one
+    # of the four expected hourly slots is absent (count alone would be 4).
+    frame = make_frame(n=1600, tz="UTC", seed=32)
+    missing_ts = frame.index[402]
+    off_grid_ts = missing_ts - pd.Timedelta(minutes=30)
+    replacement = frame.loc[[missing_ts]].copy()
+    replacement.index = pd.DatetimeIndex([off_grid_ts])
+    altered = pd.concat([frame.drop(index=[missing_ts]), replacement]).sort_index()
+
+    affected_bin = missing_ts.floor("4h")
+    scan_series, out = _run_both_4h(monkeypatch, altered)
+
+    assert affected_bin not in scan_series.index
+    assert affected_bin not in out.index
+    scan_quality = scan_series.attrs["source_ohlc_diagnostics"]
+    app_quality = out.attrs["source_ohlc_diagnostics"]
+    assert scan_quality == app_quality
+    assert scan_quality["input_rows"] == 1600
+    assert scan_quality["dropped_off_hour_grid_timestamp"] == 1
+    assert scan_quality["validated_source_rows"] == 1599
+    assert scan_quality["dropped_underfull_4h_buckets"] == 1
+    assert scan_quality["complete_4h_buckets"] == 399
+
+
 def _assert_both_agree_on_bins(scan_series, out, adopted_last_bin):
     """両実装の採用区間が一致し、最新の採用区間が期待どおりである
     ことと、共通部分の OHLC が完全一致することを確認する。"""
