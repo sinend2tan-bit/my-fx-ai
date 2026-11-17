@@ -2244,10 +2244,27 @@ def _render_main_area():
     swing_low_candidate = (
         float(swing_low_series.iloc[-300:].min()) if not swing_low_series.empty else np.nan
     )
+    order_assist_price_series = (
+        clean_series(data_1h["Close"]).dropna()
+        if data_1h is not None and "Close" in data_1h
+        else pd.Series(dtype=float)
+    )
+    order_assist_price_available = (
+        not order_assist_price_series.empty
+        and np.isfinite(float(order_assist_price_series.iloc[-1]))
+        and float(order_assist_price_series.iloc[-1]) > 0
+        and _series_fresh(data_1h, "1h")
+    )
+    order_assist_price = (
+        float(order_assist_price_series.iloc[-1])
+        if order_assist_price_available
+        else np.nan
+    )
     swing_range_available = bool(
-        np.isfinite([swing_high_candidate, swing_low_candidate, latest_price]).all()
+        order_assist_price_available
+        and np.isfinite([swing_high_candidate, swing_low_candidate, order_assist_price]).all()
         and swing_low_candidate > 0
-        and swing_high_candidate >= swing_low_candidate
+        and swing_high_candidate > swing_low_candidate
     )
     atr_4h_series = (
         clean_series(data_4h["ATR"]).dropna()
@@ -2264,7 +2281,11 @@ def _render_main_area():
         return bool(np.isfinite([r_low, r_up, current_p]).all() and r_low > 0 and r_up > r_low
                     and r_low >= current_p * 0.4 and r_up <= current_p * 1.6)
 
-    if swing_range_available and atr_4h_available:
+    if (
+        swing_range_available
+        and atr_4h_available
+        and _series_fresh(data_4h, "4h")
+    ):
         swing_high_4h = swing_high_candidate
         swing_low_4h = swing_low_candidate
         atr_4h = float(atr_4h_series.iloc[-1])
@@ -2273,7 +2294,7 @@ def _render_main_area():
         # or a percentage-of-price guess for missing 4h data.
         if ticker not in st.session_state["ranges"] or not is_valid_range(
             float(st.session_state["ranges"].get(ticker, {}).get("lower", 0)),
-            float(st.session_state["ranges"].get(ticker, {}).get("upper", 0)), latest_price
+            float(st.session_state["ranges"].get(ticker, {}).get("upper", 0)), order_assist_price
         ):
             st.session_state["ranges"][ticker] = {"lower": float(swing_low_4h), "upper": float(swing_high_4h)}
             save_settings()
@@ -2310,7 +2331,7 @@ def _render_main_area():
 
         st.caption("参考計算です。証券会社の仕様・保有ポジション・実際の証拠金計算を完全には再現しません。")
         st.caption("レンジが広くても、相場状況によってはレンジ外になる可能性があります。完全に防げるものではありません。")
-        if latest_price < user_lower or latest_price > user_upper:
+        if order_assist_price < user_lower or order_assist_price > user_upper:
             st.markdown(f'<div class="warn-box">【レンジアウト警告】直近の確定足は設定レンジ <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_upper}</code> の外側です。</div>',unsafe_allow_html=True)
         # Reuse the validated 4h ATR above. This order-assist section is only
         # rendered when both the 4h range and 4h ATR are valid.
@@ -2334,7 +2355,7 @@ def _render_main_area():
         total_grid_count = half_grid_count * 2
         quantity_wan_val = max(0.0, float(st.session_state["quantity_wan"]))
         order_units = max(0, int(quantity_wan_val * 10000))
-        usd_rate_repeat = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
+        usd_rate_repeat = order_assist_price if ticker == "USDJPY=X" else get_usdjpy_rate()
         risk_calc_available = bool(is_jpy or (usd_rate_repeat is not None and np.isfinite(usd_rate_repeat) and usd_rate_repeat > 0))
         if is_jpy:
             pip_value_yen = (order_units / 10000) * 100.0
@@ -2350,9 +2371,9 @@ def _render_main_area():
         sell_loss_pips = sum(max(0.0, (sell_stop_loss - level) / pip_unit) for level in sell_levels)
         max_loss_yen = (buy_loss_pips + sell_loss_pips) * pip_value_yen
         if order_units > 0 and is_jpy:
-            margin_per_order = (latest_price * order_units) / 25.0
+            margin_per_order = (order_assist_price * order_units) / 25.0
         elif order_units > 0 and risk_calc_available:
-            margin_per_order = (latest_price * float(usd_rate_repeat) * order_units) / 25.0
+            margin_per_order = (order_assist_price * float(usd_rate_repeat) * order_units) / 25.0
         else:
             margin_per_order = 0.0
         total_margin_yen = margin_per_order * total_grid_count
@@ -2384,8 +2405,8 @@ def _render_main_area():
         )
     else:
         st.warning(
-            "4時間足の高値・安値またはATRを確認できないため、"
-            "リピート注文のレンジ・損切り幅・注文幅・資金試算を停止しています。"
+            "1時間足・4時間足の最新データ、4時間足の高値・安値またはATRを"
+            "確認できないため、リピート注文の参考計算を停止しています。"
         )
         st.caption(
             "データが正常に取得できるまで参考計算は表示しません。"
