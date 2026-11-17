@@ -120,7 +120,9 @@ def _extract_fixed_metrics_helper():
         and any(isinstance(target, ast.Name) and target.id == "APP_CLASS_LABELS" for target in item.targets)
     )
     namespace = {"np": np}
-    exec(compile(ast.Module(body=[ast.Assign(targets=[ast.Name(id="APP_CLASS_LABELS", ctx=ast.Store())], value=labels), node], type_ignores=[]), str(APP_PATH), "exec"), namespace)
+    module = ast.Module(body=[ast.Assign(targets=[ast.Name(id="APP_CLASS_LABELS", ctx=ast.Store())], value=labels), node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    exec(compile(module, str(APP_PATH), "exec"), namespace)
     return namespace["_fixed_class_metrics"]
 
 
