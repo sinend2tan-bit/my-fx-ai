@@ -1417,10 +1417,14 @@ def bars(ticker, interval="1h", period="60d"):
                     "cannot establish 4h bucket boundaries"
                 )
                 return None
-            # Validate the UTC hourly grid in the same timezone basis as App.
-            # Keep existing naive-index handling unchanged below; aware
-            # timestamps are normalized before the grid-alignment check.
-            if raw.index.tz is not None:
+            # Preserve the established Stage 2 contract (SYN-FX-017):
+            # Scanner 4h has historically interpreted a timezone-naive source
+            # index as UTC, while App 4h fails closed. This intentional
+            # App/Scanner difference is documented in merged PR #27.
+            # Do not silently generalize the 1h/1d fail-closed rule to 4h.
+            if raw.index.tz is None:
+                raw.index = raw.index.tz_localize("UTC")
+            else:
                 raw.index = raw.index.tz_convert("UTC")
             # Keep reason-specific 4h source diagnostics separate from the
             # Stage 1 C-1 counters (which intentionally remain 1h-only).
