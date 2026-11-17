@@ -1218,7 +1218,7 @@ def test_syn_fx_016_invalid_ohlc_inputs(monkeypatch):
     timestamp 等の結果は個別ケースの観測であり、あらゆる OHLC 異常を
     包括的に検証したことを意味しない。既存 Stage 1 テストとの重複もある。
     """
-    base = fixture_mixed()
+    base = fixture_mixed(700)
     mid_ts = base.index[150]
     outcomes = {}
 
@@ -1367,8 +1367,8 @@ def test_syn_fx_018_feature_nan_window_compression(monkeypatch):
     # （本番コードは変更しない。注入はテスト側 wrapper のみ）。
     original_add = scanner.add_indicators
 
-    def stub_add(df):
-        out = original_add(df)
+    def stub_add(df, **kwargs):
+        out = original_add(df, **kwargs)
         if ts_nan in out.index:
             out.at[ts_nan, "RSI"] = np.nan
         return out
@@ -1419,7 +1419,7 @@ def test_syn_fx_019_weekday_gap_vs_forward_policy(monkeypatch):
     """
     # --- 学習側（Scanner bars）: 平日3時間欠損を含む未来窓は除外 ---
     start_w = pd.Timestamp("2026-10-26 00:00", tz="UTC")  # Monday
-    raw_w = fixture_mixed(290, start=start_w)
+    raw_w = fixture_mixed(750, start=start_w)
     feat_w = _scanner_feature_frame(raw_w)
     pos_w = 120
     ts_sig_w = feat_w.index[pos_w]
