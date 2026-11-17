@@ -77,6 +77,8 @@ class ModelArtifactContractTests(unittest.TestCase):
                 [0.0, 0.1, 0.2],
                 [0.1, 0.2, 0.3],
                 [0.2, 0.3, 0.4],
+                [0.5, 0.5, 0.5],
+                [0.55, 0.5, 0.45],
                 [0.8, 0.7, 0.6],
                 [0.9, 0.8, 0.7],
                 [1.0, 0.9, 0.8],
@@ -84,7 +86,7 @@ class ModelArtifactContractTests(unittest.TestCase):
             columns=FEATURES,
         )
         model = RandomForestClassifier(n_estimators=4, random_state=0)
-        model.fit(frame, [-1, -1, -1, 1, 1, 1])
+        model.fit(frame, [-1, -1, 0, 0, 1, 1])
 
         with tempfile.TemporaryDirectory() as directory:
             path = f"{directory}/model.joblib"
@@ -110,6 +112,8 @@ class ModelArtifactContractTests(unittest.TestCase):
                 [0.0, 0.1, 0.2],
                 [0.1, 0.2, 0.3],
                 [0.2, 0.3, 0.4],
+                [0.5, 0.5, 0.5],
+                [0.55, 0.5, 0.45],
                 [0.8, 0.7, 0.6],
                 [0.9, 0.8, 0.7],
                 [1.0, 0.9, 0.8],
@@ -117,7 +121,7 @@ class ModelArtifactContractTests(unittest.TestCase):
             columns=FEATURES,
         )
         model = RandomForestClassifier(n_estimators=4, random_state=0)
-        model.fit(frame, [-1, -1, -1, 1, 1, 1])
+        model.fit(frame, [-1, -1, 0, 0, 1, 1])
 
         with tempfile.TemporaryDirectory() as directory:
             path = f"{directory}/model.joblib"
