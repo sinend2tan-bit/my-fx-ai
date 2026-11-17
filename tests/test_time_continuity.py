@@ -262,3 +262,78 @@ def test_app_training_labels_skip_weekday_gap_and_count_reason():
     )
     # Gapを含む予測窓のシグナル行は、TargetがNaNのまま残る。
     assert pd.isna(output.loc[idx[240], "Target"])
+
+
+# ---------------------------------------------------------------------------
+# Feature calculations must reset at weekday gaps, but not at market closure.
+# ---------------------------------------------------------------------------
+
+def _synthetic_ohlcv(index):
+    increments = np.resize(np.array([0.03, -0.02, 0.01, -0.01]), len(index))
+    close = 150.0 + np.cumsum(increments)
+    open_ = np.concatenate(([close[0]], close[:-1]))
+    return pd.DataFrame(
+        {
+            "Open": open_,
+            "High": np.maximum(open_, close) + 0.08,
+            "Low": np.minimum(open_, close) - 0.08,
+            "Close": close,
+            "Volume": np.full(len(index), 1_000_000.0),
+        },
+        index=index,
+    )
+
+
+def test_scanner_indicators_reset_after_weekday_gap():
+    idx = pd.date_range("2026-01-05 00:00", periods=300, freq="h", tz="UTC")
+    gap_pos = 120
+    frame = _synthetic_ohlcv(idx.delete(gap_pos))
+    out = scanner.add_indicators(frame, segment_hourly=True)
+    first_after_gap = idx[gap_pos + 1]
+    later_after_gap = idx[gap_pos + 15]
+
+    assert pd.isna(out.loc[first_after_gap, "Return_1"])
+    assert pd.isna(out.loc[first_after_gap, "Return_5"])
+    assert pd.notna(out.loc[later_after_gap, "Return_1"])
+    assert pd.notna(out.loc[later_after_gap, "Return_5"])
+
+
+def test_scanner_indicators_do_not_reset_for_allowed_friday_monday_closure():
+    friday = pd.Timestamp("2026-01-09 20:00", tz="UTC")
+    monday = pd.date_range("2026-01-12 00:00", periods=40, freq="h", tz="UTC")
+    idx = pd.DatetimeIndex([friday, *monday])
+    out = scanner.add_indicators(_synthetic_ohlcv(idx), segment_hourly=True)
+
+    assert (monday[0] - friday) <= pd.Timedelta(hours=80)
+    assert pd.notna(out.loc[monday[0], "Return_1"])
+
+
+def test_app_indicators_reset_after_weekday_gap():
+    idx = pd.date_range("2026-01-05 00:00", periods=300, freq="h", tz="UTC")
+    gap_pos = 120
+    frame = _synthetic_ohlcv(idx.delete(gap_pos))
+    out, st = _app_load_and_process_with_frame(frame)
+
+    assert out is not None
+    assert st.warnings == []
+    first_after_gap = idx[gap_pos + 1]
+    later_after_gap = idx[gap_pos + 15]
+    assert first_after_gap not in out.index
+    assert later_after_gap in out.index
+
+
+def test_app_and_scanner_hold_when_latest_segment_is_too_short():
+    idx = pd.date_range("2026-01-05 00:00", periods=320, freq="h", tz="UTC")
+    frame = _synthetic_ohlcv(idx).drop(index=idx[-5])
+
+    app_out, app_st = _app_load_and_process_with_frame(frame)
+    assert app_out is None
+    assert any("最新の確定1時間足" in warning for warning in app_st.warnings)
+
+    original_download = scanner.yf.download
+    try:
+        scanner.yf.download = lambda *args, **kwargs: frame.copy()
+        scanner_out = scanner.bars("USDJPY=X", interval="1h", period="60d")
+    finally:
+        scanner.yf.download = original_download
+    assert scanner_out is None
