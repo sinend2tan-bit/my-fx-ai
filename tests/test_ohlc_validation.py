@@ -109,3 +109,29 @@ def test_clean_ohlc_source_counts_each_first_exclusion_reason():
         "dropped_incomplete_4h_buckets": 2,
     }
     assert hourly_counts.tolist() == [3, 3]
+
+def test_duplicate_order_matches_legacy_missing_then_keep_last_contract():
+    index = pd.DatetimeIndex([
+        "2026-01-01 00:00",
+        "2026-01-01 00:00",
+        "2026-01-01 01:00",
+        "2026-01-01 01:00",
+    ], tz="UTC")
+    data = frame([
+        [100.0, 105.0, 95.0, 102.0],  # older valid duplicate
+        [100.0, np.nan, 95.0, 102.0], # missing latest duplicate is dropped first
+        [102.0, 107.0, 101.0, 105.0], # older valid duplicate
+        [102.0, 101.0, 99.0, 100.0],  # latest remaining duplicate has impossible High
+    ])
+    data.index = index
+
+    cleaned, diagnostics = clean_ohlc_source(data)
+
+    # Missing duplicate is removed before de-duplication, so the older
+    # non-missing row remains; impossible geometry on the last remaining
+    # duplicate is rejected and does not fall back to its older duplicate.
+    assert cleaned.index.tolist() == [index[0]]
+    assert diagnostics["dropped_missing_or_nonfinite"] == 1
+    assert diagnostics["dropped_duplicate_timestamp"] == 0
+    assert diagnostics["dropped_invalid_ohlc"] == 1
+    assert diagnostics["validated_source_rows"] == 1
