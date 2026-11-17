@@ -1533,8 +1533,6 @@ def bars(ticker, interval="1h", period="60d"):
      # ここで作る指標データは、最新の確定足を含む。
     rows_before_features = len(raw) if data_quality is not None else None
     feature_df = add_indicators(raw)
-    if source_ohlc_diagnostics is not None:
-        feature_df.attrs["source_ohlc_diagnostics"] = dict(source_ohlc_diagnostics)
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
     # Vol_Ratioは診断用に残すが、定数になりやすいため学習特徴量から除外する。
@@ -1832,7 +1830,10 @@ def bars(ticker, interval="1h", period="60d"):
     training_df.attrs["latest_data"] = latest_data
     training_df.attrs["latest_index"] = latest_index
     training_df.attrs["latest_history"] = feature_df.tail(3).copy()
-    training_df.attrs["latest_features"] = feature_df.copy()
+    latest_features = feature_df.copy()
+    if source_ohlc_diagnostics is not None:
+        latest_features.attrs["source_ohlc_diagnostics"] = dict(source_ohlc_diagnostics)
+    training_df.attrs["latest_features"] = latest_features
     if data_quality is not None:
         training_df.attrs["data_quality"] = data_quality
     # 段階3: 監査フレームは1時間足の経路でのみ生成・保持する（仕様書3.5）。
