@@ -53,6 +53,8 @@ def test_directional_predictions_require_strict_directional_dominance():
         np.array([[0.2, np.inf, 0.8]]),
         np.array([[-0.1, 0.2, 0.9]]),
         np.array([[0.2, 0.2, 1.1]]),
+        np.array([[0.2, 0.2, 0.5]]),  # row sum below 1
+        np.array([[0.2, 0.2, 0.7]]),  # row sum above 1
     ],
 )
 def test_directional_predictions_reject_malformed_scores(scores):
