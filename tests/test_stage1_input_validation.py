@@ -172,10 +172,12 @@ def test_scanner_invalid_ohlc_variants(monkeypatch):
     frame.iloc[250, cl] = 0.0
     # 等号ケース（有効でなければならない）: High == max(Open, Close) かつ
     # Low == min(Open, Close)（範囲は非ゼロにして特徴量計算は通過させる）。
-    doji_ts = frame.index[300]
-    close_v = float(frame.iloc[300]["Close"])
+    doji_ts = frame.index[500]
+    close_v = float(frame.iloc[500]["Close"])
     open_v = close_v + 0.10
-    frame.iloc[300, :] = [open_v, open_v, close_v, close_v, 1_000_000.0]
+    frame.iloc[500, :] = [open_v, open_v, close_v, close_v, 1_000_000.0]
+    # The last invalid OHLC row is at 250; position 500 is beyond the
+    # 199-row EMA200 re-warm-up of the new contiguous segment.
     stub_scanner_download(monkeypatch, frame)
     out = scanner.bars("USDJPY=X", interval="1h", period="180d")
     assert out is not None
@@ -430,12 +432,12 @@ def test_app_dirty_frame_counters():
     frame.iloc[200, cl] = np.nan  # 欠損
     frame.iloc[250, hi] = np.inf  # 非有限値
     # 重複 timestamp（後ろが有効）: keep="last" で残る。
-    ts = frame.index[350]
-    dup = frame.iloc[[350]].copy()
+    ts = frame.index[500]
+    dup = frame.iloc[[500]].copy()
     new_close = float(dup.iloc[0]["Close"] + 0.03)
     dup.iloc[0, cl] = new_close
     dup.iloc[0, hi] = max(float(dup.iloc[0]["High"]), new_close)
-    combined = pd.concat([frame.iloc[:351], dup, frame.iloc[351:]])
+    combined = pd.concat([frame.iloc[:501], dup, frame.iloc[501:]])
     # NaT 行（timestamp 不正）。
     nat_row = frame.iloc[[10]].copy()
     nat_row.index = pd.DatetimeIndex([pd.NaT])
@@ -1296,14 +1298,14 @@ def test_app_and_scanner_1h_dst_inputs_normalize_to_same_utc_instants(
     scan_index = scan.attrs["latest_features"].index
     assert scan_index.tz is not None
     assert str(scan_index.tz) == "UTC"
-    assert scan_index.equals(utc_frame.index[19:-1])
+    assert scan_index.equals(utc_frame.index[199:-1])
 
     app_ns, _st = _app_namespace(lambda: london_frame.copy())
     app = app_ns["load_and_process_data"]("USDJPY=X", "60d", "1h")
     assert app is not None
     assert app.index.tz is not None
     assert str(app.index.tz) == "UTC"
-    assert app.index.equals(utc_frame.index[15:-1])
+    assert app.index.equals(utc_frame.index[199:-1])
 
 
 def test_app_daily_keeps_exchange_calendar_timezone_without_utc_relabel():
