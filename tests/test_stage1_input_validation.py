@@ -31,7 +31,7 @@
   Scanner MODEL_VERSION 21。
   旧版（App version 7）の保存済みモデルは再利用されない。品質ゲートを
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
-  評価モデルが使われ、旧ファイルは上書きされない。新版（8）の保存済み
+  評価モデルが使われ、旧ファイルは上書きされない。新版（9）の保存済み
   モデルは従来どおり再利用される。
 - C-1 修正（案A、ChatGPT 決定）: 鮮度除外を品質検証の前に置く。
   DatetimeIndex 確認 → タイムゾーン確認（tz-aware は UTC 正規化、
@@ -632,7 +632,7 @@ def _model_namespace():
     }
     # AIFX-APP-PERSIST-20261113-01: 保存処理が _save_trained_model に
     # 分離されたため、抽出対象へ追加する（依存の列挙は従来どおり）。
-    for fname in ("_model_filename", "_save_trained_model", "analyze_signal_with_backtest"):
+    for fname in ("_model_filename", "_save_trained_model", "_purged_train_mask", "analyze_signal_with_backtest"):
         code = compile(
             ast.Module(body=[_extract_function(fname)], type_ignores=[]),
             "app_extract",
@@ -689,9 +689,9 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
     return tmp_path / filename
 
 
-def test_app_model_version_is_8():
-    # 段階1で 6→7、段階2（SYN-FX-017）で 7→8。
-    assert _app_literal("MODEL_VERSION") == 8
+def test_app_model_version_is_9():
+    # 段階1で 6→7、段階2（SYN-FX-017）で 7→8、重み付け修正で 8→9。
+    assert _app_literal("MODEL_VERSION") == 9
 
 
 def test_app_clears_stale_model_save_status_at_start():
@@ -708,7 +708,7 @@ def test_app_clears_stale_model_save_status_at_start():
 
 def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 7, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
@@ -717,7 +717,7 @@ def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     # 旧版ファイルが再利用されていれば、この保存は起きない。
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 8
+    assert saved["version"] == 9
     assert saved["model"].n_estimators == 260  # 新規学習した候補モデル
 
 
@@ -797,7 +797,7 @@ def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch)
 
     monkeypatch.setattr(ns["joblib"], "dump", fail_dump)
     payload = {
-        "version": 8,
+        "version": 9,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
