@@ -33,7 +33,7 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 
 
-def _frame(n, freq, end, tail=0.0):
+def _frame(n, freq, end, tail=0.0, tail_bars=30):
     """周期パターンの末尾に一方向区間（tail の符号×本数）を付けた価格パス。
 
     tail>0: 末尾30本が上昇、tail<0: 末尾30本が下降。EMA20/50 の向きが
@@ -43,7 +43,7 @@ def _frame(n, freq, end, tail=0.0):
     i = np.arange(n)
     step = np.where((i // 12) % 2 == 0, 0.45, -0.45) + np.where(i % 2 == 0, 0.02, -0.02)
     if tail:
-        step[-30:] = tail
+        step[-tail_bars:] = tail
     close = 150.0 + np.cumsum(step)
     open_ = np.concatenate([[close[0]], close[:-1]])
     return pd.DataFrame(
@@ -93,7 +93,10 @@ def _make_download(
             if missing_4h_source:
                 return pd.DataFrame()
             end4 = now_h - pd.Timedelta(days=2) if stale_4h_source else now_h
-            return _frame(600, "1h", end4, tail=tail_4h_source)
+            # 200-bar EMA warm-up is applied after 1h→4h aggregation.
+            # Supply >800 hourly observations so the 4h fixture has >200 bars,
+            # and preserve a 30-bar directional tail at the 4h timeframe.
+            return _frame(1000, "1h", end4, tail=tail_4h_source, tail_bars=120)
         end = now_h - pd.Timedelta(days=10) if stale_main else now_h
         return _frame(600, "1h", end, tail=tail_1h)
 
