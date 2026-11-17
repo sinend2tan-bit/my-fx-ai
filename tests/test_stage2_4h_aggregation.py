@@ -62,7 +62,11 @@ import pytest
 import yfinance as yf
 
 import scanner
-from aifx_ohlc_validation import ohlc_valid_mask
+from aifx_ohlc_validation import (
+    add_4h_bucket_diagnostics,
+    clean_ohlc_source,
+    ohlc_valid_mask,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = REPO_ROOT / "app.py"
@@ -199,6 +203,8 @@ def _app_namespace(frame_factory):
         "DEFAULT_SPREAD_PIPS": _app_literal("DEFAULT_SPREAD_PIPS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
         "ohlc_valid_mask": ohlc_valid_mask,
+        "clean_ohlc_source": clean_ohlc_source,
+        "add_4h_bucket_diagnostics": add_4h_bucket_diagnostics,
         "_LOAD_STOP_REASONS": {},
         "_LOAD_STOP_WARNED": set(),
     }
