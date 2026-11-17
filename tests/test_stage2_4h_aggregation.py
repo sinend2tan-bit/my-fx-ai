@@ -116,6 +116,17 @@ def stub_scanner_download(monkeypatch, frame):
     monkeypatch.setattr(yf, "download", lambda *a, **k: frame.copy())
 
 
+def test_scanner_4h_stops_on_timezone_naive_source(monkeypatch):
+    # A timezone-naive source cannot establish absolute 4h bucket boundaries.
+    # Scanner must match App's fail-closed behavior instead of assuming UTC.
+    frame = make_frame(n=1600, tz=None)
+    stub_scanner_download(monkeypatch, frame)
+
+    result = scanner.bars("USDJPY=X", interval="4h", period="90d")
+
+    assert result is None
+
+
 def expected_4h_bins(frame):
     """Scanner の 4h 採用条件を素直に適用した期待区間系列。
 
