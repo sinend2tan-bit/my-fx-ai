@@ -1887,6 +1887,74 @@ def _fixed_class_metrics(y_true, y_pred):
     return matrix, score, recalls
 
 
+def _fold_completeness_diagnostics(fold_details, required_folds):
+    """Fail-closed temporal validation completeness check.
+
+    Every configured test fold must be present exactly once and contain true
+    support for SELL / NEUTRAL / BUY. Predicted support is retained in the
+    fold detail for diagnosis, but does not substitute for missing true support.
+    """
+    required = int(required_folds)
+    if required < 1:
+        raise ValueError("required_folds must be positive")
+
+    details = list(fold_details or [])
+    by_fold = {}
+    duplicate_folds = []
+    invalid_fold_ids = []
+    for detail in details:
+        try:
+            fold_id = int(detail.get("fold"))
+        except (TypeError, ValueError, AttributeError):
+            invalid_fold_ids.append(None)
+            continue
+        if fold_id in by_fold:
+            duplicate_folds.append(fold_id)
+        else:
+            by_fold[fold_id] = detail
+
+    expected = set(range(1, required + 1))
+    present = set(by_fold)
+    missing_folds = sorted(expected - present)
+    unexpected_folds = sorted(present - expected)
+    incomplete_folds = []
+    for fold_id in sorted(expected & present):
+        detail = by_fold[fold_id]
+        counts = detail.get("actual_class_counts") or {}
+        missing_classes = [
+            name for name in ("sell", "neutral", "buy")
+            if int(counts.get(name, 0) or 0) <= 0
+        ]
+        if missing_classes:
+            incomplete_folds.append({
+                "fold": fold_id,
+                "missing_true_classes": missing_classes,
+                "actual_class_counts": {
+                    name: int(counts.get(name, 0) or 0)
+                    for name in ("sell", "neutral", "buy")
+                },
+                "predicted_class_counts": detail.get("predicted_class_counts") or {},
+                "balanced_accuracy": detail.get("balanced_accuracy"),
+                "reason": detail.get("balanced_accuracy_reason") or
+                    "true support missing for one or more fixed classes",
+            })
+
+    complete = not (
+        missing_folds or unexpected_folds or duplicate_folds
+        or invalid_fold_ids or incomplete_folds
+    )
+    return {
+        "complete": bool(complete),
+        "required_folds": required,
+        "reported_folds": len(details),
+        "missing_folds": missing_folds,
+        "unexpected_folds": unexpected_folds,
+        "duplicate_folds": sorted(set(duplicate_folds)),
+        "invalid_fold_ids": invalid_fold_ids,
+        "incomplete_folds": incomplete_folds,
+    }
+
+
 MIN_DIRECTIONAL_SCORE_PCT = 55.0
 
 
@@ -2510,7 +2578,19 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
     # 既存の精度・基準モデル・方向別再現率の合格条件は緩めない。
     # 不合格時にどの条件を満たしていないか、ログで具体的に分かるようにする。
+    fold_completeness = _fold_completeness_diagnostics(
+        fold_details,
+        N_WALK_FORWARD_FOLDS,
+    )
     model_gate_reasons = []
+    if not fold_completeness["complete"]:
+        model_gate_reasons.append(
+            "walk-forward fold completeness failed: "
+            f"missing={fold_completeness['missing_folds']}, "
+            f"incomplete={ [item['fold'] for item in fold_completeness['incomplete_folds']] }, "
+            f"duplicates={fold_completeness['duplicate_folds']}, "
+            f"unexpected={fold_completeness['unexpected_folds']}"
+        )
     if score is None:
         model_gate_reasons.append("OOF実測値に全クラスが揃わずbalanced_accuracy算出不能")
     elif score < 0.40:
@@ -2675,6 +2755,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         ),
         "class_recall_pct": recall_pct,
         "folds": used_folds,
+        "fold_completeness": fold_completeness,
         "fold_details": fold_details,
         "simulated_pnl": total_pnl,
         "directional_pnl": directional_pnl,
