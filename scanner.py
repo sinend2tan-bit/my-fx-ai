@@ -1911,10 +1911,33 @@ def directional_predictions_from_scores(aligned_probabilities, threshold_pct=MIN
     result[(sell * 100.0 >= threshold) & (sell > buy)] = -1
     return result
 
+
+def _private_score_gated_pnl_diagnostic_enabled():
+    """Enable the 55% gated PnL diagnostic only for an explicitly private local run."""
+    return os.environ.get("AIFX_PRIVATE_SCORE_GATED_PNL_DIAGNOSTIC", "").strip() == "1"
+
+
+def _strip_private_diagnostics(value):
+    """Recursively remove local-only diagnostics before public state persistence."""
+    private_key = "simulated_pnl_after_55pct_score_gate_diagnostic"
+    if isinstance(value, dict):
+        return {
+            key: _strip_private_diagnostics(item)
+            for key, item in value.items()
+            if key != private_key
+        }
+    if isinstance(value, list):
+        return [_strip_private_diagnostics(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_private_diagnostics(item) for item in value)
+    return value
+
 # =========================================================
 # 時系列検証
 def walk_forward_validation(df, pair_name="通貨ペア不明"):
     """時系列検証と、各クラスの予測件数を通貨ペア名付きで記録する。"""
+
+    private_diagnostic_enabled = _private_score_gated_pnl_diagnostic_enabled()
 
     def failure(reason, folds=0, details=None):
         return {
@@ -2205,19 +2228,19 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 spread_pips,
                 pip_size,
             )
-            # Parallel diagnostic: apply the exact live 55% BUY/SELL score gate
-            # to OOF raw scores. This does not replace or alter the existing
-            # ungated class-prediction PnL or any validation gate.
-            score_gated_pred = directional_predictions_from_scores(aligned_proba)
-            fold_score_gated_pnl, fold_score_gated_trades = simulated_pnl(
-                score_gated_pred,
-                df.loc[test_X.index],
-                spread_pips,
-                pip_size,
-            )
+            fold_score_gated_pnl = None
+            if private_diagnostic_enabled:
+                # Local-only diagnostic: never calculate by default in the public Actions workflow.
+                score_gated_pred = directional_predictions_from_scores(aligned_proba)
+                fold_score_gated_pnl, fold_score_gated_trades = simulated_pnl(
+                    score_gated_pred,
+                    df.loc[test_X.index],
+                    spread_pips,
+                    pip_size,
+                )
+                score_gated_trade_rows.extend(fold_score_gated_trades)
             # Keep each fold's non-overlapping trades isolated before aggregation.
             simulated_trade_rows.extend(fold_trades)
-            score_gated_trade_rows.extend(fold_score_gated_trades)
 
             importances = model.feature_importances_
             top_idx = np.argsort(importances)[::-1][:5]
@@ -2300,7 +2323,6 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "confusion_matrix": cm,
                 "brier_score_raw_probability_diagnostic": round(fold_brier, 5) if fold_brier is not None else None,
                 "simulated_pnl": fold_pnl,
-                "simulated_pnl_after_55pct_score_gate_diagnostic": fold_score_gated_pnl,
             }
 
             fold_details.append(detail)
@@ -2430,7 +2452,10 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
     # 各fold内で非重複かつ決済がfold内に収まる取引だけを合算する。
     total_pnl = summarize_trade_results(simulated_trade_rows)
-    score_gated_total_pnl = summarize_trade_results(score_gated_trade_rows)
+    score_gated_total_pnl = (
+        summarize_trade_results(score_gated_trade_rows)
+        if private_diagnostic_enabled else None
+    )
 
     # 買い・売りを分けて評価する。片方の成績が悪い場合に、その方向だけ保留できるようにする。
     directional_pnl = {}
@@ -2631,7 +2656,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         f"passed={passed}"
     )
 
-    return {
+    result = {
         "passed": bool(passed),
         "reason": reason,
         "model_validation_ok": bool(model_validation_ok),
@@ -2650,7 +2675,6 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "folds": used_folds,
         "fold_details": fold_details,
         "simulated_pnl": total_pnl,
-        "simulated_pnl_after_55pct_score_gate_diagnostic": score_gated_total_pnl,
         "directional_pnl": directional_pnl,
         "class_counts": {
             "actual": actual_counts,
@@ -4548,7 +4572,8 @@ def main():
             "notice": "簡易検査であり、価格配信元の正確性や全ての異常を保証するものではありません。",
         },
         "summary": summary,
-        "pairs": pair_results,
+        # Local-only 55% gated PnL diagnostics must never enter public scan_state.json.
+        "pairs": _strip_private_diagnostics(pair_results),
         "history": history,
         "history_policy": {
             "max_runs": 50,
