@@ -1835,8 +1835,6 @@ def bars(ticker, interval="1h", period="60d"):
     training_df.attrs["latest_features"] = feature_df.copy()
     if data_quality is not None:
         training_df.attrs["data_quality"] = data_quality
-    if source_ohlc_diagnostics is not None:
-        training_df.attrs["source_ohlc_diagnostics"] = dict(source_ohlc_diagnostics)
     # 段階3: 監査フレームは1時間足の経路でのみ生成・保持する（仕様書3.5）。
     # 4時間足・日足には付与しない。永続化せず、特徴量・予測記録・
     # 公開ステータスには含めない。
