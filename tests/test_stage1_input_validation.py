@@ -627,12 +627,13 @@ def _model_namespace():
         "FEATURE_COLUMNS": _app_literal("FEATURE_COLUMNS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
         "MODEL_VERSION": _app_literal("MODEL_VERSION"),
+        "APP_CLASS_LABELS": _app_literal("APP_CLASS_LABELS"),
         "datetime": datetime,
         "JST": ZoneInfo("Asia/Tokyo"),
     }
     # AIFX-APP-PERSIST-20261113-01: 保存処理が _save_trained_model に
     # 分離されたため、抽出対象へ追加する（依存の列挙は従来どおり）。
-    for fname in ("_model_filename", "_save_trained_model", "_purged_train_mask", "analyze_signal_with_backtest"):
+    for fname in ("_model_filename", "_save_trained_model", "_purged_train_mask", "_fixed_class_metrics", "analyze_signal_with_backtest"):
         code = compile(
             ast.Module(body=[_extract_function(fname)], type_ignores=[]),
             "app_extract",
@@ -689,9 +690,9 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
     return tmp_path / filename
 
 
-def test_app_model_version_is_9():
-    # 段階1で 6→7、段階2（SYN-FX-017）で 7→8、重み付け修正で 8→9。
-    assert _app_literal("MODEL_VERSION") == 9
+def test_app_model_version_is_10():
+    # 段階1で 6→7、段階2で 7→8、重み付け修正で 8→9、固定3クラス評価で 9→10。
+    assert _app_literal("MODEL_VERSION") == 10
 
 
 def test_app_clears_stale_model_save_status_at_start():
@@ -717,7 +718,7 @@ def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     # 旧版ファイルが再利用されていれば、この保存は起きない。
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 9
+    assert saved["version"] == 10
     assert saved["model"].n_estimators == 260  # 新規学習した候補モデル
 
 
@@ -743,7 +744,7 @@ def test_app_gate_failure_no_fallback_to_old_model(tmp_path, monkeypatch):
 
 def test_app_current_version_model_reused(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 10, _tiny_model())
     before = path.read_bytes()
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
@@ -797,7 +798,7 @@ def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch)
 
     monkeypatch.setattr(ns["joblib"], "dump", fail_dump)
     payload = {
-        "version": 9,
+        "version": 10,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
