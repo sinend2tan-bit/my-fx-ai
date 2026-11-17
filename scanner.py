@@ -12,6 +12,12 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from aifx_ohlc_validation import (
+    add_4h_bucket_diagnostics,
+    clean_ohlc_source,
+    ohlc_valid_mask,
+)
+
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix
@@ -1334,6 +1340,7 @@ def bars(ticker, interval="1h", period="60d"):
     # → (4) 特徴量計算による除外。各行は最初に該当した理由で一度だけ
     # 計上し、2つの検算式が意味的にも成立するようにする。
     data_quality = None
+    source_ohlc_diagnostics = None
     if interval == "1h":
         data_quality = {
             "input_rows": 0,
@@ -1399,19 +1406,28 @@ def bars(ticker, interval="1h", period="60d"):
         data_quality["dropped_duplicate_timestamp"] = int(rows_before - len(raw))
         # (3) OHLC 整合性を検証する。keep="last" で残った行が不正な場合は
         # 古い重複行へ戻らず、その timestamp 自体を除外する。
-        oc_max = raw[["Open", "Close"]].max(axis=1)
-        oc_min = raw[["Open", "Close"]].min(axis=1)
-        ohlc_ok = (
-            (raw["High"] >= oc_max)
-            & (raw["Low"] <= oc_min)
-            & (raw["High"] >= raw["Low"])
-            & (raw[required] > 0).all(axis=1)
-        ).to_numpy()
+        ohlc_ok = ohlc_valid_mask(raw, required).to_numpy()
         data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
         raw = raw.loc[ohlc_ok].copy()
     else:
-        raw = raw.dropna(subset=required)
-        raw = raw[~raw.index.duplicated(keep="last")].sort_index()
+        if interval == "4h":
+            if not isinstance(raw.index, pd.DatetimeIndex):
+                print(
+                    f"[TIMEZONE STOP] {ticker} {interval}: index is not a DatetimeIndex; "
+                    "cannot establish 4h bucket boundaries"
+                )
+                return None
+            # Validate the UTC hourly grid in the same timezone basis as App.
+            # Keep existing naive-index handling unchanged below; aware
+            # timestamps are normalized before the grid-alignment check.
+            if raw.index.tz is not None:
+                raw.index = raw.index.tz_convert("UTC")
+            # Keep reason-specific 4h source diagnostics separate from the
+            # Stage 1 C-1 counters (which intentionally remain 1h-only).
+            raw, source_ohlc_diagnostics = clean_ohlc_source(raw, required)
+        else:
+            raw = raw.dropna(subset=required)
+            raw = raw[~raw.index.duplicated(keep="last")].sort_index()
 
     # timezone-aware timestamps are converted to UTC for a consistent internal index.
     # Naive timestamps are never silently assigned a timezone. For non-4h
@@ -1476,6 +1492,20 @@ def bars(ticker, interval="1h", period="60d"):
         hourly_counts = raw["Close"].resample(
             "4h", origin="start_day"
         ).count()
+        add_4h_bucket_diagnostics(source_ohlc_diagnostics, hourly_counts, cutoff)
+        print(
+            f"[4H SOURCE QUALITY] {ticker}: "
+            f"input={source_ohlc_diagnostics['input_rows']}, "
+            f"invalid_timestamp={source_ohlc_diagnostics['dropped_invalid_timestamp']}, "
+            f"off_hour_grid={source_ohlc_diagnostics['dropped_off_hour_grid_timestamp']}, "
+            f"missing_nonfinite={source_ohlc_diagnostics['dropped_missing_or_nonfinite']}, "
+            f"duplicates={source_ohlc_diagnostics['dropped_duplicate_timestamp']}, "
+            f"invalid_ohlc={source_ohlc_diagnostics['dropped_invalid_ohlc']}, "
+            f"valid_source={source_ohlc_diagnostics['validated_source_rows']}, "
+            f"complete_4h={source_ohlc_diagnostics['complete_4h_buckets']}, "
+            f"underfull_4h={source_ohlc_diagnostics['dropped_underfull_4h_buckets']}, "
+            f"overfull_4h={source_ohlc_diagnostics['dropped_overfull_4h_buckets']}"
+        )
 
         # UTCの4時間区間に集約する。
         raw = raw.resample("4h", origin="start_day").agg({
@@ -1807,7 +1837,10 @@ def bars(ticker, interval="1h", period="60d"):
     training_df.attrs["latest_data"] = latest_data
     training_df.attrs["latest_index"] = latest_index
     training_df.attrs["latest_history"] = feature_df.tail(3).copy()
-    training_df.attrs["latest_features"] = feature_df.copy()
+    latest_features = feature_df.copy()
+    if source_ohlc_diagnostics is not None:
+        latest_features.attrs["source_ohlc_diagnostics"] = dict(source_ohlc_diagnostics)
+    training_df.attrs["latest_features"] = latest_features
     if data_quality is not None:
         training_df.attrs["data_quality"] = data_quality
     # 段階3: 監査フレームは1時間足の経路でのみ生成・保持する（仕様書3.5）。
