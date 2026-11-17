@@ -93,7 +93,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 8
+MODEL_VERSION = 9
 
 st.markdown("""
 <style>
@@ -1513,6 +1513,20 @@ def _normalise_timestamp(value):
         return str(value)
 
 
+def _purged_train_mask(data_index, train_index, test_start, lookahead):
+    """Return training rows whose full forward-label window ends before test_start.
+
+    Positions are resolved against the original, unfiltered bar index so dropped
+    feature rows cannot silently compress the embargo.
+    """
+    positions = data_index.get_indexer(train_index)
+    test_position = data_index.get_indexer([test_start])
+    if (positions < 0).any() or len(test_position) != 1 or test_position[0] < 0:
+        raise ValueError("holdout timestamps must exist uniquely in the original index")
+    gap = max(0, int(lookahead))
+    return positions + gap < int(test_position[0])
+
+
 def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
     """Returns the same tuple shape expected by the UI."""
     # 保存失敗の警告は直近の分析実行だけを示す。前回の状態を引き継がない。
@@ -1533,18 +1547,26 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         if len(X) < 160 or y.nunique() < 2:
             return fallback
 
-        # Chronological holdout with an embargo at least as long as the label horizon.
+        # Chronological holdout. Purge against the original bar index, not the
+        # compressed labelled rows: missing feature rows must not shorten embargo.
         test_n = min(120, max(40, int(len(X) * 0.20)))
         split = len(X) - test_n
-        train_end = max(1, split - LOOKAHEAD_BARS)
-        X_train, y_train = X.iloc[:train_end], y.iloc[:train_end]
+        train_candidates = X.iloc[:split]
+        try:
+            keep_train = _purged_train_mask(
+                data.index, train_candidates.index, X.index[split], LOOKAHEAD_BARS
+            )
+        except Exception:
+            return fallback
+        X_train = train_candidates.iloc[np.flatnonzero(keep_train)]
+        y_train = y.loc[X_train.index]
         X_test, y_test = X.iloc[split:], y.iloc[split:]
         if len(X_train) < 100 or len(X_test) < 20 or y_train.nunique() < 2:
             return fallback
 
         eval_model = RandomForestClassifier(
             n_estimators=220, max_depth=7, min_samples_leaf=8,
-            class_weight="balanced_subsample", random_state=42, n_jobs=-1
+            random_state=42, n_jobs=-1
         )
         weights = compute_sample_weight(class_weight="balanced", y=y_train)
         eval_model.fit(X_train, y_train, sample_weight=weights)
@@ -1605,7 +1627,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         if model is None or force_retrain:
             candidate_model = RandomForestClassifier(
                 n_estimators=260, max_depth=7, min_samples_leaf=8,
-                class_weight="balanced_subsample", random_state=43, n_jobs=-1
+                random_state=43, n_jobs=-1
             )
             # Trade outcome buttons are review logs, not reliable market labels.
             # Do not promote a new model when out-of-sample balanced accuracy fails
