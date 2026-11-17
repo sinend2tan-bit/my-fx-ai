@@ -463,7 +463,7 @@ def run_app_load(frame, ticker="USDJPY=X", interval="1h"):
 
 # --- analyze_signal_with_backtest 用 namespace（st は fake） ---
 _app_analyze_mod = _extract_app_module(
-    {"analyze_signal_with_backtest", "_model_filename"},
+    {"analyze_signal_with_backtest", "_model_filename", "_purged_train_mask"},
     {"FEATURE_COLUMNS", "LOOKAHEAD_BARS", "MODEL_VERSION"},
 )
 
