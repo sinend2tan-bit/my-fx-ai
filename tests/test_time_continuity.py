@@ -116,6 +116,7 @@ def _extract_app_forecast_updater():
         "LOOKAHEAD_BARS": 8,
         "has_contiguous_hourly_window": has_contiguous_hourly_window,
         "ohlc_valid_mask": ohlc_valid_mask,
+        "ohlc_valid_mask": ohlc_valid_mask,
         "_normalise_timestamp": lambda value: pd.Timestamp(value).isoformat(),
         "save_forecast_history": lambda _items: None,
     }
