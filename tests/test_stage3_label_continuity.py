@@ -470,8 +470,8 @@ def test_tl15_consecutive_gap_counted_once_per_signal(monkeypatch):
     assert audit.loc[prev_ts, "first_bad_pair_next"] == next_ts
 
 
-def test_tl16_cause_independence(monkeypatch):
-    """T-L16: 欠損の原因（生データ欠損／特徴量NaN落ち）によらず判定が同一。"""
+def test_tl16_missing_bar_resets_features_but_feature_nan_does_not(monkeypatch):
+    """T-L16: raw time gaps reset indicators; a feature-only NaN does not reset raw history."""
     raw_removed = path_frame(continuous_index(340))
     gap_ts = raw_removed.index[260]
     out_removed = run_bars(monkeypatch, raw_removed.drop(index=[gap_ts]))
@@ -484,18 +484,22 @@ def test_tl16_cause_independence(monkeypatch):
     ]
     out_flat = run_bars(monkeypatch, raw_flat)
 
-    assert discontinuous_timestamps(out_removed) == discontinuous_timestamps(
-        out_flat
-    )
-    assert list(out_removed.index) == list(out_flat.index)
+    removed_features = out_removed.attrs["latest_features"].index
+    flat_features = out_flat.attrs["latest_features"].index
+
+    # After a real missing OHLC bar, the next segment must warm up independently.
+    first_removed_after_gap = removed_features[removed_features > gap_ts][0]
+    assert first_removed_after_gap >= gap_ts + pd.Timedelta(hours=20)
+
+    # A feature-only invalid candle is excluded, but it does not erase valid prior OHLC history.
+    assert gap_ts not in flat_features
+    first_flat_after_gap = flat_features[flat_features > gap_ts][0]
+    assert first_flat_after_gap == gap_ts + pd.Timedelta(hours=1)
+    assert list(removed_features) != list(flat_features)
+
     dq_r, dq_f = quality_of(out_removed), quality_of(out_flat)
-    for key in (
-        "dropped_label_discontinuous",
-        "dropped_label_insufficient_future",
-        "dropped_label_other",
-        "trainable_rows",
-    ):
-        assert dq_r[key] == dq_f[key]
+    assert dq_r["feature_rows"] < dq_f["feature_rows"]
+    assert dq_r["trainable_rows"] < dq_f["trainable_rows"]
 
 
 # ---------------------------------------------------------------------------
@@ -1422,51 +1426,38 @@ def test_audit_scope_1d_absent_and_processing_unchanged(monkeypatch):
     assert daily_index[-2] in feature.index
 
 
-def test_tl17_two_separated_gaps_first_bad_pair_and_single_count(monkeypatch):
-    """T-L17: 1つの窓に離れた2つの欠損ペアがある場合も計上は一度だけで、
-    first_bad_pair は時系列上最初の不良ペアを指す（ChatGPT 相談への対応）。"""
+def test_tl17_gaps_inside_warmup_do_not_create_unavailable_sample_windows(monkeypatch):
+    """Two close raw gaps inside a reset segment's warm-up yield no eligible rows between them."""
     index = fx_week_index(340)
     raw = path_frame(index)
-    # 生の位置で4本間隔の2行を落とし、特徴量フレーム上に離れた2つの
-    # 欠損ペアを作る（同じ8本窓に両方が入りうる近さにする）。
     raw = raw.drop(index=[index[200], index[204]])
     out = run_bars(monkeypatch, raw)
     dq = quality_of(out)
     audit = audit_of(out)
     feature_index = out.attrs["latest_features"].index
 
-    # 特徴量フレーム上の不良ペア（連続性規則を満たさない隣接ペア）を特定する。
     bad_pairs = []
     for pos in range(len(feature_index) - 1):
         prev_ts, next_ts = feature_index[pos], feature_index[pos + 1]
         if not scanner._forward_bar_gap_allowed(prev_ts, next_ts):
             bad_pairs.append((pos, prev_ts, next_ts))
-    assert len(bad_pairs) == 2
-    (g1_pos, g1_prev, g1_next), (g2_pos, g2_prev, g2_next) = bad_pairs
-    assert 0 < g2_pos - g1_pos <= 7
 
-    # 各不良ペアを含む窓を持つシグナル行（位置 p-7..p）の和集合が無効範囲で、
-    # 重なる行も一度だけ計上される。
-    expected = set()
-    for pos, _, _ in bad_pairs:
-        for s in range(pos - 7, pos + 1):
-            expected.add(feature_index[s])
+    # The short segment between the two gaps never reaches indicator eligibility.
+    # Consequently there is one visible boundary in the eligible feature sequence.
+    assert len(bad_pairs) == 1
+    (gap_pos, gap_prev, gap_next) = bad_pairs[0]
+    assert gap_next >= index[204] + pd.Timedelta(hours=20)
+
+    expected = {
+        feature_index[pos]
+        for pos in range(gap_pos - scanner.LOOKAHEAD_BARS + 1, gap_pos + 1)
+    }
     disc = audit[audit["invalid_reason"] == "discontinuous"]
     assert set(disc.index) == expected
     assert dq["dropped_label_discontinuous"] == len(expected)
 
-    # 両方の不良ペアを含む窓では、時系列上最初の不良ペアが記録される。
-    both = [feature_index[s] for s in range(g2_pos - 7, g1_pos + 1)]
-    assert both
-    for ts in both:
+    # Every affected signal row records the same first and only eligible-sequence boundary.
+    for ts in expected:
         row = audit.loc[ts]
-        assert row["first_bad_pair_prev"] == g1_prev
-        assert row["first_bad_pair_next"] == g1_next
-
-    # 2番目のペアだけを含む窓では、2番目のペアが記録される。
-    only_second = [feature_index[s] for s in range(g1_pos + 1, g2_pos + 1)]
-    assert only_second
-    for ts in only_second:
-        row = audit.loc[ts]
-        assert row["first_bad_pair_prev"] == g2_prev
-        assert row["first_bad_pair_next"] == g2_next
+        assert row["first_bad_pair_prev"] == gap_prev
+        assert row["first_bad_pair_next"] == gap_next
