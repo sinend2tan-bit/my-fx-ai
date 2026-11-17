@@ -31,6 +31,7 @@
 
 import ast
 import socket
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -595,6 +596,34 @@ def test_tp3_purge_boundary_by_timestamps(monkeypatch):
         assert eighth_future < test_start
         assert audit_of(gapped_out).loc[last_train, "invalid_reason"] == ""
 
+
+def test_fold_metrics_are_unavailable_when_test_fold_lacks_a_class(monkeypatch):
+    raw = path_frame(continuous_index(500))
+    out = run_bars(monkeypatch, raw)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        validation = scanner.walk_forward_validation(out, pair_name=PAIR_NAME)
+
+    assert validation["fold_details"]
+    incomplete = [
+        detail for detail in validation["fold_details"]
+        if any(count == 0 for count in detail["actual_class_counts"].values())
+    ]
+    assert incomplete
+    for detail in incomplete:
+        assert detail["balanced_accuracy"] is None
+        assert detail["baseline_balanced_accuracy"] is None
+        assert "全クラスが揃わない" in detail["balanced_accuracy_reason"]
+        for label, count in detail["actual_class_counts"].items():
+            if count == 0:
+                assert detail["class_recall_pct"][label] is None
+
+    metric_warnings = [
+        str(item.message) for item in caught
+        if "single label was found" in str(item.message)
+        or "y_pred contains classes not in y_true" in str(item.message)
+    ]
+    assert metric_warnings == []
 
 def test_tp4_clean_data_validation_equivalence(monkeypatch):
     """T-P4: 連続データでは時系列検証の結果が変更前と一致する。"""
