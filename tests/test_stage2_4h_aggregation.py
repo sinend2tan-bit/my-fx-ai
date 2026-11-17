@@ -463,6 +463,16 @@ def _freeze_now(monkeypatch, fixed):
     )
 
 
+def test_scanner_4h_tz_naive_fails_closed_without_utc_assumption(monkeypatch):
+    frame = make_frame(n=1600, tz="UTC", seed=26)
+    frame.index = frame.index.tz_localize(None)
+    stub_scanner_download(monkeypatch, frame)
+
+    result = scanner.bars("USDJPY=X", interval="4h", period="90d")
+
+    assert result is None
+
+
 def _run_both_4h(monkeypatch, frame):
     """同じフレームを Scanner 実物と App 実物の双方に与え、集約系列
     （Scanner は attrs["latest_features"]、App は戻り値）を返す。"""
