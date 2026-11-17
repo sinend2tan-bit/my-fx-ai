@@ -40,9 +40,13 @@ def ohlc_valid_mask(frame, required=None):
 def clean_ohlc_source(frame, required=None):
     """Clean 1h source rows for 4h aggregation and return reason-specific counts.
 
-    The order is intentional: invalid timestamps, missing/non-finite OHLC,
-    duplicate timestamps (keep last), then impossible candle geometry. A
-    malformed last duplicate is not replaced by an older duplicate.
+    The order intentionally matches the existing 4h input contract:
+    invalid timestamps are removed first, then rows with missing/non-finite
+    required OHLC are removed, then remaining duplicate timestamps keep the
+    last row, and finally impossible candle geometry is rejected. Thus a
+    missing-value duplicate can fall back to an older non-missing row (as in
+    the legacy dropna-before-dedup order), but a last remaining duplicate with
+    impossible OHLC geometry is rejected without falling back to an older row.
     """
     columns = list(required or ("Open", "High", "Low", "Close"))
     missing = [column for column in columns if column not in frame.columns]
