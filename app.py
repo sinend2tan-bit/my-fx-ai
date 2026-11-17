@@ -2222,8 +2222,36 @@ def _render_main_area():
     st.caption("数値のエントリー価格・決済価格は表示しません。自動発注は行いません。実際の注文は証券会社の画面で確認してください。")
 
 
-    swing_high_4h = float(clean_series(data_4h["High"]).iloc[-300:].max()) if data_4h is not None else latest_price * 1.03
-    swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-300:].min()) if data_4h is not None else latest_price * 0.97
+    swing_high_series = (
+        clean_series(data_4h["High"]).dropna()
+        if data_4h is not None and "High" in data_4h
+        else pd.Series(dtype=float)
+    )
+    swing_low_series = (
+        clean_series(data_4h["Low"]).dropna()
+        if data_4h is not None and "Low" in data_4h
+        else pd.Series(dtype=float)
+    )
+    swing_high_candidate = (
+        float(swing_high_series.iloc[-300:].max()) if not swing_high_series.empty else np.nan
+    )
+    swing_low_candidate = (
+        float(swing_low_series.iloc[-300:].min()) if not swing_low_series.empty else np.nan
+    )
+    swing_range_available = bool(
+        np.isfinite([swing_high_candidate, swing_low_candidate, latest_price]).all()
+        and swing_low_candidate > 0
+        and swing_high_candidate >= swing_low_candidate
+    )
+    if swing_range_available:
+        swing_high_4h = swing_high_candidate
+        swing_low_4h = swing_low_candidate
+    else:
+        # An empty post-warm-up 4h frame must not propagate NaN into grid sizing.
+        # Keep only a clearly-labelled provisional display range around last price.
+        swing_high_4h = latest_price * 1.03
+        swing_low_4h = latest_price * 0.97
+        st.caption("4時間足の高値・安値は履歴不足または無効値のため、直近価格を基準にした暫定レンジを表示しています。")
     atr_4h_series = (
         clean_series(data_4h["ATR"]).dropna()
         if data_4h is not None and "ATR" in data_4h
