@@ -93,7 +93,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 9
+MODEL_VERSION = 10
 
 st.markdown("""
 <style>
@@ -1530,6 +1530,31 @@ def _normalise_timestamp(value):
     except Exception:
         return str(value)
 
+APP_CLASS_LABELS = (-1, 0, 1)
+
+
+def _fixed_class_metrics(y_true, y_pred):
+    """Return fixed SELL/NEUTRAL/BUY metrics without silently dropping absent classes."""
+    true_values = np.asarray(y_true, dtype=int)
+    predicted_values = np.asarray(y_pred, dtype=int)
+    if true_values.ndim != 1 or predicted_values.ndim != 1 or len(true_values) != len(predicted_values):
+        raise ValueError("y_true and y_pred must be equal-length one-dimensional arrays")
+    positions = {label: index for index, label in enumerate(APP_CLASS_LABELS)}
+    matrix = np.zeros((len(APP_CLASS_LABELS), len(APP_CLASS_LABELS)), dtype=int)
+    for actual, predicted in zip(true_values, predicted_values):
+        if int(actual) not in positions or int(predicted) not in positions:
+            raise ValueError("class labels must be -1, 0, or 1")
+        matrix[positions[int(actual)], positions[int(predicted)]] += 1
+    supports = matrix.sum(axis=1)
+    recalls = [
+        None if supports[index] == 0 else float(matrix[index, index] / supports[index])
+        for index in range(len(APP_CLASS_LABELS))
+    ]
+    complete = bool(np.all(supports > 0))
+    balanced = float(np.mean([value for value in recalls if value is not None])) if complete else None
+    return balanced, recalls, complete, supports.tolist()
+
+
 def _purged_train_mask(data_index, train_index, test_start, lookahead):
     """Return training rows whose full forward-label window ends before test_start.
 
@@ -1588,31 +1613,64 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         eval_model.fit(X_train, y_train, sample_weight=weights)
         pred_test = eval_model.predict(X_test)
         accuracy = float(accuracy_score(y_test, pred_test) * 100)
-        balanced_accuracy = float(balanced_accuracy_score(y_test, pred_test) * 100)
-        # Multiclass Brier score on chronological holdout; lower is better.
-        # This is a probability-quality diagnostic, not a trading-profit metric.
+        balanced_ratio, class_recalls, test_classes_complete, test_class_support = _fixed_class_metrics(y_test, pred_test)
+        balanced_accuracy = None if balanced_ratio is None else float(balanced_ratio * 100)
+        # Use a fixed three-class probability vector. Missing model classes receive
+        # zero probability; a missing true class makes the holdout incomplete.
         eval_prob = eval_model.predict_proba(X_test)
         eval_classes = [int(c) for c in eval_model.classes_]
-        y_true_matrix = np.zeros((len(y_test), len(eval_classes)), dtype=float)
-        y_test_values = y_test.to_numpy(dtype=int)
+        aligned_eval_prob = np.zeros((len(X_test), len(APP_CLASS_LABELS)), dtype=float)
         for _ci, _class_value in enumerate(eval_classes):
-            y_true_matrix[:, _ci] = (y_test_values == _class_value).astype(float)
-        brier_score = float(np.mean(np.sum((eval_prob - y_true_matrix) ** 2, axis=1)))
-        # A simple majority-class baseline helps detect a model that looks accurate
-        # only because one label dominates the test set.
+            if _class_value not in APP_CLASS_LABELS:
+                raise ValueError("model contains an unknown target class")
+            aligned_eval_prob[:, APP_CLASS_LABELS.index(_class_value)] = eval_prob[:, _ci]
+        y_test_values = y_test.to_numpy(dtype=int)
+        y_true_matrix = np.column_stack([
+            (y_test_values == _class_value).astype(float)
+            for _class_value in APP_CLASS_LABELS
+        ])
+        brier_score = (
+            float(np.mean(np.sum((aligned_eval_prob - y_true_matrix) ** 2, axis=1)))
+            if test_classes_complete else None
+        )
+        # Compare against a majority baseline on the same fixed class definition.
         baseline_model = DummyClassifier(strategy="most_frequent")
         baseline_model.fit(X_train, y_train)
         baseline_pred = baseline_model.predict(X_test)
         baseline_accuracy = float(accuracy_score(y_test, baseline_pred) * 100)
-        baseline_balanced_accuracy = float(balanced_accuracy_score(y_test, baseline_pred) * 100)
+        baseline_ratio, _baseline_recalls, _baseline_complete, _ = _fixed_class_metrics(y_test, baseline_pred)
+        baseline_balanced_accuracy = None if baseline_ratio is None else float(baseline_ratio * 100)
+        train_classes_complete = set(int(value) for value in y_train.unique()) == set(APP_CLASS_LABELS)
+        model_classes_complete = set(eval_classes) == set(APP_CLASS_LABELS)
+        validation_complete = bool(test_classes_complete and train_classes_complete and model_classes_complete)
+        validation_reasons = []
+        if not train_classes_complete:
+            validation_reasons.append("学習期間に全3クラスが揃っていません")
+        if not test_classes_complete:
+            validation_reasons.append("評価期間に全3クラスが揃っていません")
+        if not model_classes_complete:
+            validation_reasons.append("学習済みモデルに全3クラスがありません")
         model_quality_ok = bool(
-            balanced_accuracy >= max(38.0, baseline_balanced_accuracy + 3.0)
+            validation_complete
+            and balanced_accuracy is not None
+            and baseline_balanced_accuracy is not None
+            and balanced_accuracy >= max(38.0, baseline_balanced_accuracy + 3.0)
         )
         st.session_state["model_eval_metrics"] = {
             "balanced_accuracy": balanced_accuracy,
+            "class_recall_pct": {
+                name: None if value is None else round(value * 100, 1)
+                for name, value in zip(("sell", "neutral", "buy"), class_recalls)
+            },
+            "class_support": {
+                name: int(value)
+                for name, value in zip(("sell", "neutral", "buy"), test_class_support)
+            },
             "baseline_accuracy": baseline_accuracy,
             "baseline_balanced_accuracy": baseline_balanced_accuracy,
             "brier_score": brier_score,
+            "validation_complete": validation_complete,
+            "validation_reason": validation_reasons,
             "quality_ok": model_quality_ok,
             "test_count": int(len(y_test)),
             "train_count": int(len(X_train)),
@@ -1620,6 +1678,10 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
             "test_end": str(X_test.index[-1]),
         }
         test_count = int(len(y_test))
+        # Incomplete three-class evidence is not a weak pass or a usable signal.
+        # Hold the App output rather than promoting or emitting a direction.
+        if not validation_complete:
+            return fallback
 
         # History contains only truly out-of-sample test predictions; prior bars are NaN.
         history = pd.Series(np.nan, index=data.index, dtype=float)
