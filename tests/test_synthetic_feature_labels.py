@@ -1306,12 +1306,11 @@ def test_syn_fx_017_4h_time_boundaries(monkeypatch):
     assert bin_ts not in feat_s.index
     assert feat_s.index.tz is not None and str(feat_s.index.tz) == "UTC"
 
-    # --- Scanner: preserve the documented legacy UTC localization for 4h ---
+    # --- Scanner: timezone-naive 4h input fails closed; no UTC guess ---
     naive = big_gap.copy()
     naive.index = naive.index.tz_localize(None)
     out_n = run_scanner_bars(monkeypatch, naive, interval="4h")
-    assert out_n is not None
-    pd.testing.assert_frame_equal(out_n.attrs["latest_features"], feat_s)
+    assert out_n is None
 
     # --- Scanner: 完成した最後の 4h 区間は（過去時刻のため）採用される ---
     big2 = fixture_seeded_walk(1204)  # 301 区間すべて完成
