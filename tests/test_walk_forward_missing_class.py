@@ -7,6 +7,7 @@ download market data, fit a real model, or change validation thresholds.
 import numpy as np
 import pandas as pd
 import pytest
+import warnings
 
 import scanner
 
@@ -70,28 +71,31 @@ def test_walk_forward_reports_missing_fold_class_without_hiding_recall(
     monkeypatch.setattr(scanner, "MIN_TRAIN_ROWS", 20)
     monkeypatch.setattr(scanner, "N_WALK_FORWARD_FOLDS", 3)
 
-    result = scanner.walk_forward_validation(
-        _synthetic_walk_forward_frame(),
-        pair_name="unknown synthetic pair",
-    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = scanner.walk_forward_validation(
+            _synthetic_walk_forward_frame(),
+            pair_name="unknown synthetic pair",
+        )
 
     assert result["folds"] == 3
     first_fold = result["fold_details"][0]
 
-    # The first test fold contains SELL and BUY only. sklearn's standard
-    # balanced accuracy averages the classes present in y_true: (1.0 + 0.0)/2.
+    # The first test fold contains SELL and BUY only. A three-class fold
+    # score is unavailable rather than silently averaging only two classes.
     assert first_fold["actual_class_counts"] == {
         "sell": 30,
         "neutral": 0,
         "buy": 30,
     }
-    assert first_fold["balanced_accuracy"] == 0.5
+    assert first_fold["balanced_accuracy"] is None
+    assert first_fold["baseline_balanced_accuracy"] is None
+    assert "全クラスが揃わない" in first_fold["balanced_accuracy_reason"]
 
-    # Recall reporting is deliberately fixed to all three classes, so the
-    # absent NEUTRAL class remains visible as zero rather than disappearing.
+    # A class with no actual support has undefined recall, not a fabricated 0%.
     assert first_fold["class_recall_pct"] == {
         "sell": 100.0,
-        "neutral": 0.0,
+        "neutral": None,
         "buy": 0.0,
     }
 
@@ -99,6 +103,33 @@ def test_walk_forward_reports_missing_fold_class_without_hiding_recall(
     # therefore still reports NEUTRAL explicitly.
     assert result["class_counts"]["actual"]["neutral"] > 0
     assert result["class_recall_pct"]["neutral"] == 0.0
+
+    metric_warnings = [
+        str(item.message) for item in caught
+        if "single label was found" in str(item.message)
+        or "y_pred contains classes not in y_true" in str(item.message)
+    ]
+    assert metric_warnings == []
+
+
+def test_pooled_metrics_fail_closed_when_a_target_class_is_absent(monkeypatch):
+    monkeypatch.setattr(
+        scanner, "RandomForestClassifier", _AlwaysSellClassifier
+    )
+    monkeypatch.setattr(scanner, "MIN_TRAIN_ROWS", 20)
+    monkeypatch.setattr(scanner, "N_WALK_FORWARD_FOLDS", 3)
+    frame = _synthetic_walk_forward_frame()
+    frame["Target"] = frame["Target"].replace(0, -1)
+
+    result = scanner.walk_forward_validation(
+        frame, pair_name="unknown synthetic pair"
+    )
+
+    assert result["balanced_accuracy"] is None
+    assert result["baseline_balanced_accuracy"] is None
+    assert result["class_recall_pct"]["neutral"] is None
+    assert result["model_validation_ok"] is False
+    assert any("全クラス" in reason for reason in result["model_gate_reasons"])
 
 
 

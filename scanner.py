@@ -14,7 +14,7 @@ import yfinance as yf
 
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import balanced_accuracy_score, recall_score, confusion_matrix
+from sklearn.metrics import confusion_matrix
 from sklearn.utils.class_weight import compute_sample_weight
 
 
@@ -1868,6 +1868,24 @@ def _purged_train_mask(source_positions, test_start_position, lookahead):
     return positions + horizon < boundary
 
 
+def _fixed_class_metrics(y_true, y_pred):
+    """Return fixed-label confusion matrix and metrics only when all true classes are present.
+
+    Fold-level balanced accuracy is not comparable when a test fold omits a class:
+    sklearn's default balanced_accuracy_score silently averages only observed classes.
+    Preserve undefined per-class recall as None rather than reporting it as zero.
+    """
+    labels = [-1, 0, 1]
+    matrix = confusion_matrix(y_true, y_pred, labels=labels)
+    support = matrix.sum(axis=1)
+    recalls = [
+        None if int(support[i]) == 0 else float(matrix[i, i] / support[i])
+        for i in range(len(labels))
+    ]
+    complete = bool(np.all(support > 0))
+    score = float(np.mean(recalls)) if complete else None
+    return matrix, score, recalls
+
 # =========================================================
 # 時系列検証
 def walk_forward_validation(df, pair_name="通貨ペア不明"):
@@ -2179,9 +2197,8 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 f"fold={fold}, top5={top_features}"
             )
 
-            cm = confusion_matrix(
-                test_y, pred, labels=[-1, 0, 1]
-            ).tolist()
+            cm_array, fold_score, fold_recall = _fixed_class_metrics(test_y, pred)
+            cm = cm_array.tolist()
 
             sell_to_buy_rate = (
                 cm[0][2] / sum(cm[0]) * 100
@@ -2198,25 +2215,18 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             baseline.fit(train_X, train_y)
             baseline_pred = baseline.predict(test_X)
 
-            fold_score = balanced_accuracy_score(
-                test_y, pred
-            )
-            fold_base = balanced_accuracy_score(
-                test_y, baseline_pred
-            )
-
-            fold_recall = recall_score(
-                test_y,
-                pred,
-                labels=[-1, 0, 1],
-                average=None,
-                zero_division=0,
-            )
+            _, fold_base, _ = _fixed_class_metrics(test_y, baseline_pred)
 
             recalls = {
-                "sell": round(float(fold_recall[0] * 100), 1),
-                "neutral": round(float(fold_recall[1] * 100), 1),
-                "buy": round(float(fold_recall[2] * 100), 1),
+                "sell": None if fold_recall[0] is None else round(fold_recall[0] * 100, 1),
+                "neutral": None if fold_recall[1] is None else round(fold_recall[1] * 100, 1),
+                "buy": None if fold_recall[2] is None else round(fold_recall[2] * 100, 1),
+            }
+            fold_score_text = f"{fold_score:.4f}" if fold_score is not None else "N/A (missing true class)"
+            fold_base_text = f"{fold_base:.4f}" if fold_base is not None else "N/A (missing true class)"
+            recall_text = {
+                key: "N/A" if value is None else f"{value:.1f}%"
+                for key, value in recalls.items()
             }
 
             train_counts = class_counts(train_y)
@@ -2240,11 +2250,11 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 "test_source_start": int(test_start_source_position),
                 "test_start": fold_start,
                 "test_end": fold_end_time,
-                "balanced_accuracy": round(
-                    float(fold_score), 4
-                ),
-                "baseline_balanced_accuracy": round(
-                    float(fold_base), 4
+                "balanced_accuracy": round(fold_score, 4) if fold_score is not None else None,
+                "baseline_balanced_accuracy": round(fold_base, 4) if fold_base is not None else None,
+                "balanced_accuracy_reason": (
+                    "" if fold_score is not None
+                    else "テストfoldの実測値に全クラスが揃わないため算出対象外"
                 ),
                 "class_recall_pct": recalls,
                 "train_class_counts": train_counts,
@@ -2262,10 +2272,10 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 f"test={fold_start}..{fold_end_time}, "
                 f"train_rows={len(train_X)}, "
                 f"test_rows={len(test_X)}, "
-                f"score={fold_score:.4f}, "
-                f"baseline={fold_base:.4f}, "
-                f"buy_recall={recalls['buy']:.1f}%, "
-                f"sell_recall={recalls['sell']:.1f}%, "
+                f"score={fold_score_text}, "
+                f"baseline={fold_base_text}, "
+                f"buy_recall={recall_text['buy']}, "
+                f"sell_recall={recall_text['sell']}, "
                 f"train_counts={train_counts}, "
                 f"actual_counts={true_counts}, "
                 f"predicted_counts={pred_counts}, "
@@ -2354,10 +2364,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             f"features={importance_summary}"
         )
 
-    score = balanced_accuracy_score(
-        all_true,
-        all_pred,
-    )
+    _, score, overall_recalls = _fixed_class_metrics(all_true, all_pred)
     raw_probability_brier = None
     if all_probability_rows:
         brier_values = []
@@ -2372,23 +2379,12 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             f"raw_oof_brier={raw_probability_brier}, "
             f"note=lower_is_better; raw RandomForest probabilities are NOT calibrated and must not be interpreted as true win probabilities"
         )
-    baseline_score = balanced_accuracy_score(
-        all_true,
-        all_baseline,
-    )
-
-    recalls = recall_score(
-        all_true,
-        all_pred,
-        labels=[-1, 0, 1],
-        average=None,
-        zero_division=0,
-    )
+    _, baseline_score, _ = _fixed_class_metrics(all_true, all_baseline)
 
     recall_pct = {
-        "sell": round(float(recalls[0] * 100), 1),
-        "neutral": round(float(recalls[1] * 100), 1),
-        "buy": round(float(recalls[2] * 100), 1),
+        "sell": None if overall_recalls[0] is None else round(overall_recalls[0] * 100, 1),
+        "neutral": None if overall_recalls[1] is None else round(overall_recalls[1] * 100, 1),
+        "buy": None if overall_recalls[2] is None else round(overall_recalls[2] * 100, 1),
     }
 
     actual_counts = class_counts(all_true)
@@ -2449,17 +2445,25 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     # 既存の精度・基準モデル・方向別再現率の合格条件は緩めない。
     # 不合格時にどの条件を満たしていないか、ログで具体的に分かるようにする。
     model_gate_reasons = []
-    if score < 0.40:
+    if score is None:
+        model_gate_reasons.append("OOF実測値に全クラスが揃わずbalanced_accuracy算出不能")
+    elif score < 0.40:
         model_gate_reasons.append(f"balanced_accuracy不足({score:.3f}<0.400)")
-    if score < baseline_score:
+    if baseline_score is None:
+        model_gate_reasons.append("基準モデルのOOF実測値に全クラスが揃わず比較不能")
+    elif score is not None and score < baseline_score:
         model_gate_reasons.append(
             f"基準モデル未満({score:.3f}<{baseline_score:.3f})"
         )
-    if recall_pct["buy"] < 20.0:
+    if recall_pct["buy"] is None:
+        model_gate_reasons.append("買いクラスの実測不足により再現率算出不能")
+    elif recall_pct["buy"] < 20.0:
         model_gate_reasons.append(
             f"買い再現率不足({recall_pct['buy']:.1f}%<20.0%)"
         )
-    if recall_pct["sell"] < 20.0:
+    if recall_pct["sell"] is None:
+        model_gate_reasons.append("売りクラスの実測不足により再現率算出不能")
+    elif recall_pct["sell"] < 20.0:
         model_gate_reasons.append(
             f"売り再現率不足({recall_pct['sell']:.1f}%<20.0%)"
         )
@@ -2568,12 +2572,16 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         f"note=next-bar-open entry; non-overlapping ATR-barrier estimate; same-bar ambiguity counted adversely; includes assumed costs only, not actual broker fills/swaps"
     )
 
+    score_text = f"{score:.4f}" if score is not None else "N/A (missing true class)"
+    baseline_score_text = f"{baseline_score:.4f}" if baseline_score is not None else "N/A (missing true class)"
+    buy_recall_text = "N/A" if recall_pct["buy"] is None else f"{recall_pct['buy']:.1f}%"
+    sell_recall_text = "N/A" if recall_pct["sell"] is None else f"{recall_pct['sell']:.1f}%"
     print(
         f"[VALIDATION DETAIL] pair={pair_name}, "
-        f"score={score:.4f}, "
-        f"baseline={baseline_score:.4f}, "
-        f"buy_recall={recall_pct['buy']:.1f}%, "
-        f"sell_recall={recall_pct['sell']:.1f}%, "
+        f"score={score_text}, "
+        f"baseline={baseline_score_text}, "
+        f"buy_recall={buy_recall_text}, "
+        f"sell_recall={sell_recall_text}, "
         f"actual_counts={actual_counts}, "
         f"predicted_counts={predicted_counts}, "
         f"folds={used_folds}, "
@@ -2593,11 +2601,11 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "pnl_gate_reasons": pnl_gate_reasons,
         "positive_pnl_folds": int(positive_pnl_folds),
         "total_pnl_trades": int(total_pnl["trades"]),
-        "balanced_accuracy": round(float(score), 4),
+        "balanced_accuracy": round(score, 4) if score is not None else None,
         "raw_oof_brier_score_diagnostic": raw_probability_brier,
         "probability_calibrated": False,
-        "baseline_balanced_accuracy": round(
-            float(baseline_score), 4
+        "baseline_balanced_accuracy": (
+            round(baseline_score, 4) if baseline_score is not None else None
         ),
         "class_recall_pct": recall_pct,
         "folds": used_folds,
