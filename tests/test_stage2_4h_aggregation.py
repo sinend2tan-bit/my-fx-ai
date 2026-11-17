@@ -510,6 +510,7 @@ def test_invalid_source_ohlc_bar_excludes_4h_bucket_in_both_pipelines(monkeypatc
     assert scan_quality == {
         "input_rows": 1602,
         "dropped_invalid_timestamp": 1,
+        "dropped_off_hour_grid_timestamp": 0,
         "dropped_missing_or_nonfinite": 1,
         "dropped_duplicate_timestamp": 1,
         "dropped_invalid_ohlc": 1,
