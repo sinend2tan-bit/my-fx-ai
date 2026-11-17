@@ -7,6 +7,8 @@ import scanner
 from aifx_time_validation import (
     forward_hourly_bar_gap_allowed,
     has_contiguous_hourly_window,
+    hourly_segment_slices,
+    split_hourly_segments,
 )
 
 
@@ -114,6 +116,7 @@ def _extract_app_forecast_updater():
         "JST": ZoneInfo("Asia/Tokyo"),
         "LOOKAHEAD_BARS": 8,
         "has_contiguous_hourly_window": has_contiguous_hourly_window,
+        "split_hourly_segments": split_hourly_segments,
         "_normalise_timestamp": lambda value: pd.Timestamp(value).isoformat(),
         "save_forecast_history": lambda _items: None,
     }
@@ -252,7 +255,8 @@ def test_app_training_labels_skip_weekday_gap_and_count_reason():
     assert output is not None
     assert st.warnings == []
     quality = output.attrs["data_quality"]
-    assert quality["dropped_label_discontinuous"] > 0
+    assert quality["hourly_segment_count"] == 2
+    assert quality["dropped_label_discontinuous"] == 0
     assert quality["dropped_label_insufficient_future"] == 8
     assert quality["trainable_rows"] == (
         quality["feature_rows"]
@@ -262,3 +266,35 @@ def test_app_training_labels_skip_weekday_gap_and_count_reason():
     )
     # Gapを含む予測窓のシグナル行は、TargetがNaNのまま残る。
     assert pd.isna(output.loc[idx[240], "Target"])
+
+
+def test_hourly_segments_preserve_allowed_weekend_and_split_weekday_gap():
+    idx = pd.DatetimeIndex([
+        "2026-11-06 20:00+00:00",  # Friday
+        "2026-11-06 21:00+00:00",
+        "2026-11-09 00:00+00:00",  # allowed market closure
+        "2026-11-09 01:00+00:00",
+        "2026-11-09 03:00+00:00",  # missing weekday hour
+        "2026-11-09 04:00+00:00",
+    ])
+    slices = hourly_segment_slices(idx)
+    assert [(x.start, x.stop) for x in slices] == [(0, 4), (4, 6)]
+    frame = pd.DataFrame({"Close": range(len(idx))}, index=idx)
+    segments = split_hourly_segments(frame)
+    assert [len(x) for x in segments] == [4, 2]
+    assert segments[0].index[-1] == idx[3]
+    assert segments[1].index[0] == idx[4]
+
+
+def test_hourly_segment_split_rejects_duplicate_or_reverse_timestamps():
+    duplicate = pd.DatetimeIndex([
+        "2026-11-09 09:00+00:00", "2026-11-09 09:00+00:00"
+    ])
+    reverse = pd.DatetimeIndex([
+        "2026-11-09 10:00+00:00", "2026-11-09 09:00+00:00"
+    ])
+    import pytest
+    with pytest.raises(ValueError):
+        hourly_segment_slices(duplicate)
+    with pytest.raises(ValueError):
+        hourly_segment_slices(reverse)
