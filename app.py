@@ -46,6 +46,7 @@ TRADE_JOURNAL_FILE = "actual_trade_journal.json"
 # Files that failed validation must never be silently replaced by an empty/default value.
 _JSON_LOAD_ERRORS = {}
 JST = ZoneInfo("Asia/Tokyo")
+EMA200_MIN_PERIODS = 200
 
 DEFAULT_SETTINGS = {
     "account_balance": 500000,
@@ -1313,7 +1314,8 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
         # ため除外しない。その他の時間足は従来どおり。
         if interval not in ("1h", "4h") and len(df) > 2:
             df = df.iloc[:-1]
-        if len(df) < 80:
+        minimum_bars = EMA200_MIN_PERIODS if interval == "1h" else 80
+        if len(df) < minimum_bars:
             return None, None
         def _calculate_app_segment_features(segment, require_full_ema200=False):
             close = segment["Close"]
@@ -1323,7 +1325,7 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             segment["SMA_20"] = close.rolling(20, min_periods=10).mean()
             segment["EMA_20"] = close.ewm(span=20, adjust=False).mean()
             segment["EMA_200"] = (
-                ema_with_warmup(close, 200)
+                ema_with_warmup(close, EMA200_MIN_PERIODS)
                 if require_full_ema200
                 else close.ewm(span=200, adjust=False).mean()
             )
