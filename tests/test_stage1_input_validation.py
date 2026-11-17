@@ -290,10 +290,9 @@ def test_scanner_tz_aware_daily_legacy_path(monkeypatch):
 
 
 def test_scanner_4h_not_stopped_by_stage1_gate(monkeypatch):
-    # 4時間足は段階1の対象外。tz-naive な1h入力でも段階1のゲートでは
-    # 停止せず、従来の4h処理（段階2の対象）が維持される。
-    frame = make_frame(n=2000, seed=11)
-    frame.index = frame.index.tz_localize(None)
+    # 4時間足は段階1の品質カウンタ対象外。timezone-awareな入力では
+    # 従来の4h処理（段階2の対象）が維持され、1h専用data_qualityは付かない。
+    frame = make_frame(n=2000, tz="UTC", seed=11)
     stub_scanner_download(monkeypatch, frame)
     out = scanner.bars("USDJPY=X", interval="4h", period="90d")
     assert out is not None
