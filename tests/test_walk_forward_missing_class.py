@@ -78,20 +78,21 @@ def test_walk_forward_reports_missing_fold_class_without_hiding_recall(
     assert result["folds"] == 3
     first_fold = result["fold_details"][0]
 
-    # The first test fold contains SELL and BUY only. sklearn's standard
-    # balanced accuracy averages the classes present in y_true: (1.0 + 0.0)/2.
+    # The first test fold contains SELL and BUY only. A three-class fold
+    # score is unavailable rather than silently averaging only two classes.
     assert first_fold["actual_class_counts"] == {
         "sell": 30,
         "neutral": 0,
         "buy": 30,
     }
-    assert first_fold["balanced_accuracy"] == 0.5
+    assert first_fold["balanced_accuracy"] is None
+    assert first_fold["baseline_balanced_accuracy"] is None
+    assert "全クラスが揃わない" in first_fold["balanced_accuracy_reason"]
 
-    # Recall reporting is deliberately fixed to all three classes, so the
-    # absent NEUTRAL class remains visible as zero rather than disappearing.
+    # A class with no actual support has undefined recall, not a fabricated 0%.
     assert first_fold["class_recall_pct"] == {
         "sell": 100.0,
-        "neutral": 0.0,
+        "neutral": None,
         "buy": 0.0,
     }
 
