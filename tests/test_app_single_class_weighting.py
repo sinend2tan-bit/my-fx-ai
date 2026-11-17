@@ -149,4 +149,5 @@ def test_app_holds_signal_when_three_class_holdout_is_incomplete():
     function = _analysis_function()
     source = ast.unparse(function)
     assert "if not validation_complete" in source
+    assert "st.warning" in source
     assert "return fallback" in source
