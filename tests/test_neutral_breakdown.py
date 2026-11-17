@@ -59,7 +59,7 @@ def stub_download(monkeypatch, frame):
     monkeypatch.setattr(yf, "download", lambda *a, **k: frame.copy())
 
 
-def continuous_index(n=340, start="2026-01-05 00:00"):
+def continuous_index(n=500, start="2026-01-05 00:00"):
     return pd.date_range(start=start, periods=n, freq="1h", tz="UTC")
 
 
