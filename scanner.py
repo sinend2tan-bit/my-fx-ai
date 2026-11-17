@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from aifx_time_validation import has_contiguous_hourly_window
+
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix
@@ -1286,7 +1288,7 @@ def add_indicators(df, segment_hourly=False):
     segments = []
     start = 0
     for position in range(1, len(df)):
-        if not _forward_bar_gap_allowed(df.index[position - 1], df.index[position]):
+        if not has_contiguous_hourly_window(df.index[position - 1:position + 1]):
             if start < position:
                 segments.append(df.iloc[start:position].copy())
             start = position
