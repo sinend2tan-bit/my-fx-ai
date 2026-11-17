@@ -65,6 +65,72 @@ class ModelArtifactContractTests(unittest.TestCase):
             model_type=FakeModel,
         ))
 
+    def test_random_forest_joblib_round_trip_preserves_feature_contract(self):
+        import tempfile
+
+        import joblib
+        import pandas as pd
+        from sklearn.ensemble import RandomForestClassifier
+
+        frame = pd.DataFrame(
+            [
+                [0.0, 0.1, 0.2],
+                [0.1, 0.2, 0.3],
+                [0.2, 0.3, 0.4],
+                [0.8, 0.7, 0.6],
+                [0.9, 0.8, 0.7],
+                [1.0, 0.9, 0.8],
+            ],
+            columns=FEATURES,
+        )
+        model = RandomForestClassifier(n_estimators=4, random_state=0)
+        model.fit(frame, [-1, -1, -1, 1, 1, 1])
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = f"{directory}/model.joblib"
+            joblib.dump(model, path)
+            loaded = joblib.load(path)
+
+        self.assertTrue(model_matches_contract(
+            loaded,
+            expected_features=FEATURES,
+            allowed_classes=CLASSES,
+            model_type=RandomForestClassifier,
+        ))
+
+    def test_random_forest_joblib_round_trip_rejects_reordered_features(self):
+        import tempfile
+
+        import joblib
+        import pandas as pd
+        from sklearn.ensemble import RandomForestClassifier
+
+        frame = pd.DataFrame(
+            [
+                [0.0, 0.1, 0.2],
+                [0.1, 0.2, 0.3],
+                [0.2, 0.3, 0.4],
+                [0.8, 0.7, 0.6],
+                [0.9, 0.8, 0.7],
+                [1.0, 0.9, 0.8],
+            ],
+            columns=FEATURES,
+        )
+        model = RandomForestClassifier(n_estimators=4, random_state=0)
+        model.fit(frame, [-1, -1, -1, 1, 1, 1])
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = f"{directory}/model.joblib"
+            joblib.dump(model, path)
+            loaded = joblib.load(path)
+
+        self.assertFalse(model_matches_contract(
+            loaded,
+            expected_features=["f2", "f1", "f3"],
+            allowed_classes=CLASSES,
+            model_type=RandomForestClassifier,
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()
