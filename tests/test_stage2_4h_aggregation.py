@@ -470,6 +470,23 @@ def _run_both_4h(monkeypatch, frame):
     return scan_series, out
 
 
+def test_invalid_source_ohlc_bar_excludes_4h_bucket_in_both_pipelines(monkeypatch):
+    # An impossible source 1h candle must be removed before resampling in both
+    # implementations. The affected 4h bucket then has only 3/4 source bars.
+    frame = make_frame(n=1600, tz="UTC", seed=29)
+    bad_timestamp = frame.index[501]
+    frame.loc[bad_timestamp, "High"] = (
+        min(frame.loc[bad_timestamp, "Open"], frame.loc[bad_timestamp, "Close"])
+        - 0.01
+    )
+    affected_bin = bad_timestamp.floor("4h")
+
+    scan_series, out = _run_both_4h(monkeypatch, frame)
+
+    assert affected_bin not in scan_series.index
+    assert affected_bin not in out.index
+
+
 def _assert_both_agree_on_bins(scan_series, out, adopted_last_bin):
     """両実装の採用区間が一致し、最新の採用区間が期待どおりである
     ことと、共通部分の OHLC が完全一致することを確認する。"""
