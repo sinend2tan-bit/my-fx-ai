@@ -713,7 +713,7 @@ def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
     assert result is not None
-    # 学習可能なデータでは品質ゲートを通過し、新版（8）で保存し直される。
+    # 学習可能なデータでは品質ゲートを通過し、新版（9）で保存し直される。
     # 旧版ファイルが再利用されていれば、この保存は起きない。
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
@@ -726,7 +726,7 @@ def test_app_gate_failure_no_fallback_to_old_model(tmp_path, monkeypatch):
     # 旧版モデルは単一クラスだけを返す物にする。再利用（フォールバック）
     # されれば特徴量重要度が全て 0 になるため、混入を検出できる。
     path = _save_model_file(
-        ns, tmp_path, monkeypatch, 7, _tiny_model(single_class=True)
+        ns, tmp_path, monkeypatch, 8, _tiny_model(single_class=True)
     )
     before = path.read_bytes()
     result = ns["analyze_signal_with_backtest"](
@@ -749,7 +749,7 @@ def test_app_current_version_model_reused(tmp_path, monkeypatch):
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
     assert result is not None
-    # 新版（8）で鮮度内の保存済みモデルは従来どおり再利用され、
+    # 新版（9）で鮮度内の保存済みモデルは従来どおり再利用され、
     # ファイルは書き換わらない（再利用の仕組み自体は壊していない）。
     assert path.read_bytes() == before
 
@@ -816,7 +816,7 @@ def test_app_atomic_save_reload_failure_preserves_old_model(tmp_path, monkeypatc
 
     monkeypatch.setattr(ns["joblib"], "load", fail_load)
     payload = {
-        "version": 8,
+        "version": 9,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -834,14 +834,14 @@ def test_app_atomic_save_rejects_invalid_candidate_and_preserves_old_model(
     before = path.read_bytes()
     candidate = _tiny_model(single_class=(invalid_kind == "single_class"))
     payload = {
-        "version": 7 if invalid_kind == "version" else 8,
+        "version": 7 if invalid_kind == "version" else 9,
         "features": ["wrong"] if invalid_kind == "features" else _app_literal("FEATURE_COLUMNS"),
         "model": object() if invalid_kind == "model_type" else candidate,
     }
     monkeypatch.setattr(ns["joblib"], "load", lambda _path: payload)
 
     assert ns["_save_trained_model"](str(path), {
-        "version": 8,
+        "version": 9,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": candidate,
     }) is False
