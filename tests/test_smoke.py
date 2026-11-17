@@ -1448,7 +1448,7 @@ def test_bars_1h_boundary_387_and_386_rejected(monkeypatch, capsys):
     for n in (387, 386):
         _stub_download(monkeypatch, _synthetic_ohlc(n))
         assert scanner.bars("USDJPY=X", interval="1h", period="60d") is None
-    assert "[DATA SHORT AFTER CLEAN]" in capsys.readouterr().out
+    assert "[DATA SHORT]" in capsys.readouterr().out
 
 
 def test_bars_4h_boundary_220_buckets_passes(monkeypatch):
