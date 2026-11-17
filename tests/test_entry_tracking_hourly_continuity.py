@@ -97,7 +97,7 @@ def test_hourly_entry_tracking_keeps_hit_before_later_gap():
 def test_non_hourly_entry_tracking_keeps_existing_row_count_behavior():
     start = pd.Timestamp("2026-11-16T00:00:00Z")
     index = pd.DatetimeIndex([start + pd.Timedelta(minutes=15), start + pd.Timedelta(minutes=45)])
-    items = [_item(start)]
+    items = [_item(start, interval="15m")]
     saved = []
     update = _outcome_updater(saved)
 
