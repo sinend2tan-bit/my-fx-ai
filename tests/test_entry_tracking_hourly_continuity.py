@@ -34,10 +34,10 @@ def _outcome_updater(saved_calls):
     return namespace["update_entry_tracking_outcomes"]
 
 
-def _item(start):
+def _item(start, interval="1h"):
     return {
         "ticker": "USDJPY=X",
-        "interval": "1h",
+        "interval": interval,
         "status": "PENDING",
         "bar_timestamp": start.isoformat(),
         "candidate_price": 100.0,
