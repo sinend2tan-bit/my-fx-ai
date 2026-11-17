@@ -34,7 +34,7 @@ def test_directional_predictions_require_strict_directional_dominance():
         [
             [0.55, 0.00, 0.45],
             [0.45, 0.00, 0.55],
-            [0.55, 0.00, 0.55],
+            [0.50, 0.00, 0.50],
         ],
         dtype=float,
     )
