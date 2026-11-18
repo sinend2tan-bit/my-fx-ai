@@ -65,10 +65,24 @@ def test_app_and_scanner_both_use_the_shared_ema200_warmup():
 
 
 def test_scanner_raw_minimum_covers_all_walk_forward_folds_and_purge():
-    # 959 = 199 EMA warm-up + 4 * (180 train + 8 purge) + 8 label horizon.
+    # 最初のfoldは4分割の1区画。境界purge 8行を除いて180行必要。
     assert scanner.MIN_WALK_FORWARD_FEATURE_ROWS == 752
-    assert scanner.MIN_RAW_BARS_1H_FOR_WALK_FORWARD == 959
     fold_size = scanner.MIN_WALK_FORWARD_FEATURE_ROWS // (
         scanner.N_WALK_FORWARD_FOLDS + 1
     )
     assert fold_size - scanner.LOOKAHEAD_BARS == scanner.MIN_TRAIN_ROWS
+
+
+def test_walk_forward_rejects_insufficient_rows_before_fitting(monkeypatch):
+    # 751行では最初のfoldが180行の学習データを確保できない。
+    import pandas as pd
+    import numpy as np
+
+    frame = pd.DataFrame(
+        {column: np.linspace(0.1, 1.0, 751) for column in scanner.FEATURE_COLUMNS}
+    )
+    frame["Target"] = np.tile([-1, 0, 1], 251)[:751]
+    frame["_source_bar_position"] = np.arange(751, dtype=np.int64)
+    result = scanner.walk_forward_validation(frame)
+    assert result["passed"] is False
+    assert "751 rows < 752 rows required" in result["reason"]
