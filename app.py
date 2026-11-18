@@ -93,7 +93,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 8
+MODEL_VERSION = 10
 
 st.markdown("""
 <style>
@@ -1314,52 +1314,88 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             df = df.iloc[:-1]
         if len(df) < 80:
             return None, None
-        close, high, low, opn = df["Close"], df["High"], df["Low"], df["Open"]
-        df["SMA_20"] = close.rolling(20, min_periods=10).mean()
-        df["EMA_20"] = close.ewm(span=20, adjust=False).mean()
-        df["EMA_200"] = close.ewm(span=200, adjust=False).mean()
-        prev = close.shift(1)
-        tr = pd.concat([(high-low), (high-prev).abs(), (low-prev).abs()], axis=1).max(axis=1)
-        df["ATR"] = tr.rolling(14, min_periods=7).mean()
-        delta = close.diff()
-        gain = delta.clip(lower=0).rolling(14, min_periods=7).mean()
-        loss = (-delta.clip(upper=0)).rolling(14, min_periods=7).mean()
-        rs = gain / loss.replace(0, np.nan)
-        df["RSI"] = (100 - 100/(1+rs)).fillna(50)
-        df["RSI_Diff"] = df["RSI"].diff()
-        ema12, ema26 = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
-        df["MACD"] = ema12 - ema26
-        df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
-        df["MACD_Hist"] = df["MACD"] - df["MACD_Signal"]
-        df["MACD_Hist_Ratio"] = df["MACD_Hist"] / close.replace(0, np.nan)
-        std = close.rolling(20, min_periods=10).std()
-        df["Upper_Band"], df["Lower_Band"] = df["SMA_20"] + 2*std, df["SMA_20"] - 2*std
-        df["BB_PctB"] = (close - df["Lower_Band"]) / (df["Upper_Band"] - df["Lower_Band"]).replace(0, np.nan)
-        df["Return_1"] = close.pct_change()
-        df["Return_5"] = close.pct_change(5)
-        df["Dev_SMA20"] = (close - df["SMA_20"]) / close.replace(0, np.nan)
-        df["Dev_EMA200"] = (close - df["EMA_200"]) / close.replace(0, np.nan)
-        df["Dev_EMA20_200"] = (df["EMA_20"] - df["EMA_200"]) / close.replace(0, np.nan)
-        df["ATR_Ratio"] = df["ATR"] / close.replace(0, np.nan)
-        df["Vol_Ratio"] = df["ATR"] / df["ATR"].rolling(50, min_periods=10).mean().replace(0, np.nan)
-        up_move, down_move = high.diff(), -low.diff()
-        plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
-        minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
-        atr_safe = df["ATR"].replace(0, np.nan)
-        plus_di = 100 * plus_dm.rolling(14, min_periods=7).mean() / atr_safe
-        minus_di = 100 * minus_dm.rolling(14, min_periods=7).mean() / atr_safe
-        dx = 100 * (plus_di-minus_di).abs() / (plus_di+minus_di).replace(0, np.nan)
-        df["ADX"] = dx.rolling(14, min_periods=7).mean().fillna(20)
-        rng = (high-low).replace(0, np.nan)
-        df["Upper_Wick_Ratio"] = (high - pd.concat([opn, close], axis=1).max(axis=1)) / rng
-        df["Lower_Wick_Ratio"] = (pd.concat([opn, close], axis=1).min(axis=1) - low) / rng
-        low14, high14 = low.rolling(14, min_periods=7).min(), high.rolling(14, min_periods=7).max()
-        df["Stoch_K"] = 100 * (close-low14)/(high14-low14).replace(0, np.nan)
-        tp = (high+low+close)/3
-        tp_sma = tp.rolling(20, min_periods=10).mean()
-        mad = tp.rolling(20, min_periods=10).apply(lambda x: np.mean(np.abs(x-np.mean(x))), raw=True)
-        df["CCI"] = (tp-tp_sma)/(0.015*mad.replace(0, np.nan))
-        df["ROC"] = close.pct_change(10)*100
+        def _calculate_app_segment_features(segment):
+            close = segment["Close"]
+            high = segment["High"]
+            low = segment["Low"]
+            opn = segment["Open"]
+            segment["SMA_20"] = close.rolling(20, min_periods=10).mean()
+            segment["EMA_20"] = close.ewm(span=20, adjust=False).mean()
+            segment["EMA_200"] = close.ewm(span=200, adjust=False).mean()
+            prev = close.shift(1)
+            tr = pd.concat([(high-low), (high-prev).abs(), (low-prev).abs()], axis=1).max(axis=1)
+            segment["ATR"] = tr.rolling(14, min_periods=7).mean()
+            delta = close.diff()
+            gain = delta.clip(lower=0).rolling(14, min_periods=7).mean()
+            loss = (-delta.clip(upper=0)).rolling(14, min_periods=7).mean()
+            rs = gain / loss.replace(0, np.nan)
+            segment["RSI"] = (100 - 100/(1+rs)).fillna(50)
+            segment["RSI_Diff"] = segment["RSI"].diff()
+            ema12, ema26 = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
+            segment["MACD"] = ema12 - ema26
+            segment["MACD_Signal"] = segment["MACD"].ewm(span=9, adjust=False).mean()
+            segment["MACD_Hist"] = segment["MACD"] - segment["MACD_Signal"]
+            segment["MACD_Hist_Ratio"] = segment["MACD_Hist"] / close.replace(0, np.nan)
+            std = close.rolling(20, min_periods=10).std()
+            segment["Upper_Band"], segment["Lower_Band"] = segment["SMA_20"] + 2*std, segment["SMA_20"] - 2*std
+            segment["BB_PctB"] = (close - segment["Lower_Band"]) / (segment["Upper_Band"] - segment["Lower_Band"]).replace(0, np.nan)
+            segment["Return_1"] = close.pct_change()
+            segment["Return_5"] = close.pct_change(5)
+            segment["Dev_SMA20"] = (close - segment["SMA_20"]) / close.replace(0, np.nan)
+            segment["Dev_EMA200"] = (close - segment["EMA_200"]) / close.replace(0, np.nan)
+            segment["Dev_EMA20_200"] = (segment["EMA_20"] - segment["EMA_200"]) / close.replace(0, np.nan)
+            segment["ATR_Ratio"] = segment["ATR"] / close.replace(0, np.nan)
+            segment["Vol_Ratio"] = segment["ATR"] / segment["ATR"].rolling(50, min_periods=10).mean().replace(0, np.nan)
+            up_move, down_move = high.diff(), -low.diff()
+            plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+            minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+            atr_safe = segment["ATR"].replace(0, np.nan)
+            plus_di = 100 * plus_dm.rolling(14, min_periods=7).mean() / atr_safe
+            minus_di = 100 * minus_dm.rolling(14, min_periods=7).mean() / atr_safe
+            dx = 100 * (plus_di-minus_di).abs() / (plus_di+minus_di).replace(0, np.nan)
+            segment["ADX"] = dx.rolling(14, min_periods=7).mean().fillna(20)
+            rng = (high-low).replace(0, np.nan)
+            segment["Upper_Wick_Ratio"] = (high - pd.concat([opn, close], axis=1).max(axis=1)) / rng
+            segment["Lower_Wick_Ratio"] = (pd.concat([opn, close], axis=1).min(axis=1) - low) / rng
+            low14, high14 = low.rolling(14, min_periods=7).min(), high.rolling(14, min_periods=7).max()
+            segment["Stoch_K"] = 100 * (close-low14)/(high14-low14).replace(0, np.nan)
+            tp = (high+low+close)/3
+            tp_sma = tp.rolling(20, min_periods=10).mean()
+            mad = tp.rolling(20, min_periods=10).apply(lambda x: np.mean(np.abs(x-np.mean(x))), raw=True)
+            segment["CCI"] = (tp-tp_sma)/(0.015*mad.replace(0, np.nan))
+            segment["ROC"] = close.pct_change(10)*100
+            return segment
+
+        if interval == "1h":
+            if (
+                not isinstance(df.index, pd.DatetimeIndex)
+                or df.index.tz is None
+                or df.index.hasnans
+                or df.index.has_duplicates
+                or not df.index.is_monotonic_increasing
+            ):
+                return None, {
+                    "code": "hourly_timestamp_integrity_failed",
+                    "message": "1時間足の時刻順序または一意性を確認できないため、分析を停止しました。",
+                }
+            segments = []
+            segment_start = 0
+            for position in range(1, len(df)):
+                if not has_contiguous_hourly_window(df.index[position - 1:position + 1]):
+                    if segment_start < position:
+                        segments.append(df.iloc[segment_start:position].copy())
+                    segment_start = position
+            if segment_start < len(df):
+                segments.append(df.iloc[segment_start:].copy())
+            if not segments:
+                return None, None
+            df = pd.concat(
+                [_calculate_app_segment_features(segment) for segment in segments]
+            ).sort_index()
+        else:
+            df = _calculate_app_segment_features(df)
+
+        close, high, low = df["Close"], df["High"], df["Low"]
 
         # First-touch labels: determine which barrier is touched first in the next N bars.
         # If both barriers are touched within the same OHLC bar, intrabar order is unknowable,
@@ -1401,6 +1437,13 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
         df["Target"] = target
         df = df.replace([np.inf, -np.inf], np.nan)
         result = df.dropna(subset=FEATURE_COLUMNS + ["Close", "ATR"])
+        if interval == "1h" and (
+            result.empty or df.index[-1] not in result.index
+        ):
+            return None, {
+                "code": "latest_hourly_segment_not_ready",
+                "message": "最新の確定1時間足が特徴量の準備条件を満たしていないため、古い足へ切り替えず分析を保留しました。",
+            }
         if data_quality is not None:
             # (4) 特徴量計算による除外と、ラベル判定段階の理由別計上。
             # 不連続ラベル行は特徴量が有効な行に限って計上し、末尾の
