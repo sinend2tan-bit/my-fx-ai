@@ -136,6 +136,8 @@ def ramp_frame(index):
 
 def run_bars(monkeypatch, frame):
     stub_download(monkeypatch, frame)
+    # Isolate label counters from the production history-size gate.
+    monkeypatch.setattr(scanner, "MIN_RAW_BARS_1H_FOR_WALK_FORWARD", 387)
     out = scanner.bars(TICKER, interval="1h", period="180d")
     assert out is not None
     return out
