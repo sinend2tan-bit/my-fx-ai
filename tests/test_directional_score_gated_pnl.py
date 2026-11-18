@@ -86,3 +86,15 @@ def test_runtime_equivalent_pnl_gate_uses_same_conservative_stability_rules():
     assert passed["passed"] is True
     assert too_few_trades["passed"] is False
     assert any("取引件数不足" in reason for reason in too_few_trades["reasons"])
+
+
+
+def test_directional_gate_requires_runtime_equivalent_pnl_for_each_side():
+    from scanner import _combine_directional_pnl_gates
+
+    argmax_passes = {"trades": 12, "net_pips": 4.0}
+    runtime_equivalent_fails = {"trades": 2, "net_pips": 1.0}
+    runtime_equivalent_passes = {"trades": 12, "net_pips": 2.0}
+
+    assert _combine_directional_pnl_gates(argmax_passes, runtime_equivalent_fails, 10) is False
+    assert _combine_directional_pnl_gates(argmax_passes, runtime_equivalent_passes, 10) is True
