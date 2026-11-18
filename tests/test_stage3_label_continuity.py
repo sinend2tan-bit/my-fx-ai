@@ -115,6 +115,21 @@ def run_bars(monkeypatch, frame):
     return out
 
 
+def walk_forward_path_frame(index):
+    """高速な反転を含み、各foldの学習窓に複数クラスを作る合成系列。"""
+    n = len(index)
+    i = np.arange(n, dtype=float)
+    close = 150.0 + 0.2 * np.sin(i / 3.0) + 0.0005 * i
+    open_ = np.concatenate([[close[0]], close[:-1]])
+    high = np.maximum(open_, close) + 0.01
+    low = np.minimum(open_, close) - 0.01
+    return pd.DataFrame(
+        {"Open": open_, "High": high, "Low": low, "Close": close,
+         "Volume": np.full(n, 1_000_000.0)},
+        index=index,
+    )
+
+
 def audit_of(df):
     return df.attrs["label_audit"]
 
@@ -229,7 +244,7 @@ def gap_context(df, gap_ts):
 
 def test_tl1_clean_frame_unchanged(monkeypatch):
     """T-L1: 連続データでは変更前と完全に一致する。"""
-    raw = path_frame(continuous_index(700))
+    raw = walk_forward_path_frame(continuous_index(1100))
     out = run_bars(monkeypatch, raw)
     legacy = legacy_training_df(raw)
     out_cmp = out.copy()
@@ -600,7 +615,7 @@ def test_tp3_purge_boundary_by_timestamps(monkeypatch):
 
 def test_tp4_clean_data_validation_equivalence(monkeypatch):
     """T-P4: 連続データでは時系列検証の結果が変更前と一致する。"""
-    raw = path_frame(continuous_index(500))
+    raw = walk_forward_path_frame(continuous_index(1100))
     out = run_bars(monkeypatch, raw)
     legacy = legacy_training_df(raw)
     new_validation = scanner.walk_forward_validation(out, pair_name=PAIR_NAME)
@@ -966,7 +981,9 @@ def _pnl_with_pattern(mutate):
     df = _validation_frame()
     pattern_ts = df.index[320]
     mutate(df, pattern_ts)
-    result = scanner.walk_forward_validation(df, pair_name=PAIR_NAME)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(scanner, "MIN_TRAIN_ROWS", 30)
+        result = scanner.walk_forward_validation(df, pair_name=PAIR_NAME)
     return result["simulated_pnl"]
 
 
