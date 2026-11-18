@@ -58,7 +58,7 @@ FORWARD_PREDICTIONS_MAX = 200
 # 猶予。記録日時（recorded_at_jst、無ければ signal_bar_time）からの暦日。
 FORWARD_UNEVALUABLE_AFTER_DAYS = 14
 
-MODEL_VERSION = 21
+MODEL_VERSION = 22
 
 # 仮想検証用の追加コスト（実際の松井証券FXの約定・スワップ値ではありません）。
 # スリッページは往復合計の保守的な仮定。スワップは保有時間・方向・日々の値で変動するため、
@@ -1132,6 +1132,7 @@ def news_allows_candidate(news):
 # =========================================================
 
 def calculate_rsi(series, period=14):
+    """Wilder RSI with explicit zero-gain/zero-loss edge handling."""
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -1145,6 +1146,10 @@ def calculate_rsi(series, period=14):
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
+    no_loss = avg_loss.eq(0) & avg_gain.gt(0)
+    no_gain = avg_gain.eq(0) & avg_loss.gt(0)
+    flat = avg_gain.eq(0) & avg_loss.eq(0)
+    rsi = rsi.mask(no_loss, 100.0).mask(no_gain, 0.0).mask(flat, 50.0)
     return rsi.replace([np.inf, -np.inf], np.nan)
 
 
