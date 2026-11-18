@@ -84,3 +84,56 @@ def test_directional_pnl_pass_preserves_valid_candidate(monkeypatch, model_direc
     assert result["directional_pnl_hold"] is False
     assert result["decision"] == "候補あり（手動確認のみ）"
     assert result["forward_recordable"] is True
+
+
+def test_directional_pnl_hold_is_excluded_from_forward_recording(monkeypatch):
+    """A held direction must not enter the forward dataset."""
+    directional_pnl = {
+        "buy": {"passed": False, "trades": 12, "net_pips": -3.0},
+        "sell": {"passed": True, "trades": 12, "net_pips": 3.0},
+    }
+    result = _run_pair(monkeypatch, "買い", directional_pnl)
+    predictions = []
+    details = {}
+
+    recorded = scanner.record_forward_predictions(
+        predictions, [result], details=details
+    )
+
+    assert result["decision"] == "方向別検証未達・保留"
+    assert result["direction"] == "様子見"
+    assert recorded == 0
+    assert predictions == []
+    assert details == {
+        "recorded_verified": 0,
+        "recorded_unverified": 0,
+    }
+
+
+def test_valid_candidate_is_forward_recorded_once(monkeypatch):
+    """A passing candidate remains recordable and duplicate-safe."""
+    directional_pnl = {
+        "buy": {"passed": True, "trades": 12, "net_pips": 3.0},
+        "sell": {"passed": True, "trades": 12, "net_pips": 3.0},
+    }
+    result = _run_pair(monkeypatch, "買い", directional_pnl)
+    predictions = []
+    details = {}
+
+    recorded = scanner.record_forward_predictions(
+        predictions, [result], details=details
+    )
+    duplicate_recorded = scanner.record_forward_predictions(
+        predictions, [result]
+    )
+
+    assert recorded == 1
+    assert duplicate_recorded == 0
+    assert len(predictions) == 1
+    assert predictions[0]["direction"] == "買い"
+    assert predictions[0]["news_verified"] is True
+    assert predictions[0]["status"] == "PENDING"
+    assert details == {
+        "recorded_verified": 1,
+        "recorded_unverified": 0,
+    }
