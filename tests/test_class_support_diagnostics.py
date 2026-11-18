@@ -13,7 +13,7 @@ def test_wilson_interval_handles_zero_and_full_successes():
     assert low[0] == 0.0
     assert low[1] == pytest.approx(0.2775, abs=0.001)
     assert high[0] == pytest.approx(0.7225, abs=0.001)
-    assert high[1] == 1.0
+    assert high[1] == pytest.approx(1.0)
 
 
 def test_wilson_interval_is_symmetric_for_half_successes():
