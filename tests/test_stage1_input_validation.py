@@ -133,9 +133,7 @@ def assert_checksums(dq):
 
 def stub_scanner_download(monkeypatch, frame, enforce_minimum=False):
     monkeypatch.setattr(yf, "download", lambda *a, **k: frame.copy())
-    if not enforce_minimum:
-        # These tests isolate timestamp/OHLC/label behavior, not minimum history.
-        monkeypatch.setattr(scanner, "MIN_RAW_BARS_1H_FOR_WALK_FORWARD", 387)
+    # bars() owns its real minimum-history precheck; tests supply sufficient history.
 
 
 # ---------------------------------------------------------------------------
