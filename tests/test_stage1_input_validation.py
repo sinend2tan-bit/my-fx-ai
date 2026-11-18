@@ -1168,21 +1168,20 @@ def test_app_invalid_latest_bar_keeps_previous_bar():
         assert frame.index[-1] not in out.index
 
 
-def test_scanner_min_walk_forward_rows_boundary_after_ema200(monkeypatch):
-    # 最新timestamp除外後の959本 = 199 EMA warm-up + 752 feature rows + 8 label horizon。
-    # 752 rows / 4 folds = 188 rows per fold; first train fold loses 8 purge rows,
-    # leaving exactly 180 training rows. 958 post-filter rows cannot satisfy this.
-    frame = make_frame(n=959)
+def test_scanner_min_train_rows_boundary_after_ema200(monkeypatch):
+    # EMA200の199行ウォームアップ + 未来8本 + 学習可能180行 + 最新足1本。
+    # bars()は診断用に180行を確保する。Walk-Forwardの3-fold最低752行は
+    # walk_forward_validation側で別途fail-closed判定する。
+    frame = make_frame(n=387)
     stub_scanner_download(monkeypatch, frame, enforce_minimum=True)
     assert scanner.bars("USDJPY=X", interval="1h", period="180d") is None
-    frame = make_frame(n=960)
+    frame = make_frame(n=388)
     stub_scanner_download(monkeypatch, frame, enforce_minimum=True)
     out = scanner.bars("USDJPY=X", interval="1h", period="180d")
     assert out is not None
     dq = out.attrs["data_quality"]
-    assert dq["input_rows"] == scanner.MIN_RAW_BARS_1H_FOR_WALK_FORWARD == 959
-    assert dq["trainable_rows"] == scanner.MIN_WALK_FORWARD_FEATURE_ROWS == 752
-    assert len(out) == 752
+    assert dq["input_rows"] == 387
+    assert dq["trainable_rows"] == scanner.MIN_TRAIN_ROWS == len(out)
     assert_checksums(dq)
 
 
