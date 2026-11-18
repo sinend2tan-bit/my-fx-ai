@@ -1575,6 +1575,30 @@ def _fixed_class_metrics(y_true, y_pred):
     return balanced, recalls, complete, supports.tolist()
 
 
+
+
+def _wilson_interval(successes, total, z=1.959963984540054):
+    """Return a two-sided Wilson score interval for a binomial proportion."""
+    successes = int(successes)
+    total = int(total)
+    if total < 0 or successes < 0 or successes > total:
+        raise ValueError("successes and total must define a valid binomial count")
+    if total == 0:
+        return None
+    proportion = successes / total
+    z_squared = float(z) ** 2
+    denominator = 1.0 + z_squared / total
+    center = (proportion + z_squared / (2.0 * total)) / denominator
+    margin = (
+        float(z)
+        * math.sqrt(
+            proportion * (1.0 - proportion) / total
+            + z_squared / (4.0 * total * total)
+        )
+        / denominator
+    )
+    return max(0.0, center - margin), min(1.0, center + margin)
+
 def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
     """Returns the same tuple shape expected by the UI."""
     # 保存失敗の警告は直近の分析実行だけを示す。前回の状態を引き継がない。
@@ -1642,6 +1666,15 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         train_classes_complete = set(int(value) for value in y_train.unique()) == set(APP_CLASS_LABELS)
         model_classes_complete = set(eval_classes) == set(APP_CLASS_LABELS)
         validation_complete = bool(test_classes_complete and train_classes_complete and model_classes_complete)
+        class_recall_wilson_pct = {}
+        for _class_index, (_class_name, _class_value) in enumerate(zip(("sell", "neutral", "buy"), APP_CLASS_LABELS)):
+            _class_total = int(test_class_support[_class_index])
+            _class_hits = int(np.sum((y_test_values == _class_value) & (pred_test == _class_value)))
+            _interval = _wilson_interval(_class_hits, _class_total)
+            class_recall_wilson_pct[_class_name] = (
+                None if _interval is None
+                else [round(_interval[0] * 100.0, 1), round(_interval[1] * 100.0, 1)]
+            )
         validation_reasons = []
         if not train_classes_complete:
             validation_reasons.append("学習期間に全3クラスが揃っていません")
@@ -1665,6 +1698,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
                 name: int(value)
                 for name, value in zip(("sell", "neutral", "buy"), test_class_support)
             },
+            "class_recall_wilson_pct": class_recall_wilson_pct,
             "baseline_accuracy": baseline_accuracy,
             "baseline_balanced_accuracy": baseline_balanced_accuracy,
             "brier_score": brier_score,
@@ -2003,6 +2037,34 @@ def _render_main_area():
     status, conf, total_signals_count, win_rate, m_type, prob_dict, feature_importances, ai_signal_history = analyze_signal_with_backtest(
         data, data_htf, ticker, tf_config["interval"], force_retrain=force_retrain
     )
+    _eval_diagnostics = st.session_state.get("model_eval_metrics") or {}
+    if _eval_diagnostics:
+        with st.expander("📊 検証データの信頼度（参考）", expanded=False):
+            st.caption(
+                "直近の時系列holdoutにおけるクラス別Recallです。95% Wilson区間は標本数による不確実性を示す参考値で、"
+                "勝率・将来の精度・確率校正を示すものではありません。判定ゲートや売買方向は変更しません。"
+            )
+            _recall_names = {"sell": "売り", "neutral": "中立", "buy": "買い"}
+            _recall_rows = []
+            for _recall_key in ("sell", "neutral", "buy"):
+                _support = int((_eval_diagnostics.get("class_support") or {}).get(_recall_key, 0))
+                _recall = (_eval_diagnostics.get("class_recall_pct") or {}).get(_recall_key)
+                _interval = (_eval_diagnostics.get("class_recall_wilson_pct") or {}).get(_recall_key)
+                _interval_text = (
+                    "算出不可" if _interval is None
+                    else f"{_interval[0]:.1f}%–{_interval[1]:.1f}%"
+                )
+                _recall_rows.append({
+                    "クラス": _recall_names[_recall_key],
+                    "評価件数": _support,
+                    "Recall": "算出不可" if _recall is None else f"{_recall:.1f}%",
+                    "95% Wilson区間": _interval_text,
+                })
+            st.table(_recall_rows)
+            st.caption(
+                f"評価件数 {_eval_diagnostics.get('test_count', 0)}件。"
+                "件数が少ないほど区間は広くなります。全3クラスが含まれることと、統計的に十分な件数があることは別です。"
+            )
     # モデル保存に失敗した場合は、その場でも知らせる（サイドバーにも
     # 次回描画時に残る）。例外詳細・保存先パスは表示しない。
     _save_status_main = st.session_state.get("model_save_status") or {}
