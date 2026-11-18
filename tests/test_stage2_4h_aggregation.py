@@ -463,14 +463,19 @@ def _freeze_now(monkeypatch, fixed):
     )
 
 
-def test_scanner_4h_tz_naive_fails_closed_without_utc_assumption(monkeypatch):
+def test_scanner_4h_tz_naive_preserves_legacy_utc_localization(monkeypatch):
+    # Issue #80 / merged PR #27 intentionally preserve Scanner's legacy
+    # timezone-naive 4h localization; App 4h has a separate reject contract.
     frame = make_frame(n=1600, tz="UTC", seed=26)
     frame.index = frame.index.tz_localize(None)
     stub_scanner_download(monkeypatch, frame)
 
     result = scanner.bars("USDJPY=X", interval="4h", period="90d")
 
-    assert result is None
+    assert result is not None
+    latest = result.attrs["latest_features"]
+    assert latest.index.tz is not None
+    assert str(latest.index.tz) == "UTC"
 
 
 def _run_both_4h(monkeypatch, frame):
