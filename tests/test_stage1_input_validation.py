@@ -609,6 +609,7 @@ def _model_namespace():
     import tempfile
     import time
     from datetime import datetime
+    from model_artifacts import model_matches_contract
 
     st = _StStub()
     ns = {
@@ -619,6 +620,7 @@ def _model_namespace():
         "tempfile": tempfile,
         "time": time,
         "joblib": joblib,
+        "model_matches_contract": model_matches_contract,
         "RandomForestClassifier": RandomForestClassifier,
         "DummyClassifier": DummyClassifier,
         "accuracy_score": accuracy_score,
@@ -670,7 +672,8 @@ def _tiny_model(n_estimators=10, single_class=False, seed=3):
     else:
         y = rng.choice([-1, 0, 1], size=60)
     model = RandomForestClassifier(n_estimators=n_estimators, random_state=0)
-    model.fit(X, y)
+    # Persist the same feature-name metadata that production DataFrame inference uses.
+    model.fit(pd.DataFrame(X, columns=columns), y)
     return model
 
 
