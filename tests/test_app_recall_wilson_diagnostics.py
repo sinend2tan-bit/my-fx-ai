@@ -1,6 +1,5 @@
 """Wilson interval diagnostics for App class-recall reporting (no gate changes)."""
 import ast
-import math
 from pathlib import Path
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
@@ -14,7 +13,7 @@ def _wilson():
     )
     module = ast.Module(body=[helper], type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"math": math}
+    namespace = {}
     exec(compile(module, str(APP_PATH), "exec"), namespace)
     return namespace["_wilson_interval"]
 
