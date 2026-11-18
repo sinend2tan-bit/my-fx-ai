@@ -1417,8 +1417,15 @@ def bars(ticker, interval="1h", period="60d"):
                     "cannot establish 4h bucket boundaries"
                 )
                 return None
-            # UTC normalization is performed only after the shared timezone
-            # gate below. A naive source index must not be localized by guessing.
+            # Preserve the established Stage 2 contract (Issue #80 / merged
+            # PR #27): Scanner 4h localizes a timezone-naive source index as UTC,
+            # while App 4h rejects it. Production source timestamps were measured
+            # as UTC; do not generalize this legacy exception to other intervals.
+            # The shared cleaner then receives an explicit UTC-aware index.
+            if raw.index.tz is None:
+                raw.index = raw.index.tz_localize("UTC")
+            else:
+                raw.index = raw.index.tz_convert("UTC")
             # Keep reason-specific 4h source diagnostics separate from the
             # Stage 1 C-1 counters (which intentionally remain 1h-only).
             try:
