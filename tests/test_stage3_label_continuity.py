@@ -981,9 +981,9 @@ def _pnl_with_pattern(mutate):
     df = _validation_frame()
     pattern_ts = df.index[320]
     mutate(df, pattern_ts)
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(scanner, "MIN_TRAIN_ROWS", 30)
-        result = scanner.walk_forward_validation(df, pair_name=PAIR_NAME)
+    # Keep the production MIN_TRAIN_ROWS=180. The first 100-row train fold
+    # must be skipped; the crafted single signal is in the final test fold.
+    result = scanner.walk_forward_validation(df, pair_name=PAIR_NAME)
     return result["simulated_pnl"]
 
 
