@@ -32,16 +32,11 @@ _STATE_LOAD_ERROR = None
 LOOKAHEAD_BARS = 8
 # 1h の EMA200 は200観測後に有効化する。
 EMA200_MIN_PERIODS = 200
-# Walk-Forwardは (folds + 1) 分割。最初のtrain foldにも180行必要で、
-# purge gapとして各fold境界直前の8行を除外する。さらに各ラベルに未来8本が必要。
-# 連続・全ラベル有効を仮定した必要最低raw本数（十分条件ではない）。
+# Walk-Forwardの最低学習行数とfold数。実際の各fold成立条件は
+# simulated_pnl() が検証し、必要fold数を満たさなければfail closedにする。
 MIN_FEATURE_BARS = 220
 MIN_TRAIN_ROWS = 180
 N_WALK_FORWARD_FOLDS = 3
-MIN_WALK_FORWARD_FEATURE_ROWS = (N_WALK_FORWARD_FOLDS + 1) * (MIN_TRAIN_ROWS + LOOKAHEAD_BARS)
-MIN_RAW_BARS_1H_FOR_WALK_FORWARD = (
-    EMA200_MIN_PERIODS - 1 + MIN_WALK_FORWARD_FEATURE_ROWS + LOOKAHEAD_BARS
-)
 FAST_MOVE_ATR_MULTIPLE = 2.5
 
 # 最新の確定1時間足がこの時間を超えて古い場合は、検証計算を行わず保留する。
