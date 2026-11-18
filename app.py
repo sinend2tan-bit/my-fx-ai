@@ -1577,28 +1577,6 @@ def _fixed_class_metrics(y_true, y_pred):
 
 
 
-def _wilson_interval(successes, total, z=1.959963984540054):
-    """Return a two-sided Wilson score interval for a binomial proportion."""
-    successes = int(successes)
-    total = int(total)
-    if total < 0 or successes < 0 or successes > total:
-        raise ValueError("successes and total must define a valid binomial count")
-    if total == 0:
-        return None
-    proportion = successes / total
-    z_squared = float(z) ** 2
-    denominator = 1.0 + z_squared / total
-    center = (proportion + z_squared / (2.0 * total)) / denominator
-    margin = (
-        float(z)
-        * (
-            proportion * (1.0 - proportion) / total
-            + z_squared / (4.0 * total * total)
-        ) ** 0.5
-        / denominator
-    )
-    return max(0.0, center - margin), min(1.0, center + margin)
-
 def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
     """Returns the same tuple shape expected by the UI."""
     # 保存失敗の警告は直近の分析実行だけを示す。前回の状態を引き継がない。
@@ -1606,6 +1584,27 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
     st.session_state.pop("model_eval_metrics", None)
     fallback = ("WAIT (様子見)", 0.0, 0, 0.0, "データ不足",
                 {"buy": 0, "sell": 0, "wait": 100}, pd.Series(dtype=float), pd.Series(dtype=int))
+    def _wilson_interval(successes, total, z=1.959963984540054):
+        """Return a two-sided Wilson score interval for a binomial proportion."""
+        successes = int(successes)
+        total = int(total)
+        if total < 0 or successes < 0 or successes > total:
+            raise ValueError("successes and total must define a valid binomial count")
+        if total == 0:
+            return None
+        proportion = successes / total
+        z_squared = float(z) ** 2
+        denominator = 1.0 + z_squared / total
+        center = (proportion + z_squared / (2.0 * total)) / denominator
+        margin = (
+            float(z)
+            * (
+                proportion * (1.0 - proportion) / total
+                + z_squared / (4.0 * total * total)
+            ) ** 0.5
+            / denominator
+        )
+        return max(0.0, center - margin), min(1.0, center + margin)
     if df_current is None or len(df_current) < 180:
         return fallback
     try:
