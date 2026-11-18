@@ -1948,8 +1948,8 @@ def _combine_pnl_stability_gates(argmax_gate, runtime_equivalent_gate):
     """Require both the historical diagnostic and live-equivalent policy to pass."""
     reasons = list(argmax_gate["reasons"])
     if not runtime_equivalent_gate["passed"]:
+        # Keep exact gated trade counts and PnL values in private diagnostics only.
         reasons.append("実運用相当55%スコアゲート適用後の損益条件を満たさない")
-        reasons.extend(f"実運用相当: {reason}" for reason in runtime_equivalent_gate["reasons"])
     return {"passed": bool(argmax_gate["passed"] and runtime_equivalent_gate["passed"]),
             "reasons": reasons}
 
@@ -2281,13 +2281,8 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                 spread_pips,
                 pip_size,
             )
-            score_gated_trade_rows.extend(fold_score_gated_trades)
-            score_gated_fold_pnl_values.append({
-                "net_pips": fold_score_gated_pnl["net_pips"],
-                "trades": fold_score_gated_pnl["trades"],
-            })
-            # Keep each fold's non-overlapping trades isolated before aggregation.
-            simulated_trade_rows.extend(fold_trades)
+            # Fold trades are committed to aggregate diagnostics only after the
+            # complete fold has passed all downstream validation/reporting steps.
 
             importances = model.feature_importances_
             top_idx = np.argsort(importances)[::-1][:5]
@@ -2411,6 +2406,13 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
                     train_X.columns,
                     importances,
                 )
+            })
+            # Keep all PnL aggregates aligned with successfully completed folds.
+            simulated_trade_rows.extend(fold_trades)
+            score_gated_trade_rows.extend(fold_score_gated_trades)
+            score_gated_fold_pnl_values.append({
+                "net_pips": fold_score_gated_pnl["net_pips"],
+                "trades": fold_score_gated_pnl["trades"],
             })
             used_folds += 1
 
@@ -2620,7 +2622,6 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         f"model_reasons={model_gate_reasons or ['none']}, "
         f"pnl_gate={'PASS' if pnl_stability_ok else 'FAIL'}, "
         f"runtime_equivalent_pnl_gate={'PASS' if runtime_equivalent_pnl_gate['passed'] else 'FAIL'}, "
-        f"runtime_equivalent_positive_folds={runtime_equivalent_pnl_gate['positive_folds']}, "
         f"pnl_reasons={pnl_gate_reasons or ['none']}"
     )
 
