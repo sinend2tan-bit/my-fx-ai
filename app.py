@@ -1514,10 +1514,12 @@ def _save_trained_model(model_path, payload):
             expected_features=FEATURE_COLUMNS,
             allowed_classes=(-1, 0, 1),
             model_type=RandomForestClassifier,
-            require_all_classes=False,
+            require_all_classes=True,
         ):
             return False
 
+        # 保存時も読み込み時と同じ全3クラス契約を要求する。
+        # 不完全なartifactを保存して次回起動時に必ず破棄する不整合を防ぐ。
         # 一時ファイルは最終ファイルと同じディレクトリにあるため、
         # os.replace は同一ファイルシステム内で原子的に置き換えられる。
         os.replace(temp_path, model_path)
