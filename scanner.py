@@ -39,9 +39,6 @@ MIN_FEATURE_BARS = 220
 MIN_TRAIN_ROWS = 180
 N_WALK_FORWARD_FOLDS = 3
 MIN_WALK_FORWARD_FEATURE_ROWS = (N_WALK_FORWARD_FOLDS + 1) * (MIN_TRAIN_ROWS + LOOKAHEAD_BARS)
-MIN_RAW_BARS_1H_FOR_WALK_FORWARD = (
-    EMA200_MIN_PERIODS - 1 + MIN_WALK_FORWARD_FEATURE_ROWS + LOOKAHEAD_BARS
-)
 FAST_MOVE_ATR_MULTIPLE = 2.5
 
 # 最新の確定1時間足がこの時間を超えて古い場合は、検証計算を行わず保留する。
@@ -1453,7 +1450,9 @@ def bars(ticker, interval="1h", period="60d"):
     if interval == "4h":
         min_raw_bars = 4 * MIN_FEATURE_BARS
     elif interval == "1h":
-        min_raw_bars = MIN_RAW_BARS_1H_FOR_WALK_FORWARD
+        # bars() は分析・ラベル診断にも使う。ここでは最低180件の学習可能行を
+        # 確保し、より多くの行が必要なWalk-Forwardは検証関数側で別途判定する。
+        min_raw_bars = EMA200_MIN_PERIODS - 1 + MIN_TRAIN_ROWS + LOOKAHEAD_BARS
     else:
         min_raw_bars = MIN_FEATURE_BARS + 1
     if len(raw) < min_raw_bars:
