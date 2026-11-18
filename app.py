@@ -2292,13 +2292,23 @@ def _render_main_area():
         # Order-assist estimates are only available when the 4h range and ATR
         # are both grounded in valid 4h observations. Never substitute 1h ATR
         # or a percentage-of-price guess for missing 4h data.
-        if ticker not in st.session_state["ranges"] or not is_valid_range(
-            float(st.session_state["ranges"].get(ticker, {}).get("lower", 0)),
-            float(st.session_state["ranges"].get(ticker, {}).get("upper", 0)), order_assist_price
-        ):
-            st.session_state["ranges"][ticker] = {"lower": float(swing_low_4h), "upper": float(swing_high_4h)}
-            save_settings()
         key_lower, key_upper = f"in_lower_{ticker}", f"in_upper_{ticker}"
+        saved_range = st.session_state["ranges"].get(ticker, {})
+        if not is_valid_range(
+            float(saved_range.get("lower", 0)),
+            float(saved_range.get("upper", 0)),
+            order_assist_price,
+        ):
+            # Reset both the persisted range and any already-created widget
+            # state. Otherwise Streamlit keeps showing the stale manual values
+            # even though user_settings.json now contains the new auto range.
+            st.session_state["ranges"][ticker] = {
+                "lower": float(swing_low_4h),
+                "upper": float(swing_high_4h),
+            }
+            st.session_state[key_lower] = float(swing_low_4h)
+            st.session_state[key_upper] = float(swing_high_4h)
+            save_settings()
         current_range = st.session_state["ranges"][ticker]
         if key_lower not in st.session_state: st.session_state[key_lower] = float(current_range["lower"])
         if key_upper not in st.session_state: st.session_state[key_upper] = float(current_range["upper"])
