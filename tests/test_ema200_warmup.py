@@ -67,6 +67,8 @@ def test_app_and_scanner_both_use_the_shared_ema200_warmup():
 def test_scanner_raw_minimum_covers_all_walk_forward_folds_and_purge():
     # 最初のfoldは4分割の1区画。境界purge 8行を除いて180行必要。
     assert scanner.MIN_WALK_FORWARD_FEATURE_ROWS == 752
+    # 199 EMA warm-up + 752 trainable rows + 8 future-label bars.
+    assert scanner.MIN_RAW_BARS_1H_FOR_WALK_FORWARD == 959
     fold_size = scanner.MIN_WALK_FORWARD_FEATURE_ROWS // (
         scanner.N_WALK_FORWARD_FOLDS + 1
     )
