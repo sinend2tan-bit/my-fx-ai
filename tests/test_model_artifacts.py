@@ -17,13 +17,12 @@ class FakeModel:
             self.feature_names_in_ = names
 
 
-def check(model, *, require_all=True):
+def check(model):
     return model_matches_contract(
         model,
         expected_features=FEATURES,
         allowed_classes=CLASSES,
         model_type=FakeModel,
-        require_all_classes=require_all,
     )
 
 
@@ -49,10 +48,8 @@ class ModelArtifactContractTests(unittest.TestCase):
     def test_rejects_missing_required_class_when_full_contract_required(self):
         self.assertFalse(check(FakeModel(classes=(-1, 1))))
 
-    def test_allows_two_of_three_classes_for_save_compatibility(self):
-        self.assertTrue(
-            check(FakeModel(classes=(-1, 1), names=FEATURES), require_all=False)
-        )
+    def test_rejects_two_class_model_for_persisted_artifact_contract(self):
+        self.assertFalse(check(FakeModel(classes=(-1, 1), names=FEATURES)))
 
     def test_rejects_single_class_model(self):
         self.assertFalse(check(FakeModel(classes=(1,))))
