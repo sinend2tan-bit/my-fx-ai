@@ -53,7 +53,7 @@ def test_wilson_interval_rejects_invalid_counts():
 
 def test_diagnostics_are_collapsed_and_do_not_change_validation_gate():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert 'with st.expander("📊 検証データの信頼度（参考）", expanded=False):' in source
+    assert 'with st.expander("📊 クラス別Recallの参考区間", expanded=False):' in source
     assert '"class_recall_wilson_pct": class_recall_wilson_pct' in source
     assert "if not validation_complete:" in source
     assert "model_quality_ok = bool(" in source
