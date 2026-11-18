@@ -53,6 +53,11 @@ if str(REPO_ROOT) not in sys.path:
 
 import scanner  # noqa: E402
 from aifx_time_validation import has_contiguous_hourly_window  # noqa: E402
+from aifx_ohlc_validation import (  # noqa: E402
+    add_4h_bucket_diagnostics,
+    clean_ohlc_source,
+    ohlc_valid_mask,
+)
 
 UTC = "UTC"
 START = pd.Timestamp("2026-01-05 00:00", tz=UTC)  # Monday
@@ -449,6 +454,9 @@ APP_LOAD_NS = {
     "yf": _yf_app,
     "st": _LoadStreamlitStub(),
     "has_contiguous_hourly_window": has_contiguous_hourly_window,
+    "ohlc_valid_mask": ohlc_valid_mask,
+    "clean_ohlc_source": clean_ohlc_source,
+    "add_4h_bucket_diagnostics": add_4h_bucket_diagnostics,
     "_LOAD_STOP_REASONS": {},
     "_LOAD_STOP_WARNED": set(),
 }
@@ -1298,12 +1306,12 @@ def test_syn_fx_017_4h_time_boundaries(monkeypatch):
     assert bin_ts not in feat_s.index
     assert feat_s.index.tz is not None and str(feat_s.index.tz) == "UTC"
 
-    # --- Scanner: timezone-naive index は 4h 経路で UTC として扱われる ---
+    # --- Scanner: timezone-naive 4h retains the Issue #80 UTC-localization contract ---
     naive = big_gap.copy()
     naive.index = naive.index.tz_localize(None)
     out_n = run_scanner_bars(monkeypatch, naive, interval="4h")
     assert out_n is not None
-    assert str(out_n.attrs["latest_features"].index.tz) == "UTC"
+    assert out_n.attrs["latest_features"].index.equals(feat_s.index)
 
     # --- Scanner: 完成した最後の 4h 区間は（過去時刻のため）採用される ---
     big2 = fixture_seeded_walk(1204)  # 301 区間すべて完成

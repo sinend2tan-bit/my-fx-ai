@@ -62,6 +62,11 @@ import pytest
 import yfinance as yf
 
 import scanner
+from aifx_ohlc_validation import (
+    add_4h_bucket_diagnostics,
+    clean_ohlc_source,
+    ohlc_valid_mask,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = REPO_ROOT / "app.py"
@@ -197,6 +202,9 @@ def _app_namespace(frame_factory):
         "FEATURE_COLUMNS": _app_literal("FEATURE_COLUMNS"),
         "DEFAULT_SPREAD_PIPS": _app_literal("DEFAULT_SPREAD_PIPS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
+        "ohlc_valid_mask": ohlc_valid_mask,
+        "clean_ohlc_source": clean_ohlc_source,
+        "add_4h_bucket_diagnostics": add_4h_bucket_diagnostics,
         "_LOAD_STOP_REASONS": {},
         "_LOAD_STOP_WARNED": set(),
     }
@@ -455,6 +463,21 @@ def _freeze_now(monkeypatch, fixed):
     )
 
 
+def test_scanner_4h_tz_naive_preserves_legacy_utc_localization(monkeypatch):
+    # Issue #80 / merged PR #27 intentionally preserve Scanner's legacy
+    # timezone-naive 4h localization; App 4h has a separate reject contract.
+    frame = make_frame(n=1600, tz="UTC", seed=26)
+    frame.index = frame.index.tz_localize(None)
+    stub_scanner_download(monkeypatch, frame)
+
+    result = scanner.bars("USDJPY=X", interval="4h", period="90d")
+
+    assert result is not None
+    latest = result.attrs["latest_features"]
+    assert latest.index.tz is not None
+    assert str(latest.index.tz) == "UTC"
+
+
 def _run_both_4h(monkeypatch, frame):
     """同じフレームを Scanner 実物と App 実物の双方に与え、集約系列
     （Scanner は attrs["latest_features"]、App は戻り値）を返す。"""
@@ -466,6 +489,78 @@ def _run_both_4h(monkeypatch, frame):
     out = ns["load_and_process_data"]("USDJPY=X", "90d", "4h")
     assert st.warnings == []
     return scan_series, out
+
+
+def test_invalid_source_ohlc_bar_excludes_4h_bucket_in_both_pipelines(monkeypatch):
+    # Source-row diagnostics are separate from the 1h-only C-1 counters.
+    # Each row is counted once by its first exclusion reason; ended buckets
+    # with fewer than four valid unique timestamps are counted as incomplete.
+    frame = make_frame(n=1600, tz="UTC", seed=29)
+    bad_timestamp = frame.index[501]
+    frame.loc[bad_timestamp, "High"] = (
+        min(frame.loc[bad_timestamp, "Open"], frame.loc[bad_timestamp, "Close"])
+        - 0.01
+    )
+    missing_timestamp = frame.index[702]
+    frame.loc[missing_timestamp, "High"] = np.nan
+    duplicate_timestamp = frame.index[903]
+    duplicate_row = frame.loc[[duplicate_timestamp]].copy()
+    nat_row = frame.iloc[[0]].copy()
+    nat_row.index = pd.DatetimeIndex([pd.NaT], tz="UTC")
+    frame = pd.concat([frame, duplicate_row, nat_row])
+
+    affected_invalid_bin = bad_timestamp.floor("4h")
+    affected_missing_bin = missing_timestamp.floor("4h")
+
+    scan_series, out = _run_both_4h(monkeypatch, frame)
+
+    assert affected_invalid_bin not in scan_series.index
+    assert affected_invalid_bin not in out.index
+    assert affected_missing_bin not in scan_series.index
+    assert affected_missing_bin not in out.index
+
+    scan_quality = scan_series.attrs["source_ohlc_diagnostics"]
+    app_quality = out.attrs["source_ohlc_diagnostics"]
+    assert scan_quality == app_quality
+    assert scan_quality == {
+        "input_rows": 1602,
+        "dropped_invalid_timestamp": 1,
+        "dropped_off_hour_grid_timestamp": 0,
+        "dropped_missing_or_nonfinite": 1,
+        "dropped_duplicate_timestamp": 1,
+        "dropped_invalid_ohlc": 1,
+        "validated_source_rows": 1598,
+        "completed_4h_buckets": 400,
+        "complete_4h_buckets": 398,
+        "dropped_underfull_4h_buckets": 2,
+        "dropped_overfull_4h_buckets": 0,
+        "dropped_non_four_4h_buckets": 2,
+    }
+
+
+def test_off_hour_source_timestamp_cannot_replace_missing_hour(monkeypatch):
+    # A 00:30 timestamp must not make a 4h bucket appear complete when one
+    # of the four expected hourly slots is absent (count alone would be 4).
+    frame = make_frame(n=1600, tz="UTC", seed=32)
+    missing_ts = frame.index[402]
+    off_grid_ts = missing_ts - pd.Timedelta(minutes=30)
+    replacement = frame.loc[[missing_ts]].copy()
+    replacement.index = pd.DatetimeIndex([off_grid_ts])
+    altered = pd.concat([frame.drop(index=[missing_ts]), replacement]).sort_index()
+
+    affected_bin = missing_ts.floor("4h")
+    scan_series, out = _run_both_4h(monkeypatch, altered)
+
+    assert affected_bin not in scan_series.index
+    assert affected_bin not in out.index
+    scan_quality = scan_series.attrs["source_ohlc_diagnostics"]
+    app_quality = out.attrs["source_ohlc_diagnostics"]
+    assert scan_quality == app_quality
+    assert scan_quality["input_rows"] == 1600
+    assert scan_quality["dropped_off_hour_grid_timestamp"] == 1
+    assert scan_quality["validated_source_rows"] == 1599
+    assert scan_quality["dropped_underfull_4h_buckets"] == 1
+    assert scan_quality["complete_4h_buckets"] == 399
 
 
 def _assert_both_agree_on_bins(scan_series, out, adopted_last_bin):

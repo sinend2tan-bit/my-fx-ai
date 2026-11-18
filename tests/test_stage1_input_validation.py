@@ -71,6 +71,11 @@ from sklearn.utils.class_weight import compute_sample_weight
 
 import scanner
 from aifx_time_validation import has_contiguous_hourly_window
+from aifx_ohlc_validation import (
+    add_4h_bucket_diagnostics,
+    clean_ohlc_source,
+    ohlc_valid_mask,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = REPO_ROOT / "app.py"
@@ -290,10 +295,9 @@ def test_scanner_tz_aware_daily_legacy_path(monkeypatch):
 
 
 def test_scanner_4h_not_stopped_by_stage1_gate(monkeypatch):
-    # 4時間足は段階1の対象外。tz-naive な1h入力でも段階1のゲートでは
-    # 停止せず、従来の4h処理（段階2の対象）が維持される。
-    frame = make_frame(n=2000, seed=11)
-    frame.index = frame.index.tz_localize(None)
+    # 4時間足は段階1の品質カウンタ対象外。timezone-aware入力では
+    # 4h処理が維持され、1h専用data_qualityは付かない。
+    frame = make_frame(n=2000, tz="UTC", seed=11)
     stub_scanner_download(monkeypatch, frame)
     out = scanner.bars("USDJPY=X", interval="4h", period="90d")
     assert out is not None
@@ -379,6 +383,9 @@ def _app_namespace(frame_factory):
         "DEFAULT_SPREAD_PIPS": _app_literal("DEFAULT_SPREAD_PIPS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
         "has_contiguous_hourly_window": has_contiguous_hourly_window,
+        "ohlc_valid_mask": ohlc_valid_mask,
+        "clean_ohlc_source": clean_ohlc_source,
+        "add_4h_bucket_diagnostics": add_4h_bucket_diagnostics,
         # 停止理由の記録はテストごとに新しい空のレジストリを使う。
         "_LOAD_STOP_REASONS": {},
         "_LOAD_STOP_WARNED": set(),
@@ -627,13 +634,14 @@ def _model_namespace():
         "FEATURE_COLUMNS": _app_literal("FEATURE_COLUMNS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
         "MODEL_VERSION": _app_literal("MODEL_VERSION"),
+        "DATA_CONTRACT_VERSION_BY_INTERVAL": _app_literal("DATA_CONTRACT_VERSION_BY_INTERVAL"),
         "APP_CLASS_LABELS": _app_literal("APP_CLASS_LABELS"),
         "datetime": datetime,
         "JST": ZoneInfo("Asia/Tokyo"),
     }
     # AIFX-APP-PERSIST-20261113-01: 保存処理が _save_trained_model に
     # 分離されたため、抽出対象へ追加する（依存の列挙は従来どおり）。
-    for fname in ("_model_filename", "_save_trained_model", "_fixed_class_metrics", "analyze_signal_with_backtest"):
+    for fname in ("_model_filename", "_model_data_contract_version", "_model_data_contract_matches", "_save_trained_model", "_fixed_class_metrics", "analyze_signal_with_backtest"):
         code = compile(
             ast.Module(body=[_extract_function(fname)], type_ignores=[]),
             "app_extract",
@@ -664,7 +672,7 @@ def _model_df(mode, n=500, seed=3):
 def _tiny_model(n_estimators=10, single_class=False, seed=3):
     rng = np.random.default_rng(seed)
     columns = _app_literal("FEATURE_COLUMNS")
-    X = rng.normal(0, 1, (60, len(columns)))
+    X = pd.DataFrame(rng.normal(0, 1, (60, len(columns))), columns=columns)
     if single_class:
         y = np.ones(60, dtype=int)
     else:
@@ -694,6 +702,30 @@ def test_app_model_version_is_8():
     # 段階1で 6→7、段階2（SYN-FX-017）で 7→8。
     assert _app_literal("MODEL_VERSION") == 8
 
+def test_app_4h_data_contract_rejects_legacy_model_but_keeps_other_intervals():
+    ns, _st = _model_namespace()
+    features = _app_literal("FEATURE_COLUMNS")
+    legacy_payload = {
+        "version": 8,
+        "features": features,
+        "model": _tiny_model(),
+    }
+    updated_4h_payload = {**legacy_payload, "data_contract_version": 2}
+
+    # Existing 4h artifacts predate the OHLC source cleaner and must not be reused.
+    assert ns["_model_data_contract_version"]("4h") == 2
+    assert ns["_model_data_contract_matches"](legacy_payload, "4h") is False
+    assert ns["_model_data_contract_matches"](updated_4h_payload, "4h") is True
+
+    # The cleaner is 4h-specific: legacy 1h artifacts remain compatible.
+    assert ns["_model_data_contract_version"]("1h") == 1
+    assert ns["_model_data_contract_matches"](legacy_payload, "1h") is True
+
+    # Malformed markers fail closed rather than being coerced to an integer.
+    assert ns["_model_data_contract_matches"](
+        {**legacy_payload, "data_contract_version": "2"}, "4h"
+    ) is False
+
 
 def test_app_clears_stale_model_save_status_at_start():
     ns, st = _model_namespace()
@@ -719,6 +751,7 @@ def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
     assert saved["version"] == 8
+    assert saved["data_contract_version"] == 1
     assert saved["model"].n_estimators == 260  # 新規学習した候補モデル
 
 
