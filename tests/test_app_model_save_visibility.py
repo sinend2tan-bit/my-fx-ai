@@ -122,7 +122,15 @@ def test_save_success_writes_file_without_warning(rig):
     status = at.session_state["model_save_status"]
     assert status["saved"] is True
     # 保存経路が実際に通ったこと（ゲート通過）を確認する。
-    assert at.session_state["model_eval_metrics"]["quality_ok"] is True
+    metrics = at.session_state["model_eval_metrics"]
+    assert metrics["quality_ok"] is True
+    assert set(metrics["class_support"]) == {"sell", "neutral", "buy"}
+    assert set(metrics["class_correct"]) == {"sell", "neutral", "buy"}
+    assert sum(metrics["class_support"].values()) == metrics["test_count"]
+    assert all(
+        0 <= metrics["class_correct"][name] <= metrics["class_support"][name]
+        for name in ("sell", "neutral", "buy")
+    )
 
     model_files = list(rig.glob("model_*.joblib"))
     assert len(model_files) == 1
