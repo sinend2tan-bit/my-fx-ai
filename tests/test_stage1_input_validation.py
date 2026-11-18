@@ -634,13 +634,14 @@ def _model_namespace():
         "FEATURE_COLUMNS": _app_literal("FEATURE_COLUMNS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
         "MODEL_VERSION": _app_literal("MODEL_VERSION"),
+        "DATA_CONTRACT_VERSION_BY_INTERVAL": _app_literal("DATA_CONTRACT_VERSION_BY_INTERVAL"),
         "APP_CLASS_LABELS": _app_literal("APP_CLASS_LABELS"),
         "datetime": datetime,
         "JST": ZoneInfo("Asia/Tokyo"),
     }
     # AIFX-APP-PERSIST-20261113-01: 保存処理が _save_trained_model に
     # 分離されたため、抽出対象へ追加する（依存の列挙は従来どおり）。
-    for fname in ("_model_filename", "_save_trained_model", "_fixed_class_metrics", "analyze_signal_with_backtest"):
+    for fname in ("_model_filename", "_model_data_contract_version", "_model_data_contract_matches", "_save_trained_model", "_fixed_class_metrics", "analyze_signal_with_backtest"):
         code = compile(
             ast.Module(body=[_extract_function(fname)], type_ignores=[]),
             "app_extract",
@@ -700,6 +701,30 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
 def test_app_model_version_is_8():
     # 段階1で 6→7、段階2（SYN-FX-017）で 7→8。
     assert _app_literal("MODEL_VERSION") == 8
+
+def test_app_4h_data_contract_rejects_legacy_model_but_keeps_other_intervals():
+    ns, _st = _model_namespace()
+    features = _app_literal("FEATURE_COLUMNS")
+    legacy_payload = {
+        "version": 8,
+        "features": features,
+        "model": _tiny_model(),
+    }
+    updated_4h_payload = {**legacy_payload, "data_contract_version": 2}
+
+    # Existing 4h artifacts predate the OHLC source cleaner and must not be reused.
+    assert ns["_model_data_contract_version"]("4h") == 2
+    assert ns["_model_data_contract_matches"](legacy_payload, "4h") is False
+    assert ns["_model_data_contract_matches"](updated_4h_payload, "4h") is True
+
+    # The cleaner is 4h-specific: legacy 1h artifacts remain compatible.
+    assert ns["_model_data_contract_version"]("1h") == 1
+    assert ns["_model_data_contract_matches"](legacy_payload, "1h") is True
+
+    # Malformed markers fail closed rather than being coerced to an integer.
+    assert ns["_model_data_contract_matches"](
+        {**legacy_payload, "data_contract_version": "2"}, "4h"
+    ) is False
 
 
 def test_app_clears_stale_model_save_status_at_start():
