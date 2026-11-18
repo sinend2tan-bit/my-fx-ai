@@ -1929,6 +1929,21 @@ def _pnl_stability_gate(total_pnl, fold_pnl_values, required_folds, minimum_trad
             "required_positive_folds": int(required_positive_folds), "reasons": reasons}
 
 
+def _directional_pnl_gate_passed(summary, minimum_trades):
+    """Apply the existing per-direction trade-count and positive-net rule."""
+    return bool(
+        summary["trades"] >= minimum_trades and summary["net_pips"] > 0
+    )
+
+
+def _combine_directional_pnl_gates(argmax_summary, runtime_equivalent_summary, minimum_trades):
+    """Require both argmax and live-equivalent per-direction PnL to pass."""
+    return bool(
+        _directional_pnl_gate_passed(argmax_summary, minimum_trades)
+        and _directional_pnl_gate_passed(runtime_equivalent_summary, minimum_trades)
+    )
+
+
 def _combine_pnl_stability_gates(argmax_gate, runtime_equivalent_gate):
     """Require both the historical diagnostic and live-equivalent policy to pass."""
     reasons = list(argmax_gate["reasons"])
@@ -1977,7 +1992,6 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             "fold_details": details or [],
             "class_counts": {},
             "runtime_equivalent_pnl_gate_passed": None,
-            "runtime_equivalent_pnl_gate_reasons": [],
         }
 
     def class_counts(values):
@@ -2489,7 +2503,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     total_pnl = summarize_trade_results(simulated_trade_rows)
     score_gated_total_pnl = summarize_trade_results(score_gated_trade_rows)
 
-    # 買い・売りを分けて評価する。片方の成績が悪い場合に、その方向だけ保留できるようにする。
+    # Evaluate each direction separately under both the historical and live-equivalent policies.
     directional_pnl = {}
     for direction, direction_name in ((1, "buy"), (-1, "sell")):
         direction_trades = [
@@ -2497,25 +2511,42 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
             if trade.get("direction") == direction
         ]
         direction_summary = summarize_trade_results(direction_trades)
+        runtime_direction_trades = [
+            trade for trade in score_gated_trade_rows
+            if trade.get("direction") == direction
+        ]
+        runtime_direction_summary = summarize_trade_results(runtime_direction_trades)
+        argmax_direction_passed = _directional_pnl_gate_passed(
+            direction_summary, MIN_DIRECTIONAL_PNL_TRADES
+        )
+        runtime_direction_passed = _directional_pnl_gate_passed(
+            runtime_direction_summary, MIN_DIRECTIONAL_PNL_TRADES
+        )
+        combined_direction_passed = _combine_directional_pnl_gates(
+            direction_summary, runtime_direction_summary,
+            MIN_DIRECTIONAL_PNL_TRADES,
+        )
+        if not argmax_direction_passed:
+            direction_reason = "方向別の仮想取引件数不足、または損益がプラスでないため保留"
+        elif not runtime_direction_passed:
+            direction_reason = "実運用相当55%スコアゲート適用後の方向別損益条件を満たさないため保留"
+        else:
+            direction_reason = "従来方式と実運用相当方式の方向別損益条件を満たしました"
         directional_pnl[direction_name] = {
             **direction_summary,
-            "passed": bool(
-                direction_summary["trades"] >= MIN_DIRECTIONAL_PNL_TRADES
-                and direction_summary["net_pips"] > 0
-            ),
+            "passed": combined_direction_passed,
+            "argmax_passed": argmax_direction_passed,
+            "runtime_equivalent_passed": runtime_direction_passed,
             "minimum_trades": MIN_DIRECTIONAL_PNL_TRADES,
-            "reason": (
-                "方向別の仮想損益条件を満たしました"
-                if direction_summary["trades"] >= MIN_DIRECTIONAL_PNL_TRADES
-                and direction_summary["net_pips"] > 0
-                else "方向別の仮想取引件数不足、または損益がプラスでないため保留"
-            ),
+            "reason": direction_reason,
         }
         print(
             f"[DIRECTIONAL PNL GATE] pair={pair_name}, direction={direction_name}, "
-            f"trades={direction_summary['trades']}, net_pips={direction_summary['net_pips']}, "
+            f"argmax_trades={direction_summary['trades']}, "
+            f"argmax_net_pips={direction_summary['net_pips']}, "
+            f"runtime_equivalent_passed={runtime_direction_passed}, "
             f"minimum_trades={MIN_DIRECTIONAL_PNL_TRADES}, "
-            f"passed={directional_pnl[direction_name]['passed']}"
+            f"passed={combined_direction_passed}"
         )
 
     # 追加の安定性ゲート：全体損益が一部の期間だけに依存していないか確認する。
@@ -2687,8 +2718,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         "pnl_stability_ok": bool(pnl_stability_ok),
         "pnl_gate_reasons": pnl_gate_reasons,
         "runtime_equivalent_pnl_gate_passed": bool(runtime_equivalent_pnl_gate["passed"]),
-        "runtime_equivalent_pnl_gate_reasons": runtime_equivalent_pnl_gate["reasons"],
-        "runtime_equivalent_pnl_positive_folds": runtime_equivalent_pnl_gate["positive_folds"],
+
         "positive_pnl_folds": int(positive_pnl_folds),
         "total_pnl_trades": int(total_pnl["trades"]),
         "balanced_accuracy": round(score, 4) if score is not None else None,
