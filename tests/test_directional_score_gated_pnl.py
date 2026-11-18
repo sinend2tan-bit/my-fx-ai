@@ -40,3 +40,68 @@ def test_score_gate_rejects_malformed_or_nonfinite_scores(scores):
 def test_score_gate_rejects_invalid_threshold():
     with pytest.raises(ValueError):
         scanner.directional_predictions_from_scores(np.array([[0.2, 0.2, 0.6]]), 101)
+
+
+
+def test_runtime_equivalent_pnl_gate_is_required_in_addition_to_argmax_gate():
+    """A passing argmax PnL cannot compensate for a failing live-equivalent gate."""
+    from scanner import _pnl_stability_gate, _combine_pnl_stability_gates
+
+    argmax = _pnl_stability_gate(
+        {"trades": 45, "net_pips": 18.0},
+        [{"trades": 15, "net_pips": 8.0}, {"trades": 15, "net_pips": 6.0},
+         {"trades": 15, "net_pips": 4.0}],
+        required_folds=3,
+    )
+    runtime_equivalent = _pnl_stability_gate(
+        {"trades": 0, "net_pips": 0.0},
+        [{"trades": 0, "net_pips": 0.0}] * 3,
+        required_folds=3,
+    )
+    combined = _combine_pnl_stability_gates(argmax, runtime_equivalent)
+
+    assert argmax["passed"] is True
+    assert runtime_equivalent["passed"] is False
+    assert combined["passed"] is False
+    assert any("55%スコアゲート" in reason for reason in combined["reasons"])
+    # Runtime-equivalent public reasons must not leak gated counts or PnL values.
+    runtime_reasons = [
+        reason for reason in combined["reasons"] if "実運用相当" in reason
+    ]
+    assert runtime_reasons == [
+        "実運用相当55%スコアゲート適用後の損益条件を満たさない"
+    ]
+
+
+def test_runtime_equivalent_pnl_gate_uses_same_conservative_stability_rules():
+    """The live-equivalent path must satisfy folds, minimum trades, and positive net."""
+    from scanner import _pnl_stability_gate
+
+    passed = _pnl_stability_gate(
+        {"trades": 36, "net_pips": 12.0},
+        [{"trades": 12, "net_pips": 5.0}, {"trades": 12, "net_pips": 4.0},
+         {"trades": 12, "net_pips": 3.0}],
+        required_folds=3,
+    )
+    too_few_trades = _pnl_stability_gate(
+        {"trades": 29, "net_pips": 12.0},
+        [{"trades": 10, "net_pips": 5.0}, {"trades": 10, "net_pips": 4.0},
+         {"trades": 9, "net_pips": 3.0}],
+        required_folds=3,
+    )
+
+    assert passed["passed"] is True
+    assert too_few_trades["passed"] is False
+    assert any("取引件数不足" in reason for reason in too_few_trades["reasons"])
+
+
+
+def test_directional_gate_requires_runtime_equivalent_pnl_for_each_side():
+    from scanner import _combine_directional_pnl_gates
+
+    argmax_passes = {"trades": 12, "net_pips": 4.0}
+    runtime_equivalent_fails = {"trades": 2, "net_pips": 1.0}
+    runtime_equivalent_passes = {"trades": 12, "net_pips": 2.0}
+
+    assert _combine_directional_pnl_gates(argmax_passes, runtime_equivalent_fails, 10) is False
+    assert _combine_directional_pnl_gates(argmax_passes, runtime_equivalent_passes, 10) is True
