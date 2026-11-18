@@ -2346,6 +2346,7 @@ def _render_main_area():
                 st.session_state["ranges"][ticker] = {"lower": float(swing_low_4h), "upper": float(swing_high_4h)}
                 st.session_state[key_lower] = float(swing_low_4h)
                 st.session_state[key_upper] = float(swing_high_4h)
+                st.session_state[range_error_key] = False
                 save_settings()
             in_lower = rc1.number_input("レンジ下限", step=0.1 if is_jpy else 0.001, format=price_fmt, key=key_lower, on_change=update_range_callback)
             in_upper = rc2.number_input("レンジ上限", step=0.1 if is_jpy else 0.001, format=price_fmt, key=key_upper, on_change=update_range_callback)
