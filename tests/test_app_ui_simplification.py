@@ -77,6 +77,7 @@ def _make_download(
     stale_4h_source=False,
     missing_4h_source=False,
     zero_4h_atr=False,
+    price_shift=0.0,
 ):
     now_h = pd.Timestamp.now(tz="UTC").floor("h")
 
@@ -100,9 +101,14 @@ def _make_download(
             if zero_4h_atr:
                 # A flat but valid OHLC source produces zero 4h ATR.
                 frame.loc[:, ["Open", "High", "Low", "Close"]] = 150.0
+            if price_shift:
+                frame.loc[:, ["Open", "High", "Low", "Close"]] += float(price_shift)
             return frame
         end = now_h - pd.Timedelta(days=10) if stale_main else now_h
-        return _frame(600, "1h", end, tail=tail_1h)
+        frame = _frame(600, "1h", end, tail=tail_1h)
+        if price_shift:
+            frame.loc[:, ["Open", "High", "Low", "Close"]] += float(price_shift)
+        return frame
 
     return fake_download
 
@@ -241,6 +247,37 @@ def test_repeat_order_assist_fails_closed_when_4h_atr_is_zero(rig):
     assert "4時間足の高値・安値またはATRを確認できないため" in body
     assert "📋 リピート注文（ハーフ＆ハーフ）" not in body
     assert not any("注文幅" in str(w.label) for w in at.number_input)
+
+
+def test_auto_range_reset_also_updates_existing_widget_state(rig, monkeypatch):
+    at = rig()
+    assert not at.exception, f"app raised: {[e.value for e in at.exception]}"
+
+    lower = next(w for w in at.number_input if str(w.label) == "レンジ下限")
+    upper = next(w for w in at.number_input if str(w.label) == "レンジ上限")
+    lower.set_value(150.0)
+    upper.set_value(160.0)
+    at.run()
+
+    settings_path = rig.tmp_path / "user_settings.json"
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert saved["ranges"]["USDJPY=X"] == {"lower": 150.0, "upper": 160.0}
+
+    # A large price move makes the old saved range invalid under the existing
+    # 0.4x..1.6x guard. The auto-reset must update both persisted and widget state.
+    monkeypatch.setattr(yf, "download", _make_download(price_shift=-60.0))
+    import streamlit as st
+    st.cache_data.clear()
+    at.run()
+    assert not at.exception, f"app raised after price move: {[e.value for e in at.exception]}"
+
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    auto_range = saved["ranges"]["USDJPY=X"]
+    lower_after = next(w for w in at.number_input if str(w.label) == "レンジ下限")
+    upper_after = next(w for w in at.number_input if str(w.label) == "レンジ上限")
+    assert float(lower_after.value) == pytest.approx(auto_range["lower"])
+    assert float(upper_after.value) == pytest.approx(auto_range["upper"])
+    assert auto_range["lower"] < auto_range["upper"]
 
 
 def test_direction_hold_when_timeframes_disagree(rig):
