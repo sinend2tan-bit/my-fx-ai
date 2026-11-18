@@ -2049,11 +2049,17 @@ def _render_main_area():
                     ),
                 })
             st.table(pd.DataFrame(_recall_rows))
+            _ba_value = _model_eval_display.get("balanced_accuracy")
+            _baseline_ba_value = _model_eval_display.get("baseline_balanced_accuracy")
+            _ba_text = "—" if _ba_value is None else f"{float(_ba_value):.1f}%"
+            _baseline_ba_text = (
+                "—" if _baseline_ba_value is None
+                else f"{float(_baseline_ba_value):.1f}%"
+            )
             st.caption(
                 f"学習 {int(_model_eval_display.get('train_count', 0))}行 / "
                 f"評価 {int(_model_eval_display.get('test_count', 0))}行。"
-                f"Balanced Accuracy: {_model_eval_display.get('balanced_accuracy')}% "
-                f"(baseline: {_model_eval_display.get('baseline_balanced_accuracy')}%)."
+                f"Balanced Accuracy: {_ba_text} (baseline: {_baseline_ba_text})。"
             )
             st.caption(
                 "Wilson区間は独立二項試行を仮定した参考値です。時系列データの自己相関により"
