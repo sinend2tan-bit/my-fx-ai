@@ -99,6 +99,9 @@ DEFAULT_SPREAD_PIPS = {
 }
 LOOKAHEAD_BARS = 8
 MODEL_VERSION = 8
+# The 4h OHLC cleaner changes the admitted source-row/bucket population.
+# Keep this separate from MODEL_VERSION so 1h/other interval artifacts remain reusable.
+DATA_CONTRACT_VERSION_BY_INTERVAL = {"4h": 2}
 
 st.markdown("""
 <style>
@@ -1484,6 +1487,17 @@ def _model_filename(ticker, interval):
     clean_ticker = str(ticker).replace("=X", "").replace("/", "")
     return f"model_{clean_ticker}_{interval}.joblib"
 
+def _model_data_contract_version(interval):
+    return DATA_CONTRACT_VERSION_BY_INTERVAL.get(str(interval), 1)
+
+
+def _model_data_contract_matches(saved, interval):
+    """Reject artifacts trained against a different interval data contract."""
+    if not isinstance(saved, dict):
+        return False
+    stored = saved.get("data_contract_version", 1)
+    return type(stored) is int and stored == _model_data_contract_version(interval)
+
 
 def _save_trained_model(model_path, payload):
     """候補モデルを検証してから原子的に保存する。失敗時は旧ファイルを保つ。"""
@@ -1502,6 +1516,9 @@ def _save_trained_model(model_path, payload):
         if verified.get("version") != MODEL_VERSION:
             return False
         if verified.get("features") != FEATURE_COLUMNS:
+            return False
+        contract_version = verified.get("data_contract_version", 1)
+        if type(contract_version) is not int or contract_version < 1:
             return False
 
         candidate = verified.get("model")
@@ -1693,6 +1710,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
                 saved = joblib.load(model_path)
                 if (isinstance(saved, dict) and saved.get("version") == MODEL_VERSION
                     and saved.get("features") == FEATURE_COLUMNS
+                    and _model_data_contract_matches(saved, interval)
                     and isinstance(saved.get("model"), RandomForestClassifier)
                     and set(int(c) for c in saved["model"].classes_) == set(APP_CLASS_LABELS)):
                     age_hours = (time.time() - os.path.getmtime(model_path)) / 3600
@@ -1716,6 +1734,7 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
                 model = candidate_model
                 saved_ok = _save_trained_model(model_path, {
                     "version": MODEL_VERSION, "features": FEATURE_COLUMNS,
+                    "data_contract_version": _model_data_contract_version(interval),
                     "model": model, "trained_at": datetime.now(JST).isoformat(),
                     "validation_balanced_accuracy": balanced_accuracy,
                     "baseline_balanced_accuracy": baseline_balanced_accuracy,
