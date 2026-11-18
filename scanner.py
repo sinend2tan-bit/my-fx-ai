@@ -30,13 +30,18 @@ JST = ZoneInfo("Asia/Tokyo")
 STATE_FILE = "scan_state.json"
 _STATE_LOAD_ERROR = None
 LOOKAHEAD_BARS = 8
-# 1h の EMA200 は200観測後に有効化する。Scanner の学習行数下限を満たす
-# ための1h raw本数は、ウォームアップ199 + 未来窓8 + 学習180 = 387本。
+# 1h の EMA200 は200観測後に有効化する。
 EMA200_MIN_PERIODS = 200
-# 非1hの従来経路で使う加工後の最低本数（4hは完成した4h足220本）。
+# Walk-Forwardは (folds + 1) 分割。最初のtrain foldにも180行必要で、
+# purge gapとして各fold境界直前の8行を除外する。さらに各ラベルに未来8本が必要。
+# 連続・全ラベル有効を仮定した必要最低raw本数（十分条件ではない）。
 MIN_FEATURE_BARS = 220
 MIN_TRAIN_ROWS = 180
 N_WALK_FORWARD_FOLDS = 3
+MIN_WALK_FORWARD_FEATURE_ROWS = (N_WALK_FORWARD_FOLDS + 1) * (MIN_TRAIN_ROWS + LOOKAHEAD_BARS)
+MIN_RAW_BARS_1H_FOR_WALK_FORWARD = (
+    EMA200_MIN_PERIODS - 1 + MIN_WALK_FORWARD_FEATURE_ROWS + LOOKAHEAD_BARS
+)
 FAST_MOVE_ATR_MULTIPLE = 2.5
 
 # 最新の確定1時間足がこの時間を超えて古い場合は、検証計算を行わず保留する。
@@ -1448,9 +1453,7 @@ def bars(ticker, interval="1h", period="60d"):
     if interval == "4h":
         min_raw_bars = 4 * MIN_FEATURE_BARS
     elif interval == "1h":
-        min_raw_bars = (
-            EMA200_MIN_PERIODS - 1 + MIN_TRAIN_ROWS + LOOKAHEAD_BARS
-        )
+        min_raw_bars = MIN_RAW_BARS_1H_FOR_WALK_FORWARD
     else:
         min_raw_bars = MIN_FEATURE_BARS + 1
     if len(raw) < min_raw_bars:
