@@ -109,7 +109,7 @@ def run_bars(monkeypatch, frame):
     stub_download(monkeypatch, frame)
     # Keep synthetic continuity/purge tests focused on timestamp behavior;
     # production's minimum training-row requirement is covered separately.
-    monkeypatch.setattr(scanner, "MIN_TRAIN_ROWS", 80)
+    monkeypatch.setattr(scanner, "MIN_TRAIN_ROWS", 50)
     out = scanner.bars(TICKER, interval="1h", period="180d")
     assert out is not None
     return out
