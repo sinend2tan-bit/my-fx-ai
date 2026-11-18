@@ -55,3 +55,9 @@ def test_diagnostics_are_collapsed_and_do_not_change_validation_gate():
     assert '"class_recall_wilson_pct": class_recall_wilson_pct' in source
     assert "if not validation_complete:" in source
     assert "model_quality_ok = bool(" in source
+
+
+def test_ui_discloses_iid_assumption_and_time_series_dependence_limit():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert "独立な二項標本を仮定した参考区間" in source
+    assert "自己相関・相場局面の偏りは補正しない" in source
