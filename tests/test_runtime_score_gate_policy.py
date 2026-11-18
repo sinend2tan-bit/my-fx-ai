@@ -1,5 +1,8 @@
 """Synthetic regression tests for runtime score-gate vs argmax validation policy."""
 
+import ast
+import inspect
+
 import numpy as np
 
 import scanner
@@ -38,3 +41,40 @@ def test_live_score_gate_accepts_only_thresholded_dominant_direction():
     assert scanner.directional_predictions_from_scores(scores).tolist() == [
         1, -1, 1, 0, 0
     ]
+
+
+def test_walk_forward_validation_routes_model_predict_to_ungated_pnl():
+    """Guard the real standard WF code path, not only a hand-written argmax."""
+    source = inspect.getsource(scanner.walk_forward_validation)
+    function = ast.parse(source).body[0]
+
+    def is_model_predict(node):
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "predict"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "model"
+        )
+
+    pred_assignment_exists = any(
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "pred"
+            for target in node.targets
+        )
+        and is_model_predict(node.value)
+        for node in ast.walk(function)
+    )
+    pnl_uses_pred = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "simulated_pnl"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "pred"
+        for node in ast.walk(function)
+    )
+
+    assert pred_assignment_exists, "standard WF must assign model.predict(test_X) to pred"
+    assert pnl_uses_pred, "standard WF PnL must receive the ungated pred output"
