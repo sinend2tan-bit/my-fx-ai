@@ -3205,7 +3205,10 @@ def analyze_pair(name, config):
             result["reason"] = "想定スプレッドがATRに対して大きいため保留します。"
             return result
 
-        direction = model_result["direction"]
+        # 方向別PnLゲート適用後の方向を使う。
+        # model_result["direction"] を再読込すると、直前に設定した「様子見」が
+        # 元の買い/売りへ戻り、保留ペアが候補表示へ流入するため禁止する。
+        direction = result.get("direction", "様子見")
 
         # 上位足の方向との食い違い判定（読み取り計算のみ）。
         # ニュース確認より前に計算し、フォワード検証の記録可否にも使う。
