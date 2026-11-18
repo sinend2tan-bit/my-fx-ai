@@ -2124,6 +2124,11 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
     if df is None or len(df) < MIN_TRAIN_ROWS:
         return failure("学習データ不足")
+    if len(df) < MIN_WALK_FORWARD_FEATURE_ROWS:
+        return failure(
+            f"{len(df)} rows < {MIN_WALK_FORWARD_FEATURE_ROWS} rows required "
+            f"for {N_WALK_FORWARD_FOLDS}-fold walk-forward validation"
+        )
 
     X = df[FEATURE_COLUMNS]
     y = df["Target"].astype(int)
