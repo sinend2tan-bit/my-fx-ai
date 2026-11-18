@@ -73,11 +73,10 @@ def test_scanner_raw_minimum_covers_all_walk_forward_folds_and_purge():
     assert fold_size - scanner.LOOKAHEAD_BARS == scanner.MIN_TRAIN_ROWS
 
 
-def test_walk_forward_rejects_insufficient_rows_before_fitting(monkeypatch):
-    # 751行では最初のfoldが180行の学習データを確保できない。
-    import pandas as pd
-    import numpy as np
-
+def test_walk_forward_fails_closed_when_first_fold_is_below_minimum_training_rows(monkeypatch):
+    # 751行ではfold_size=187。purge 8行後の最初のtrainは179行となり、
+    # 180行の最低条件に届かずfold 1がskipされる。残るfoldが動いても
+    # completeness gateにより全体を合格扱いしない。
     frame = pd.DataFrame(
         {column: np.linspace(0.1, 1.0, 751) for column in scanner.FEATURE_COLUMNS}
     )
@@ -85,4 +84,7 @@ def test_walk_forward_rejects_insufficient_rows_before_fitting(monkeypatch):
     frame["_source_bar_position"] = np.arange(751, dtype=np.int64)
     result = scanner.walk_forward_validation(frame)
     assert result["passed"] is False
-    assert "751 rows < 752 rows required" in result["reason"]
+    assert result["folds"] == 2
+    assert result["fold_completeness"]["complete"] is False
+    assert result["fold_completeness"]["missing_folds"] == [1]
+    assert "fold completeness failed" in result["reason"]
