@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from aifx_indicator_utils import ema_with_warmup
+import scanner
 
 
 def test_ema200_is_unavailable_until_200_observations():
@@ -61,3 +62,13 @@ def test_app_and_scanner_both_use_the_shared_ema200_warmup():
     assert 'ema_with_warmup(close, EMA200_MIN_PERIODS)' in scanner_source
     assert "MODEL_VERSION = 11" in app_source
     assert "MODEL_VERSION = 24" in scanner_source
+
+
+def test_scanner_raw_minimum_covers_all_walk_forward_folds_and_purge():
+    # 959 = 199 EMA warm-up + 4 * (180 train + 8 purge) + 8 label horizon.
+    assert scanner.MIN_WALK_FORWARD_FEATURE_ROWS == 752
+    assert scanner.MIN_RAW_BARS_1H_FOR_WALK_FORWARD == 959
+    fold_size = scanner.MIN_WALK_FORWARD_FEATURE_ROWS // (
+        scanner.N_WALK_FORWARD_FOLDS + 1
+    )
+    assert fold_size - scanner.LOOKAHEAD_BARS == scanner.MIN_TRAIN_ROWS
