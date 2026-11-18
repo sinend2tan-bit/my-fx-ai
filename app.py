@@ -2318,11 +2318,30 @@ def _render_main_area():
         st.caption("広めの設定レンジを基本に、買いレンジ・売りレンジ、注文幅／利確幅、1注文数量、注文本数の目安を確認します。")
         with st.expander("⚙️ リピート注文のレンジ設定", expanded=False):
             rc1, rc2 = st.columns(2)
+            range_error_key = f"range_error_{ticker}"
+
             def update_range_callback():
-                lo, hi = float(st.session_state[key_lower]), float(st.session_state[key_upper])
-                if lo < hi:
+                lo = float(st.session_state[key_lower])
+                hi = float(st.session_state[key_upper])
+                if is_valid_range(lo, hi, order_assist_price):
                     st.session_state["ranges"][ticker] = {"lower": lo, "upper": hi}
+                    st.session_state[range_error_key] = False
                     save_settings()
+                    return
+
+                # Reject invalid or inverted input visibly. Restore both widget
+                # values from the last persisted valid range so the displayed
+                # calculations can never silently swap the user's lower/upper.
+                saved = st.session_state["ranges"].get(ticker, {})
+                saved_lower = float(saved.get("lower", swing_low_4h))
+                saved_upper = float(saved.get("upper", swing_high_4h))
+                if not is_valid_range(saved_lower, saved_upper, order_assist_price):
+                    saved_lower = float(swing_low_4h)
+                    saved_upper = float(swing_high_4h)
+                st.session_state[key_lower] = saved_lower
+                st.session_state[key_upper] = saved_upper
+                st.session_state[range_error_key] = True
+
             def trigger_auto_calc_callback():
                 st.session_state["ranges"][ticker] = {"lower": float(swing_low_4h), "upper": float(swing_high_4h)}
                 st.session_state[key_lower] = float(swing_low_4h)
@@ -2331,9 +2350,15 @@ def _render_main_area():
             in_lower = rc1.number_input("レンジ下限", step=0.1 if is_jpy else 0.001, format=price_fmt, key=key_lower, on_change=update_range_callback)
             in_upper = rc2.number_input("レンジ上限", step=0.1 if is_jpy else 0.001, format=price_fmt, key=key_upper, on_change=update_range_callback)
             st.button("✨ 4時間足高値・安値（広め）からレンジを自動計算", on_click=trigger_auto_calc_callback)
-        user_lower, user_upper = min(float(st.session_state[key_lower]), float(st.session_state[key_upper])), max(float(st.session_state[key_lower]), float(st.session_state[key_upper]))
-        if user_upper <= user_lower:
-            user_upper = user_lower + pip_unit * 100
+        if st.session_state.get(range_error_key, False):
+            st.warning("レンジ下限・上限が不正です。直前に保存された有効なレンジへ戻しました。")
+            st.session_state[range_error_key] = False
+        user_lower = float(st.session_state[key_lower])
+        user_upper = float(st.session_state[key_upper])
+        if not is_valid_range(user_lower, user_upper, order_assist_price):
+            # Defensive fallback for corrupted widget/session state.
+            user_lower = float(current_range["lower"])
+            user_upper = float(current_range["upper"])
         user_half = (user_upper + user_lower) / 2
         stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
         stop_buffer_val = stop_buffer_pips * pip_unit
