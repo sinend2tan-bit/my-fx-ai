@@ -84,6 +84,15 @@ def test_walk_forward_fails_closed_when_first_fold_is_below_minimum_training_row
     )
     frame["Target"] = np.tile([-1, 0, 1], 251)[:751]
     frame["_source_bar_position"] = np.arange(751, dtype=np.int64)
+    frame["ATR"] = 1.0
+    frame["ADX"] = 20.0
+    frame["ATR_Ratio"] = 0.01
+    frame["Close"] = 150.0
+    frame["Future_Open_1"] = 150.0
+    frame["Future_Close"] = 150.0
+    for step in range(1, scanner.LOOKAHEAD_BARS + 1):
+        frame[f"Future_High_{step}"] = 150.1
+        frame[f"Future_Low_{step}"] = 149.9
     result = scanner.walk_forward_validation(frame)
     assert result["passed"] is False
     assert result["folds"] == 2
