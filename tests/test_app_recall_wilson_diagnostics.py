@@ -8,7 +8,7 @@ APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 def _wilson():
     tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
     helper = next(
-        item for item in tree.body
+        item for item in ast.walk(tree)
         if isinstance(item, ast.FunctionDef) and item.name == "_wilson_interval"
     )
     module = ast.Module(body=[helper], type_ignores=[])
