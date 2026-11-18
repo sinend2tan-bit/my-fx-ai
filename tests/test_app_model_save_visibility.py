@@ -38,8 +38,11 @@ def _wave_frame(n, tz, freq, start):
     """12本上昇・12本下降を繰り返す決定的な価格パス（学習可能な周期性）。"""
     idx = pd.date_range(start=start, periods=n, freq=freq, tz=tz)
     i = np.arange(n)
-    step = np.where((i // 12) % 2 == 0, 0.45, -0.45)
-    noise = np.where(i % 2 == 0, 0.02, -0.02)
+    phase = i % 36
+    # 12本上昇・12本下降・12本横ばいを繰り返し、
+    # first-touch labelにSELL/NEUTRAL/BUYの3クラスを含める。
+    step = np.select([phase < 12, phase < 24], [0.45, -0.45], default=0.0)
+    noise = np.where((phase < 24) & (i % 2 == 0), 0.02, 0.0)
     close = 150.0 + np.cumsum(step) + noise
     open_ = np.concatenate([[close[0]], close[:-1]])
     high = np.maximum(open_, close) + 0.05
