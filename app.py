@@ -21,6 +21,7 @@ import streamlit as st
 import yfinance as yf
 
 from aifx_time_validation import has_contiguous_hourly_window
+from aifx_statistics import wilson_interval
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
@@ -1665,6 +1666,13 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
                 name: int(value)
                 for name, value in zip(("sell", "neutral", "buy"), test_class_support)
             },
+            "class_correct": {
+                name: int(
+                    ((y_test.to_numpy(dtype=int) == label)
+                     & (np.asarray(pred_test, dtype=int) == label)).sum()
+                )
+                for name, label in zip(("sell", "neutral", "buy"), APP_CLASS_LABELS)
+            },
             "baseline_accuracy": baseline_accuracy,
             "baseline_balanced_accuracy": baseline_balanced_accuracy,
             "brier_score": brier_score,
@@ -2015,6 +2023,45 @@ def _render_main_area():
             "学習したモデルを保存できませんでした。"
             "今回の分析には利用できますが、アプリを再起動するとモデルは残りません。"
         )
+    # Compact, opt-in validation diagnostics. This is display-only: it does not
+    # change the model-quality gate, candidate direction, or training behavior.
+    _model_eval_display = st.session_state.get("model_eval_metrics")
+    if isinstance(_model_eval_display, dict):
+        with st.expander("検証診断（クラス別サンプル数・再現率）", expanded=False):
+            _support = _model_eval_display.get("class_support") or {}
+            _correct = _model_eval_display.get("class_correct") or {}
+            _recall_rows = []
+            for _class_key, _class_label in (
+                ("sell", "売り"), ("neutral", "中立"), ("buy", "買い")
+            ):
+                _n = int(_support.get(_class_key, 0) or 0)
+                _k = int(_correct.get(_class_key, 0) or 0)
+                _recall = (100.0 * _k / _n) if _n > 0 else None
+                _interval = wilson_interval(_k, _n)
+                _recall_rows.append({
+                    "クラス": _class_label,
+                    "評価サンプル数": _n,
+                    "正解数": _k,
+                    "再現率": "—" if _recall is None else f"{_recall:.1f}%",
+                    "Wilson 95%参考区間": (
+                        "—" if _interval is None
+                        else f"{_interval[0] * 100:.1f}–{_interval[1] * 100:.1f}%"
+                    ),
+                })
+            st.table(pd.DataFrame(_recall_rows))
+            st.caption(
+                f"学習 {int(_model_eval_display.get('train_count', 0))}行 / "
+                f"評価 {int(_model_eval_display.get('test_count', 0))}行。"
+                f"Balanced Accuracy: {_model_eval_display.get('balanced_accuracy')}% "
+                f"(baseline: {_model_eval_display.get('baseline_balanced_accuracy')}%)."
+            )
+            st.caption(
+                "Wilson区間は独立二項試行を仮定した参考値です。時系列データの自己相関により"
+                "不確実性を過小評価する可能性があります。判定ゲートには使用しません。"
+                "「3クラス揃い」は各クラスのサンプルが1件以上ある意味で、"
+                "統計的に十分なサンプル数を保証しません。"
+            )
+
     raw_model_status = status
     if data_is_stale:
         status = "WAIT（データ鮮度未確認）"
