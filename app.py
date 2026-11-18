@@ -1575,8 +1575,6 @@ def _fixed_class_metrics(y_true, y_pred):
     return balanced, recalls, complete, supports.tolist()
 
 
-
-
 def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_retrain=False):
     """Returns the same tuple shape expected by the UI."""
     # 保存失敗の警告は直近の分析実行だけを示す。前回の状態を引き継がない。
@@ -2038,7 +2036,7 @@ def _render_main_area():
     )
     _eval_diagnostics = st.session_state.get("model_eval_metrics") or {}
     if _eval_diagnostics:
-        with st.expander("📊 検証データの信頼度（参考）", expanded=False):
+        with st.expander("📊 クラス別Recallの参考区間", expanded=False):
             st.caption(
                 "直近の時系列holdoutにおけるクラス別Recallです。95% Wilson区間は独立な二項標本を仮定した参考区間です。"
                 "時系列データの自己相関・相場局面の偏りは補正しないため、実際の不確実性より狭い可能性があります。"
