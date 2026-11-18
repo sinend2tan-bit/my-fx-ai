@@ -367,10 +367,7 @@ class YFStub:
 def run_scanner_bars(monkeypatch, frame, interval="1h"):
     stub = YFStub(frame)
     monkeypatch.setattr(scanner.yf, "download", stub.download)
-    if interval == "1h":
-        # These tests target feature/label semantics; minimum-history gating
-        # has its own exact-boundary test.
-        monkeypatch.setattr(scanner, "MIN_RAW_BARS_1H_FOR_WALK_FORWARD", 387)
+    # The fixture supplies sufficient history for the production precheck.
     return scanner.bars("SYNTH=X", interval, "60d")
 
 
