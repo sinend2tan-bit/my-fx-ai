@@ -6,7 +6,6 @@
 
 import html
 import json
-import math
 import os
 import tempfile
 import time
@@ -1592,10 +1591,10 @@ def _wilson_interval(successes, total, z=1.959963984540054):
     center = (proportion + z_squared / (2.0 * total)) / denominator
     margin = (
         float(z)
-        * math.sqrt(
+        * (
             proportion * (1.0 - proportion) / total
             + z_squared / (4.0 * total * total)
-        )
+        ) ** 0.5
         / denominator
     )
     return max(0.0, center - margin), min(1.0, center + margin)
