@@ -64,6 +64,8 @@ def test_runtime_equivalent_pnl_gate_is_required_in_addition_to_argmax_gate():
     assert runtime_equivalent["passed"] is False
     assert combined["passed"] is False
     assert any("55%スコアゲート" in reason for reason in combined["reasons"])
+    # Public gate reasons must not leak private gated trade counts or PnL values.
+    assert all("0件" not in reason and "pips" not in reason for reason in combined["reasons"])
 
 
 def test_runtime_equivalent_pnl_gate_uses_same_conservative_stability_rules():
