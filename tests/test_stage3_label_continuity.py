@@ -107,6 +107,8 @@ def fx_week_index(n=700, start="2026-01-05 00:00"):
 
 def run_bars(monkeypatch, frame):
     stub_download(monkeypatch, frame)
+    # Isolate label continuity from the production history-size gate.
+    monkeypatch.setattr(scanner, "MIN_RAW_BARS_1H_FOR_WALK_FORWARD", 387)
     out = scanner.bars(TICKER, interval="1h", period="180d")
     assert out is not None
     return out
