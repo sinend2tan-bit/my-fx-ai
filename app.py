@@ -2040,7 +2040,8 @@ def _render_main_area():
     if _eval_diagnostics:
         with st.expander("📊 検証データの信頼度（参考）", expanded=False):
             st.caption(
-                "直近の時系列holdoutにおけるクラス別Recallです。95% Wilson区間は標本数による不確実性を示す参考値で、"
+                "直近の時系列holdoutにおけるクラス別Recallです。95% Wilson区間は独立な二項標本を仮定した参考区間です。"
+                "時系列データの自己相関・相場局面の偏りは補正しないため、実際の不確実性より狭い可能性があります。"
                 "勝率・将来の精度・確率校正を示すものではありません。判定ゲートや売買方向は変更しません。"
             )
             _recall_names = {"sell": "売り", "neutral": "中立", "buy": "買い"}
