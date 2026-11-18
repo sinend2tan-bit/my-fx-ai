@@ -75,8 +75,8 @@ def test_scanner_raw_minimum_covers_all_walk_forward_folds_and_purge():
 
 def test_walk_forward_fails_closed_when_first_fold_is_below_minimum_training_rows(monkeypatch):
     # 751行ではfold_size=187。purge 8行後の最初のtrainは179行となり、
-    # 180行の最低条件に届かずfold 1がskipされる。残るfoldが動いても
-    # completeness gateにより全体を合格扱いしない。
+    # 180行の最低条件に届かずfold 1がskipされる。残る2 foldの損益だけでは
+    # 3 foldの安定性条件を満たせず、全体は合格しない。
     frame = pd.DataFrame(
         {column: np.linspace(0.1, 1.0, 751) for column in scanner.FEATURE_COLUMNS}
     )
@@ -85,6 +85,5 @@ def test_walk_forward_fails_closed_when_first_fold_is_below_minimum_training_row
     result = scanner.walk_forward_validation(frame)
     assert result["passed"] is False
     assert result["folds"] == 2
-    assert result["fold_completeness"]["complete"] is False
-    assert result["fold_completeness"]["missing_folds"] == [1]
-    assert "fold completeness failed" in result["reason"]
+    assert result["pnl_stability_ok"] is False
+    assert any("損益を評価できた期間が不足" in reason for reason in result["pnl_gate_reasons"])
