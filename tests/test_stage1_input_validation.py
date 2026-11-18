@@ -751,6 +751,7 @@ def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
     assert saved["version"] == 8
+    assert saved["data_contract_version"] == 1
     assert saved["model"].n_estimators == 260  # 新規学習した候補モデル
 
 
