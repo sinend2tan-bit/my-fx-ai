@@ -64,15 +64,14 @@ def test_app_and_scanner_both_use_the_shared_ema200_warmup():
     assert "MODEL_VERSION = 24" in scanner_source
 
 
-def test_scanner_raw_minimum_covers_all_walk_forward_folds_and_purge():
-    # 最初のfoldは4分割の1区画。境界purge 8行を除いて180行必要。
-    assert scanner.MIN_WALK_FORWARD_FEATURE_ROWS == 752
-    # 199 EMA warm-up + 752 trainable rows + 8 future-label bars.
-    assert scanner.MIN_RAW_BARS_1H_FOR_WALK_FORWARD == 959
-    fold_size = scanner.MIN_WALK_FORWARD_FEATURE_ROWS // (
-        scanner.N_WALK_FORWARD_FOLDS + 1
-    )
-    assert fold_size - scanner.LOOKAHEAD_BARS == scanner.MIN_TRAIN_ROWS
+def test_scanner_walk_forward_minimums_are_explicit():
+    # Walk-forward validates each fold from the actual feature rows; it no
+    # longer relies on a speculative raw-bar estimate that assumes no gaps.
+    assert scanner.MIN_TRAIN_ROWS == 180
+    assert scanner.N_WALK_FORWARD_FOLDS == 3
+    assert scanner.LOOKAHEAD_BARS == 8
+    assert not hasattr(scanner, "MIN_WALK_FORWARD_FEATURE_ROWS")
+    assert not hasattr(scanner, "MIN_RAW_BARS_1H_FOR_WALK_FORWARD")
 
 
 def test_walk_forward_fails_closed_when_first_fold_is_below_minimum_training_rows(monkeypatch):
