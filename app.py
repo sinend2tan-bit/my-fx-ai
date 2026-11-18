@@ -21,6 +21,7 @@ import streamlit as st
 import yfinance as yf
 
 from aifx_time_validation import has_contiguous_hourly_window
+from aifx_indicator_utils import ema_with_warmup
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
@@ -45,6 +46,7 @@ TRADE_JOURNAL_FILE = "actual_trade_journal.json"
 # Files that failed validation must never be silently replaced by an empty/default value.
 _JSON_LOAD_ERRORS = {}
 JST = ZoneInfo("Asia/Tokyo")
+EMA200_MIN_PERIODS = 200
 
 DEFAULT_SETTINGS = {
     "account_balance": 500000,
@@ -93,7 +95,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 10
+MODEL_VERSION = 11
 
 st.markdown("""
 <style>
@@ -1312,16 +1314,21 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
         # ため除外しない。その他の時間足は従来どおり。
         if interval not in ("1h", "4h") and len(df) > 2:
             df = df.iloc[:-1]
-        if len(df) < 80:
+        minimum_bars = EMA200_MIN_PERIODS if interval == "1h" else 80
+        if len(df) < minimum_bars:
             return None, None
-        def _calculate_app_segment_features(segment):
+        def _calculate_app_segment_features(segment, require_full_ema200=False):
             close = segment["Close"]
             high = segment["High"]
             low = segment["Low"]
             opn = segment["Open"]
             segment["SMA_20"] = close.rolling(20, min_periods=10).mean()
             segment["EMA_20"] = close.ewm(span=20, adjust=False).mean()
-            segment["EMA_200"] = close.ewm(span=200, adjust=False).mean()
+            segment["EMA_200"] = (
+                ema_with_warmup(close, EMA200_MIN_PERIODS)
+                if require_full_ema200
+                else close.ewm(span=200, adjust=False).mean()
+            )
             prev = close.shift(1)
             tr = pd.concat([(high-low), (high-prev).abs(), (low-prev).abs()], axis=1).max(axis=1)
             segment["ATR"] = tr.rolling(14, min_periods=7).mean()
@@ -1390,10 +1397,10 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             if not segments:
                 return None, None
             df = pd.concat(
-                [_calculate_app_segment_features(segment) for segment in segments]
+                [_calculate_app_segment_features(segment, require_full_ema200=True) for segment in segments]
             ).sort_index()
         else:
-            df = _calculate_app_segment_features(df)
+            df = _calculate_app_segment_features(df, require_full_ema200=False)
 
         close, high, low = df["Close"], df["High"], df["Low"]
 
@@ -2221,124 +2228,201 @@ def _render_main_area():
     st.caption("数値のエントリー価格・決済価格は表示しません。自動発注は行いません。実際の注文は証券会社の画面で確認してください。")
 
 
-    swing_high_4h = float(clean_series(data_4h["High"]).iloc[-300:].max()) if data_4h is not None else latest_price * 1.03
-    swing_low_4h = float(clean_series(data_4h["Low"]).iloc[-300:].min()) if data_4h is not None else latest_price * 0.97
-    atr_4h = float(clean_series(data_4h["ATR"]).iloc[-1]) if data_4h is not None and "ATR" in data_4h else latest_price * 0.005
+    swing_high_series = (
+        clean_series(data_4h["High"]).dropna()
+        if data_4h is not None and "High" in data_4h
+        else pd.Series(dtype=float)
+    )
+    swing_low_series = (
+        clean_series(data_4h["Low"]).dropna()
+        if data_4h is not None and "Low" in data_4h
+        else pd.Series(dtype=float)
+    )
+    swing_high_candidate = (
+        float(swing_high_series.iloc[-300:].max()) if not swing_high_series.empty else np.nan
+    )
+    swing_low_candidate = (
+        float(swing_low_series.iloc[-300:].min()) if not swing_low_series.empty else np.nan
+    )
+    order_assist_price_series = (
+        clean_series(data_1h["Close"]).dropna()
+        if data_1h is not None and "Close" in data_1h
+        else pd.Series(dtype=float)
+    )
+    order_assist_price_available = (
+        not order_assist_price_series.empty
+        and np.isfinite(float(order_assist_price_series.iloc[-1]))
+        and float(order_assist_price_series.iloc[-1]) > 0
+        and _series_fresh(data_1h, "1h")
+    )
+    order_assist_price = (
+        float(order_assist_price_series.iloc[-1])
+        if order_assist_price_available
+        else np.nan
+    )
+    swing_range_available = bool(
+        order_assist_price_available
+        and np.isfinite([swing_high_candidate, swing_low_candidate, order_assist_price]).all()
+        and swing_low_candidate > 0
+        and swing_high_candidate > swing_low_candidate
+    )
+    atr_4h_series = (
+        clean_series(data_4h["ATR"]).dropna()
+        if data_4h is not None and "ATR" in data_4h
+        else pd.Series(dtype=float)
+    )
+    atr_4h_available = (
+        not atr_4h_series.empty
+        and np.isfinite(float(atr_4h_series.iloc[-1]))
+        and float(atr_4h_series.iloc[-1]) > 0
+    )
 
     def is_valid_range(r_low, r_up, current_p):
         return bool(np.isfinite([r_low, r_up, current_p]).all() and r_low > 0 and r_up > r_low
                     and r_low >= current_p * 0.4 and r_up <= current_p * 1.6)
 
-    if ticker not in st.session_state["ranges"] or not is_valid_range(
-        float(st.session_state["ranges"].get(ticker, {}).get("lower", 0)),
-        float(st.session_state["ranges"].get(ticker, {}).get("upper", 0)), latest_price
+    if (
+        swing_range_available
+        and atr_4h_available
+        and _series_fresh(data_4h, "4h")
     ):
-        st.session_state["ranges"][ticker] = {"lower": float(swing_low_4h), "upper": float(swing_high_4h)}
-        save_settings()
-    key_lower, key_upper = f"in_lower_{ticker}", f"in_upper_{ticker}"
-    current_range = st.session_state["ranges"][ticker]
-    if key_lower not in st.session_state: st.session_state[key_lower] = float(current_range["lower"])
-    if key_upper not in st.session_state: st.session_state[key_upper] = float(current_range["upper"])
-    st.markdown("---")
-    st.markdown("## 📋 リピート注文（ハーフ＆ハーフ）")
-    st.caption("広めの設定レンジを基本に、買いレンジ・売りレンジ、注文幅／利確幅、1注文数量、注文本数の目安を確認します。")
-    with st.expander("⚙️ リピート注文のレンジ設定", expanded=False):
-        rc1, rc2 = st.columns(2)
-        def update_range_callback():
-            lo, hi = float(st.session_state[key_lower]), float(st.session_state[key_upper])
-            if lo < hi:
-                st.session_state["ranges"][ticker] = {"lower": lo, "upper": hi}
-                save_settings()
-        def trigger_auto_calc_callback():
-            st.session_state["ranges"][ticker] = {"lower": float(swing_low_4h), "upper": float(swing_high_4h)}
+        swing_high_4h = swing_high_candidate
+        swing_low_4h = swing_low_candidate
+        atr_4h = float(atr_4h_series.iloc[-1])
+        # Order-assist estimates are only available when the 4h range and ATR
+        # are both grounded in valid 4h observations. Never substitute 1h ATR
+        # or a percentage-of-price guess for missing 4h data.
+        key_lower, key_upper = f"in_lower_{ticker}", f"in_upper_{ticker}"
+        saved_range = st.session_state["ranges"].get(ticker, {})
+        if not is_valid_range(
+            float(saved_range.get("lower", 0)),
+            float(saved_range.get("upper", 0)),
+            order_assist_price,
+        ):
+            # Reset both the persisted range and any already-created widget
+            # state. Otherwise Streamlit keeps showing the stale manual values
+            # even though user_settings.json now contains the new auto range.
+            st.session_state["ranges"][ticker] = {
+                "lower": float(swing_low_4h),
+                "upper": float(swing_high_4h),
+            }
             st.session_state[key_lower] = float(swing_low_4h)
             st.session_state[key_upper] = float(swing_high_4h)
             save_settings()
-        in_lower = rc1.number_input("レンジ下限", step=0.1 if is_jpy else 0.001, format=price_fmt, key=key_lower, on_change=update_range_callback)
-        in_upper = rc2.number_input("レンジ上限", step=0.1 if is_jpy else 0.001, format=price_fmt, key=key_upper, on_change=update_range_callback)
-        st.button("✨ 4時間足高値・安値（広め）からレンジを自動計算", on_click=trigger_auto_calc_callback)
-    user_lower, user_upper = min(float(st.session_state[key_lower]), float(st.session_state[key_upper])), max(float(st.session_state[key_lower]), float(st.session_state[key_upper]))
-    if user_upper <= user_lower:
-        user_upper = user_lower + pip_unit * 100
-    user_half = (user_upper + user_lower) / 2
-    stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
-    stop_buffer_val = stop_buffer_pips * pip_unit
-    buy_stop_loss, sell_stop_loss = user_lower - stop_buffer_val, user_upper + stop_buffer_val
+        current_range = st.session_state["ranges"][ticker]
+        if key_lower not in st.session_state: st.session_state[key_lower] = float(current_range["lower"])
+        if key_upper not in st.session_state: st.session_state[key_upper] = float(current_range["upper"])
+        st.markdown("---")
+        st.markdown("## 📋 リピート注文（ハーフ＆ハーフ）")
+        st.caption("基準価格は最新確定1時間足終値、レンジ高安とATRは有効な4時間足から計算します。")
+        st.caption("広めの設定レンジを基本に、買いレンジ・売りレンジ、注文幅／利確幅、1注文数量、注文本数の目安を確認します。")
+        with st.expander("⚙️ リピート注文のレンジ設定", expanded=False):
+            rc1, rc2 = st.columns(2)
+            def update_range_callback():
+                lo, hi = float(st.session_state[key_lower]), float(st.session_state[key_upper])
+                if lo < hi:
+                    st.session_state["ranges"][ticker] = {"lower": lo, "upper": hi}
+                    save_settings()
+            def trigger_auto_calc_callback():
+                st.session_state["ranges"][ticker] = {"lower": float(swing_low_4h), "upper": float(swing_high_4h)}
+                st.session_state[key_lower] = float(swing_low_4h)
+                st.session_state[key_upper] = float(swing_high_4h)
+                save_settings()
+            in_lower = rc1.number_input("レンジ下限", step=0.1 if is_jpy else 0.001, format=price_fmt, key=key_lower, on_change=update_range_callback)
+            in_upper = rc2.number_input("レンジ上限", step=0.1 if is_jpy else 0.001, format=price_fmt, key=key_upper, on_change=update_range_callback)
+            st.button("✨ 4時間足高値・安値（広め）からレンジを自動計算", on_click=trigger_auto_calc_callback)
+        user_lower, user_upper = min(float(st.session_state[key_lower]), float(st.session_state[key_upper])), max(float(st.session_state[key_lower]), float(st.session_state[key_upper]))
+        if user_upper <= user_lower:
+            user_upper = user_lower + pip_unit * 100
+        user_half = (user_upper + user_lower) / 2
+        stop_buffer_pips = max(10.0, round((atr_4h / pip_unit) * 1.5, 1))
+        stop_buffer_val = stop_buffer_pips * pip_unit
+        buy_stop_loss, sell_stop_loss = user_lower - stop_buffer_val, user_upper + stop_buffer_val
 
 
-    st.caption("参考計算です。証券会社の仕様・保有ポジション・実際の証拠金計算を完全には再現しません。")
-    st.caption("レンジが広くても、相場状況によってはレンジ外になる可能性があります。完全に防げるものではありません。")
-    if latest_price < user_lower or latest_price > user_upper:
-        st.markdown(f'<div class="warn-box">【レンジアウト警告】直近の確定足は設定レンジ <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_upper}</code> の外側です。</div>',unsafe_allow_html=True)
-    atr_4h_series = clean_series(data_4h["ATR"]).dropna() if data_4h is not None and "ATR" in data_4h else pd.Series(dtype=float)
-    atr_4h_val = float(atr_4h_series.iloc[-1]) if not atr_4h_series.empty and float(atr_4h_series.iloc[-1]) > 0 else max(float(latest_atr), pip_unit * 30)
-    ai_rec_trap_pips = int(np.clip(round((atr_4h_val / pip_unit) * 0.8), 10, 500))
-    trap_key = f"trap_w_{ticker}"
-    if trap_key not in st.session_state:
-        st.session_state[trap_key] = int(np.clip(st.session_state.get("trap_width", ai_rec_trap_pips), 10, 500))
-    def apply_ai_trap_callback():
-        st.session_state[trap_key] = int(ai_rec_trap_pips)
-        st.session_state["trap_width"] = int(ai_rec_trap_pips)
-        save_settings()
-    def update_trap_callback():
-        st.session_state["trap_width"] = int(st.session_state[trap_key])
-        save_settings()
-    trap_width_pips=st.number_input("注文幅 / 利確幅 (pips)",min_value=10,max_value=500,step=5,key=trap_key,on_change=update_trap_callback)
-    st.button(f"ATR参考値 ({ai_rec_trap_pips} pips) を適用",on_click=apply_ai_trap_callback)
-    half_range_pips = abs(user_upper-user_half)/pip_unit
-    spacing_pips = max(1.0, float(trap_width_pips))
-    half_grid_count = max(1, int(np.floor(half_range_pips / spacing_pips)) + 1)
-    total_grid_count = half_grid_count * 2
-    quantity_wan_val = max(0.0, float(st.session_state["quantity_wan"]))
-    order_units = max(0, int(quantity_wan_val * 10000))
-    usd_rate_repeat = latest_price if ticker == "USDJPY=X" else get_usdjpy_rate()
-    risk_calc_available = bool(is_jpy or (usd_rate_repeat is not None and np.isfinite(usd_rate_repeat) and usd_rate_repeat > 0))
-    if is_jpy:
-        pip_value_yen = (order_units / 10000) * 100.0
-    elif risk_calc_available:
-        pip_value_yen = order_units * 0.0001 * float(usd_rate_repeat)
+        st.caption("参考計算です。証券会社の仕様・保有ポジション・実際の証拠金計算を完全には再現しません。")
+        st.caption("レンジが広くても、相場状況によってはレンジ外になる可能性があります。完全に防げるものではありません。")
+        if order_assist_price < user_lower or order_assist_price > user_upper:
+            st.markdown(f'<div class="warn-box">【レンジアウト警告】直近の確定足は設定レンジ <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_upper}</code> の外側です。</div>',unsafe_allow_html=True)
+        # Reuse the validated 4h ATR above. This order-assist section is only
+        # rendered when both the 4h range and 4h ATR are valid.
+        atr_4h_val = atr_4h
+        ai_rec_trap_pips = int(np.clip(round((atr_4h_val / pip_unit) * 0.8), 10, 500))
+        trap_key = f"trap_w_{ticker}"
+        if trap_key not in st.session_state:
+            st.session_state[trap_key] = int(np.clip(st.session_state.get("trap_width", ai_rec_trap_pips), 10, 500))
+        def apply_ai_trap_callback():
+            st.session_state[trap_key] = int(ai_rec_trap_pips)
+            st.session_state["trap_width"] = int(ai_rec_trap_pips)
+            save_settings()
+        def update_trap_callback():
+            st.session_state["trap_width"] = int(st.session_state[trap_key])
+            save_settings()
+        trap_width_pips=st.number_input("注文幅 / 利確幅 (pips)",min_value=10,max_value=500,step=5,key=trap_key,on_change=update_trap_callback)
+        st.button(f"ATR参考値 ({ai_rec_trap_pips} pips) を適用",on_click=apply_ai_trap_callback)
+        half_range_pips = abs(user_upper-user_half)/pip_unit
+        spacing_pips = max(1.0, float(trap_width_pips))
+        half_grid_count = max(1, int(np.floor(half_range_pips / spacing_pips)) + 1)
+        total_grid_count = half_grid_count * 2
+        quantity_wan_val = max(0.0, float(st.session_state["quantity_wan"]))
+        order_units = max(0, int(quantity_wan_val * 10000))
+        usd_rate_repeat = order_assist_price if ticker == "USDJPY=X" else get_usdjpy_rate()
+        risk_calc_available = bool(is_jpy or (usd_rate_repeat is not None and np.isfinite(usd_rate_repeat) and usd_rate_repeat > 0))
+        if is_jpy:
+            pip_value_yen = (order_units / 10000) * 100.0
+        elif risk_calc_available:
+            pip_value_yen = order_units * 0.0001 * float(usd_rate_repeat)
+        else:
+            pip_value_yen = 0.0
+        # Conservative gross stress estimate: assume each grid order is open and moves adversely
+        # to the stop buffer beyond its own half-range edge. This is not a broker execution model.
+        buy_levels = [user_lower + i * spacing_pips * pip_unit for i in range(half_grid_count)]
+        sell_levels = [user_upper - i * spacing_pips * pip_unit for i in range(half_grid_count)]
+        buy_loss_pips = sum(max(0.0, (level - buy_stop_loss) / pip_unit) for level in buy_levels)
+        sell_loss_pips = sum(max(0.0, (sell_stop_loss - level) / pip_unit) for level in sell_levels)
+        max_loss_yen = (buy_loss_pips + sell_loss_pips) * pip_value_yen
+        if order_units > 0 and is_jpy:
+            margin_per_order = (order_assist_price * order_units) / 25.0
+        elif order_units > 0 and risk_calc_available:
+            margin_per_order = (order_assist_price * float(usd_rate_repeat) * order_units) / 25.0
+        else:
+            margin_per_order = 0.0
+        total_margin_yen = margin_per_order * total_grid_count
+        st.markdown(f"""<div class="param-box"><b>【ハーフ＆ハーフ設定値の目安】</b>（4時間足ATR基準）<br>
+        ・買い設定（下半）: <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_half}</code> | 停止目安: <code>{price_fmt%buy_stop_loss}</code><br>
+        ・売り設定（上半）: <code>{price_fmt%user_half}</code>～<code>{price_fmt%user_upper}</code> | 停止目安: <code>{price_fmt%sell_stop_loss}</code><br>
+        ・注文幅/利確幅: <code>{trap_width_pips} pips</code>（ATR参考値 {ai_rec_trap_pips} pips） | 片側注文本数目安: <code>{half_grid_count}</code>（合計 {total_grid_count}）</div>""",unsafe_allow_html=True)
+        st.code(f"""[松井証券リピート注文 設定値]
+    通貨ペア: {selected_label}
+    注文種別: ハーフ＆ハーフ
+    買いレンジ: {price_fmt%user_lower} - {price_fmt%user_half} (停止目安: {price_fmt%buy_stop_loss})
+    売りレンジ: {price_fmt%user_half} - {price_fmt%user_upper} (停止目安: {price_fmt%sell_stop_loss})
+    注文幅 / 利確幅: {trap_width_pips} pips
+    1本あたり数量: {quantity_wan_val:.2f} 万通貨""",language="text")
+        st.markdown("##### 🛡️ リスク・資金シミュレーション")
+        rc1,rc2=st.columns(2)
+        rc1.metric("想定含み損シナリオ", f"約 {int(max_loss_yen):,} 円" if risk_calc_available else "算出不可")
+        rc2.metric("全注文成立時の必要証拠金概算", f"約 {int(total_margin_yen):,} 円" if risk_calc_available else "算出不可")
+        if not risk_calc_available:
+            st.error("USD/JPY換算レートを取得できないため、円換算のリスク試算は停止しています。レート取得後に再更新してください。")
+        else:
+            st.info("この単純試算だけでは安全性を判断できません。想定損失と必要証拠金の概算として確認してください。")
+        st.markdown("---")
+        st.markdown("##### 📌 損益見通しについて")
+        st.caption(
+            "ATRだけから月間の約定回数・利益を信頼性高く予測することはできないため、"
+            "根拠の弱い月間・年間利益予測は表示しません。上の想定損失・必要証拠金の概算を確認し、"
+            "松井証券FXの最新条件と注文画面で最終確認してください。"
+        )
     else:
-        pip_value_yen = 0.0
-    # Conservative gross stress estimate: assume each grid order is open and moves adversely
-    # to the stop buffer beyond its own half-range edge. This is not a broker execution model.
-    buy_levels = [user_lower + i * spacing_pips * pip_unit for i in range(half_grid_count)]
-    sell_levels = [user_upper - i * spacing_pips * pip_unit for i in range(half_grid_count)]
-    buy_loss_pips = sum(max(0.0, (level - buy_stop_loss) / pip_unit) for level in buy_levels)
-    sell_loss_pips = sum(max(0.0, (sell_stop_loss - level) / pip_unit) for level in sell_levels)
-    max_loss_yen = (buy_loss_pips + sell_loss_pips) * pip_value_yen
-    if order_units > 0 and is_jpy:
-        margin_per_order = (latest_price * order_units) / 25.0
-    elif order_units > 0 and risk_calc_available:
-        margin_per_order = (latest_price * float(usd_rate_repeat) * order_units) / 25.0
-    else:
-        margin_per_order = 0.0
-    total_margin_yen = margin_per_order * total_grid_count
-    st.markdown(f"""<div class="param-box"><b>【ハーフ＆ハーフ設定値の目安】</b>（4時間足ATR基準）<br>
-    ・買い設定（下半）: <code>{price_fmt%user_lower}</code>～<code>{price_fmt%user_half}</code> | 停止目安: <code>{price_fmt%buy_stop_loss}</code><br>
-    ・売り設定（上半）: <code>{price_fmt%user_half}</code>～<code>{price_fmt%user_upper}</code> | 停止目安: <code>{price_fmt%sell_stop_loss}</code><br>
-    ・注文幅/利確幅: <code>{trap_width_pips} pips</code>（ATR参考値 {ai_rec_trap_pips} pips） | 片側注文本数目安: <code>{half_grid_count}</code>（合計 {total_grid_count}）</div>""",unsafe_allow_html=True)
-    st.code(f"""[松井証券リピート注文 設定値]
-通貨ペア: {selected_label}
-注文種別: ハーフ＆ハーフ
-買いレンジ: {price_fmt%user_lower} - {price_fmt%user_half} (停止目安: {price_fmt%buy_stop_loss})
-売りレンジ: {price_fmt%user_half} - {price_fmt%user_upper} (停止目安: {price_fmt%sell_stop_loss})
-注文幅 / 利確幅: {trap_width_pips} pips
-1本あたり数量: {quantity_wan_val:.2f} 万通貨""",language="text")
-    st.markdown("##### 🛡️ リスク・資金シミュレーション")
-    rc1,rc2=st.columns(2)
-    rc1.metric("想定含み損シナリオ", f"約 {int(max_loss_yen):,} 円" if risk_calc_available else "算出不可")
-    rc2.metric("全注文成立時の必要証拠金概算", f"約 {int(total_margin_yen):,} 円" if risk_calc_available else "算出不可")
-    if not risk_calc_available:
-        st.error("USD/JPY換算レートを取得できないため、円換算のリスク試算は停止しています。レート取得後に再更新してください。")
-    else:
-        st.info("この単純試算だけでは安全性を判断できません。想定損失と必要証拠金の概算として確認してください。")
-    st.markdown("---")
-    st.markdown("##### 📌 損益見通しについて")
-    st.caption(
-        "ATRだけから月間の約定回数・利益を信頼性高く予測することはできないため、"
-        "根拠の弱い月間・年間利益予測は表示しません。上の想定損失・必要証拠金の概算を確認し、"
-        "松井証券FXの最新条件と注文画面で最終確認してください。"
-    )
+        st.warning(
+            "1時間足・4時間足の最新データ、4時間足の高値・安値またはATRを"
+            "確認できないため、リピート注文の参考計算を停止しています。"
+        )
+        st.caption(
+            "データが正常に取得できるまで参考計算は表示しません。"
+            "保存済みの手動レンジ設定は自動上書きしません。"
+        )
 
     # 手動記録は通常画面を2機能に保つため、初期状態で閉じた領域に隔離する。
     with st.expander("🗂️ 取引記録・振り返り（必要なときだけ）", expanded=False):

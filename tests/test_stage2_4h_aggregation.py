@@ -195,6 +195,7 @@ def _app_namespace(frame_factory):
         "yf": _YF,
         "st": st,
         "FEATURE_COLUMNS": _app_literal("FEATURE_COLUMNS"),
+        "EMA200_MIN_PERIODS": _app_literal("EMA200_MIN_PERIODS"),
         "DEFAULT_SPREAD_PIPS": _app_literal("DEFAULT_SPREAD_PIPS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
         "_LOAD_STOP_REASONS": {},

@@ -14,7 +14,7 @@
   insufficient_future → discontinuous → other）で計上する。
 - 監査フレームは training_df.attrs["label_audit"] に保持し、特徴量・
   予測記録・永続化データ・公開ステータスには混入させない。
-- Scanner MODEL_VERSION は 23、App は 10。
+- Scanner MODEL_VERSION は 24、App は 11。
 
 注記:
 - T-L10 は仕様書どおり T-D 系列へ移行したため、ここには置かない。
@@ -94,11 +94,11 @@ def path_frame(index, calm_range=None):
     )
 
 
-def continuous_index(n=340, start="2026-01-05 00:00"):
+def continuous_index(n=700, start="2026-01-05 00:00"):
     return pd.date_range(start=start, periods=n, freq="1h", tz="UTC")
 
 
-def fx_week_index(n=340, start="2026-01-05 00:00"):
+def fx_week_index(n=700, start="2026-01-05 00:00"):
     """土日を除いた平日のみの1時間足インデックス（市場休場の再現）。"""
     full = pd.date_range(start=start, periods=n * 2, freq="1h", tz="UTC")
     weekdays = full[full.weekday < 5]
@@ -107,9 +107,27 @@ def fx_week_index(n=340, start="2026-01-05 00:00"):
 
 def run_bars(monkeypatch, frame):
     stub_download(monkeypatch, frame)
+    # Keep synthetic continuity/purge tests focused on timestamp behavior;
+    # production's minimum training-row requirement is covered separately.
+    monkeypatch.setattr(scanner, "MIN_TRAIN_ROWS", 50)
     out = scanner.bars(TICKER, interval="1h", period="180d")
     assert out is not None
     return out
+
+
+def walk_forward_path_frame(index):
+    """高速な反転を含み、各foldの学習窓に複数クラスを作る合成系列。"""
+    n = len(index)
+    i = np.arange(n, dtype=float)
+    close = 150.0 + 0.2 * np.sin(i / 3.0) + 0.0005 * i
+    open_ = np.concatenate([[close[0]], close[:-1]])
+    high = np.maximum(open_, close) + 0.01
+    low = np.minimum(open_, close) - 0.01
+    return pd.DataFrame(
+        {"Open": open_, "High": high, "Low": low, "Close": close,
+         "Volume": np.full(n, 1_000_000.0)},
+        index=index,
+    )
 
 
 def audit_of(df):
@@ -136,7 +154,7 @@ def legacy_training_df(raw):
     if frame.index.tz is not None:
         frame.index = frame.index.tz_convert("UTC")
     frame = frame[frame.index < frame.index.max()].copy()
-    feature_df = scanner.add_indicators(frame)
+    feature_df = scanner.add_indicators(frame, require_full_ema200=True)
     feature_df = feature_df.dropna(
         subset=scanner.FEATURE_COLUMNS + ["ATR", "Close"]
     )
@@ -226,7 +244,7 @@ def gap_context(df, gap_ts):
 
 def test_tl1_clean_frame_unchanged(monkeypatch):
     """T-L1: 連続データでは変更前と完全に一致する。"""
-    raw = path_frame(continuous_index(340))
+    raw = walk_forward_path_frame(continuous_index(1100))
     out = run_bars(monkeypatch, raw)
     legacy = legacy_training_df(raw)
     out_cmp = out.copy()
@@ -241,7 +259,7 @@ def test_tl1_clean_frame_unchanged(monkeypatch):
 
 def test_tl2_provider_gap_invalidates_eight_signals(monkeypatch):
     """T-L2: 平日の欠損1本で、窓に欠損を含む8シグナル行が無効になる。"""
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     gapped = raw.drop(index=[gap_ts])
     out = run_bars(monkeypatch, gapped)
@@ -258,11 +276,11 @@ def test_tl2_provider_gap_invalidates_eight_signals(monkeypatch):
 
 def test_tl3_feature_nan_drop_position_range(monkeypatch):
     """T-L3: 特徴量NaNで落ちた行が作る欠損も、位置どおりに無効化する。"""
-    clean_raw = path_frame(continuous_index(340))
+    clean_raw = path_frame(continuous_index(700))
     clean = run_bars(monkeypatch, clean_raw)
     clean_feature_drops = quality_of(clean)["dropped_feature_nan"]
 
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     pos = raw.index.get_loc(gap_ts)
     flat_price = float(raw["Close"].iloc[pos])
@@ -284,7 +302,7 @@ def test_tl3_feature_nan_drop_position_range(monkeypatch):
 
 def test_tl4_signal_to_first_bar_gap(monkeypatch):
     """T-L4: シグナル→1本目のペアで不連続なら、その行は無効になる。"""
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     out = run_bars(monkeypatch, raw.drop(index=[gap_ts]))
     prev_ts, next_ts, _ = gap_context(out, gap_ts)
@@ -297,7 +315,7 @@ def test_tl4_signal_to_first_bar_gap(monkeypatch):
 
 def test_tl5_gap_outside_window_no_effect(monkeypatch):
     """T-L5: 欠損が窓の外にある行は無効化されない。"""
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     out = run_bars(monkeypatch, raw.drop(index=[gap_ts]))
     prev_ts, next_ts, expected = gap_context(out, gap_ts)
@@ -310,24 +328,24 @@ def test_tl5_gap_outside_window_no_effect(monkeypatch):
 
 def test_tl6_weekend_window_valid(monkeypatch):
     """T-L6: 金曜→月曜の週末ジャンプを含む窓は有効。"""
-    raw = path_frame(fx_week_index(340))
+    raw = path_frame(fx_week_index(700))
     out = run_bars(monkeypatch, raw)
     assert quality_of(out)["dropped_label_discontinuous"] == 0
-    friday_evening = pd.Timestamp("2026-01-09 20:00", tz="UTC")
+    friday_evening = pd.Timestamp("2026-01-16 20:00", tz="UTC")
     assert friday_evening in out.index
 
 
 def test_tl7_eighty_hour_boundary(monkeypatch):
     """T-L7: 80時間ちょうどのジャンプは有効、超えると無効。"""
     head_idx = pd.date_range(
-        end="2026-01-02 00:00", periods=300, freq="1h", tz="UTC"
+        end="2026-01-02 00:00", periods=400, freq="1h", tz="UTC"
     )
     for resume, expect_valid in (
         ("2026-01-05 08:00", True),   # 金曜00:00 → 月曜08:00 = ちょうど80時間
         ("2026-01-05 09:00", False),  # 81時間
     ):
         tail_idx = pd.date_range(
-            start=resume, periods=60, freq="1h", tz="UTC"
+            start=resume, periods=260, freq="1h", tz="UTC"
         )
         raw = path_frame(head_idx.append(tail_idx))
         out = run_bars(monkeypatch, raw)
@@ -342,10 +360,10 @@ def test_tl7_eighty_hour_boundary(monkeypatch):
 def test_tl8_friday_to_tuesday_invalid(monkeypatch):
     """T-L8: 月曜休場の金曜→火曜は、80時間以内でも無効。"""
     head_idx = pd.date_range(
-        end="2026-01-09 23:00", periods=300, freq="1h", tz="UTC"
+        end="2026-01-09 23:00", periods=400, freq="1h", tz="UTC"
     )
     tail_idx = pd.date_range(
-        start="2026-01-13 00:00", periods=60, freq="1h", tz="UTC"
+        start="2026-01-13 00:00", periods=260, freq="1h", tz="UTC"
     )
     raw = path_frame(head_idx.append(tail_idx))
     out = run_bars(monkeypatch, raw)
@@ -355,10 +373,10 @@ def test_tl8_friday_to_tuesday_invalid(monkeypatch):
 def test_tl9_saturday_to_monday_valid(monkeypatch):
     """T-L9: 土曜→月曜のジャンプを含む窓は有効。"""
     head_idx = pd.date_range(
-        end="2026-01-03 12:00", periods=300, freq="1h", tz="UTC"
+        end="2026-01-03 12:00", periods=400, freq="1h", tz="UTC"
     )
     tail_idx = pd.date_range(
-        start="2026-01-05 00:00", periods=60, freq="1h", tz="UTC"
+        start="2026-01-05 00:00", periods=260, freq="1h", tz="UTC"
     )
     raw = path_frame(head_idx.append(tail_idx))
     out = run_bars(monkeypatch, raw)
@@ -368,7 +386,7 @@ def test_tl9_saturday_to_monday_valid(monkeypatch):
 
 def test_tl11_tail_rows_are_insufficient_future(monkeypatch):
     """T-L11: 系列末尾の8行は insufficient_future で、discontinuous に混ぜない。"""
-    out = run_bars(monkeypatch, path_frame(continuous_index(340)))
+    out = run_bars(monkeypatch, path_frame(continuous_index(700)))
     audit = audit_of(out)
     feature_index = out.attrs["latest_features"].index
     tail = feature_index[-scanner.LOOKAHEAD_BARS :]
@@ -390,8 +408,8 @@ def _zero_atr_at(monkeypatch, target_ts):
     """
     original = scanner.add_indicators
 
-    def wrapper(frame):
-        out = original(frame)
+    def wrapper(frame, **kwargs):
+        out = original(frame, **kwargs)
         if target_ts in out.index:
             out.loc[target_ts, "ATR"] = 0.0
         return out
@@ -401,7 +419,7 @@ def _zero_atr_at(monkeypatch, target_ts):
 
 def test_tl12_overlap_counted_once_as_discontinuous(monkeypatch):
     """T-L12: 窓不連続かつ ATR 無効の行は discontinuous にのみ1回計上する。"""
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     gapped = raw.drop(index=[gap_ts])
     # 欠損直前の行（窓が不連続になる行）の ATR を無効化して重なりを作る。
@@ -417,7 +435,7 @@ def test_tl12_overlap_counted_once_as_discontinuous(monkeypatch):
 
 def test_tl13_checksums_on_mixed_fixture(monkeypatch, capsys):
     """T-L13: 混在フィクスチャで C-1 の検算式が成立し、警告が出ない。"""
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     out = run_bars(monkeypatch, raw.drop(index=[gap_ts]))
     dq = quality_of(out)
@@ -441,7 +459,7 @@ def test_tl13_checksums_on_mixed_fixture(monkeypatch, capsys):
 
 def test_tl14_window_edge_positions(monkeypatch):
     """T-L14: 窓の8本目が欠損直後の行に当たる行は無効、欠損直前で窓が閉じる行は有効。"""
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     pos = raw.index.get_loc(gap_ts)
     flat_price = float(raw["Close"].iloc[pos])
@@ -459,7 +477,7 @@ def test_tl14_window_edge_positions(monkeypatch):
 
 def test_tl15_consecutive_gap_counted_once_per_signal(monkeypatch):
     """T-L15: 連続欠損（3本）でも、影響するシグナル行は8行のまま二重に数えない。"""
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     dropped = [gap_ts + pd.Timedelta(hours=k) for k in range(3)]
     out = run_bars(monkeypatch, raw.drop(index=dropped))
@@ -472,11 +490,11 @@ def test_tl15_consecutive_gap_counted_once_per_signal(monkeypatch):
 
 def test_tl16_missing_bar_resets_features_but_feature_nan_does_not_reset_segment(monkeypatch):
     """T-L16: raw gap starts a new indicator segment; a single NaN feature row does not."""
-    raw_removed = path_frame(continuous_index(340))
+    raw_removed = path_frame(continuous_index(700))
     gap_ts = raw_removed.index[260]
     out_removed = run_bars(monkeypatch, raw_removed.drop(index=[gap_ts]))
 
-    raw_flat = path_frame(continuous_index(340))
+    raw_flat = path_frame(continuous_index(700))
     pos = raw_flat.index.get_loc(gap_ts)
     flat_price = float(raw_flat["Close"].iloc[pos])
     raw_flat.iloc[pos] = [
@@ -510,7 +528,7 @@ FUTURE_COLUMNS = ["Future_Open_1", "Future_Close"] + [
 
 def test_tp1_valid_rows_future_columns_match_legacy(monkeypatch):
     """T-P1: 有効な行の Future_* は変更前と同一、無効な行は丸ごと除外される。"""
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     gapped = raw.drop(index=[gap_ts])
     out = run_bars(monkeypatch, gapped)
@@ -529,7 +547,7 @@ def test_tp1_valid_rows_future_columns_match_legacy(monkeypatch):
 
 def test_tp2_no_invalid_window_rows_in_training(monkeypatch):
     """T-P2: 学習データの全行について、窓の8ペアすべてが正本で連続と判定される。"""
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     out = run_bars(monkeypatch, raw.drop(index=[gap_ts]))
     feature_index = out.attrs["latest_features"].index
@@ -560,7 +578,7 @@ def _purge_timestamps(df, validation, fold_no):
 
 def test_tp3_purge_boundary_by_timestamps(monkeypatch):
     """T-P3: パージ境界を時刻で確認する（連続データと比較用の欠損データ）。"""
-    raw = path_frame(continuous_index(500))
+    raw = path_frame(continuous_index(700))
     out = run_bars(monkeypatch, raw)
     validation = scanner.walk_forward_validation(out, pair_name=PAIR_NAME)
     assert validation["fold_details"]
@@ -597,7 +615,7 @@ def test_tp3_purge_boundary_by_timestamps(monkeypatch):
 
 def test_tp4_clean_data_validation_equivalence(monkeypatch):
     """T-P4: 連続データでは時系列検証の結果が変更前と一致する。"""
-    raw = path_frame(continuous_index(500))
+    raw = walk_forward_path_frame(continuous_index(1100))
     out = run_bars(monkeypatch, raw)
     legacy = legacy_training_df(raw)
     new_validation = scanner.walk_forward_validation(out, pair_name=PAIR_NAME)
@@ -759,7 +777,7 @@ def test_tf2_same_function_and_same_chain(monkeypatch):
         return original(prev_ts, next_ts)
 
     monkeypatch.setattr(scanner, "_forward_bar_gap_allowed", wrapper)
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     out = run_bars(monkeypatch, raw)
     label_calls = list(calls)
     calls.clear()
@@ -796,7 +814,7 @@ def _calm_pattern_raw(case):
     戻り値: (raw, signal_ts, atr, entry)。atr は変更のない
     scanner.add_indicators で算出したシグナル行の ATR（パターン合成用）。
     """
-    index = continuous_index(340)
+    index = continuous_index(700)
     s = 260
     raw = path_frame(index, calm_range=(s - 40, s + 12))
     probe = raw[raw.index < raw.index.max()]
@@ -963,6 +981,8 @@ def _pnl_with_pattern(mutate):
     df = _validation_frame()
     pattern_ts = df.index[320]
     mutate(df, pattern_ts)
+    # Keep the production MIN_TRAIN_ROWS=180. The first 100-row train fold
+    # must be skipped; the crafted single signal is in the final test fold.
     result = scanner.walk_forward_validation(df, pair_name=PAIR_NAME)
     return result["simulated_pnl"]
 
@@ -1046,7 +1066,7 @@ def test_tb1_duplicates_through_real_bars_and_scalar_tz(monkeypatch):
     DataFrame は実経路の入力として構成できないため、入力テストには
     しない）。
     """
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     dup_ts = raw.index[300]
     original_close = float(raw.loc[dup_ts, "Close"])
     later = raw.loc[[dup_ts]].copy()
@@ -1100,7 +1120,7 @@ def test_tb3_function_level_reversed_pairs():
 def test_tb4_tz_naive_input_stops(monkeypatch):
     """T-B4: tz-naive な入力は UTC と推定せず処理を停止する。"""
     naive_index = pd.date_range(
-        start="2026-01-05 00:00", periods=340, freq="1h"
+        start="2026-01-05 00:00", periods=700, freq="1h"
     )
     stub_download(monkeypatch, path_frame(naive_index))
     assert scanner.bars(TICKER, interval="1h", period="180d") is None
@@ -1108,13 +1128,13 @@ def test_tb4_tz_naive_input_stops(monkeypatch):
 
 def test_tb5_non_utc_input_normalized_to_utc(monkeypatch):
     """T-B5: Asia/Tokyo 表記の入力は UTC に正規化され、曜日判定も UTC で行う。"""
-    utc_index = fx_week_index(340)
+    utc_index = fx_week_index(700)
     raw = path_frame(utc_index.tz_convert("Asia/Tokyo"))
     out = run_bars(monkeypatch, raw)
     feature = out.attrs["latest_features"]
     assert str(feature.index.tz) == "UTC"
     assert quality_of(out)["dropped_label_discontinuous"] == 0
-    friday_evening_utc = pd.Timestamp("2026-01-09 20:00", tz="UTC")
+    friday_evening_utc = pd.Timestamp("2026-01-16 20:00", tz="UTC")
     assert friday_evening_utc in out.index
 
 
@@ -1161,7 +1181,7 @@ EXPECTED_QUALITY_KEYS = {
 
 
 def _gap_out(monkeypatch):
-    raw = path_frame(continuous_index(340))
+    raw = path_frame(continuous_index(700))
     gap_ts = raw.index[260]
     out = run_bars(monkeypatch, raw.drop(index=[gap_ts]))
     return out, gap_ts
@@ -1196,9 +1216,9 @@ def test_ta2_audit_reason_and_first_bad_pair(monkeypatch):
 def test_ta3_audit_checksums_and_dtype(monkeypatch):
     """T-A3: 監査とカウンタの4検算が成立し、判定不能は pd.NA で区別される。"""
     for frame in (
-        path_frame(continuous_index(340)),
-        path_frame(continuous_index(340)).drop(
-            index=[path_frame(continuous_index(340)).index[260]]
+        path_frame(continuous_index(700)),
+        path_frame(continuous_index(700)).drop(
+            index=[path_frame(continuous_index(700)).index[260]]
         ),
     ):
         out = run_bars(monkeypatch, frame)
@@ -1250,7 +1270,7 @@ def test_ta5_reason_separation(monkeypatch):
     assert bool(ok_row["label_trainable"]) is True
 
     # other 行は ATR 注入でのみ構成できる（モジュール冒頭の注記参照）。
-    probe = run_bars(monkeypatch, path_frame(continuous_index(340)))
+    probe = run_bars(monkeypatch, path_frame(continuous_index(700)))
     probe_audit = audit_of(probe)
     other_ts = next(
         ts
@@ -1258,7 +1278,7 @@ def test_ta5_reason_separation(monkeypatch):
         if probe_audit.loc[ts, "invalid_reason"] == ""
     )
     _zero_atr_at(monkeypatch, other_ts)
-    out_other = run_bars(monkeypatch, path_frame(continuous_index(340)))
+    out_other = run_bars(monkeypatch, path_frame(continuous_index(700)))
     other_row = audit_of(out_other).loc[other_ts]
     assert other_row["invalid_reason"] == "other"
     assert bool(other_row["continuity_valid"]) is True
@@ -1305,8 +1325,8 @@ def _app_literal(name):
 
 def test_tv1_model_versions():
     """T-V1: Scanner は 23、App は 10。"""
-    assert scanner.MODEL_VERSION == 23
-    assert _app_literal("MODEL_VERSION") == 10
+    assert scanner.MODEL_VERSION == 24
+    assert _app_literal("MODEL_VERSION") == 11
 
 
 def test_tv2_constants_and_features_unchanged():
@@ -1350,7 +1370,7 @@ def test_tv2_constants_and_features_unchanged():
 
 def test_tv3_discontinuous_counter_is_real(monkeypatch):
     """T-V3: カウンタは固定値ではなく、データに応じて実際に数えられている。"""
-    clean = run_bars(monkeypatch, path_frame(continuous_index(340)))
+    clean = run_bars(monkeypatch, path_frame(continuous_index(700)))
     assert quality_of(clean)["dropped_label_discontinuous"] == 0
     out, _ = _gap_out(monkeypatch)
     assert quality_of(out)["dropped_label_discontinuous"] == 8
@@ -1427,9 +1447,9 @@ def test_tl17_two_separated_gaps_first_bad_pair_and_single_count(monkeypatch):
     特徴量の区間分離後は、最初の欠損直後のwarm-up行が落ちるため、
     2つ目の欠損は十分に離し、両方の区間境界が特徴量フレームに残る条件にする。
     """
-    index = fx_week_index(340)
+    index = fx_week_index(1000)
     raw = path_frame(index)
-    raw = raw.drop(index=[index[200], index[250]])
+    raw = raw.drop(index=[index[300], index[650]])
     out = run_bars(monkeypatch, raw)
     dq = quality_of(out)
     audit = audit_of(out)

@@ -33,7 +33,7 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 
 
-def _frame(n, freq, end, tail=0.0):
+def _frame(n, freq, end, tail=0.0, tail_bars=30):
     """周期パターンの末尾に一方向区間（tail の符号×本数）を付けた価格パス。
 
     tail>0: 末尾30本が上昇、tail<0: 末尾30本が下降。EMA20/50 の向きが
@@ -43,7 +43,7 @@ def _frame(n, freq, end, tail=0.0):
     i = np.arange(n)
     step = np.where((i // 12) % 2 == 0, 0.45, -0.45) + np.where(i % 2 == 0, 0.02, -0.02)
     if tail:
-        step[-30:] = tail
+        step[-tail_bars:] = tail
     close = 150.0 + np.cumsum(step)
     open_ = np.concatenate([[close[0]], close[:-1]])
     return pd.DataFrame(
@@ -76,6 +76,8 @@ def _make_download(
     stale_main=False,
     stale_4h_source=False,
     missing_4h_source=False,
+    zero_4h_atr=False,
+    price_shift=0.0,
 ):
     now_h = pd.Timestamp.now(tz="UTC").floor("h")
 
@@ -93,9 +95,20 @@ def _make_download(
             if missing_4h_source:
                 return pd.DataFrame()
             end4 = now_h - pd.Timedelta(days=2) if stale_4h_source else now_h
-            return _frame(600, "1h", end4, tail=tail_4h_source)
+            # 4h remains on its legacy EMA path; 600 hourly observations
+            # provide 150 complete 4h bins, above the existing 80-bin minimum.
+            frame = _frame(600, "1h", end4, tail=tail_4h_source, tail_bars=30)
+            if zero_4h_atr:
+                # A flat but valid OHLC source produces zero 4h ATR.
+                frame.loc[:, ["Open", "High", "Low", "Close"]] = 150.0
+            if price_shift:
+                frame.loc[:, ["Open", "High", "Low", "Close"]] += float(price_shift)
+            return frame
         end = now_h - pd.Timedelta(days=10) if stale_main else now_h
-        return _frame(600, "1h", end, tail=tail_1h)
+        frame = _frame(600, "1h", end, tail=tail_1h)
+        if price_shift:
+            frame.loc[:, ["Open", "High", "Low", "Close"]] += float(price_shift)
+        return frame
 
     return fake_download
 
@@ -195,6 +208,8 @@ def test_direction_hold_when_only_1h_stale(rig):
     assert any("方向：判断保留" in w for w in _texts(at, "warning"))
     assert any("鮮度" in c for c in _texts(at, "caption"))
     assert not any("方向：売り方向" in e for e in _texts(at, "error"))
+    assert "📋 リピート注文（ハーフ＆ハーフ）" not in _all_text(at)
+    assert not any("注文幅" in str(w.label) for w in at.number_input)
 
 
 def test_direction_hold_when_only_4h_stale(rig):
@@ -205,6 +220,8 @@ def test_direction_hold_when_only_4h_stale(rig):
     assert any("方向：判断保留" in w for w in _texts(at, "warning"))
     assert any("鮮度" in c for c in _texts(at, "caption"))
     assert not any("方向：売り方向" in e for e in _texts(at, "error"))
+    assert "📋 リピート注文（ハーフ＆ハーフ）" not in _all_text(at)
+    assert not any("注文幅" in str(w.label) for w in at.number_input)
 
 
 def test_direction_hold_when_4h_data_is_missing(rig):
@@ -213,6 +230,54 @@ def test_direction_hold_when_4h_data_is_missing(rig):
     assert not at.exception
     assert any("方向：判断保留" in w for w in _texts(at, "warning"))
     assert not any("方向：売り方向" in e for e in _texts(at, "error"))
+
+    # 4h OHLC/ATR が無効なら、暫定価格レンジや1h ATRで注文補助を捏造しない。
+    body = _all_text(at)
+    assert "📋 リピート注文（ハーフ＆ハーフ）" not in body
+    settings_path = rig.tmp_path / "user_settings.json"
+    if settings_path.exists():
+        saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert "USDJPY=X" not in saved.get("ranges", {})
+
+
+def test_repeat_order_assist_fails_closed_when_4h_atr_is_zero(rig):
+    at = rig(zero_4h_atr=True)
+    assert not at.exception, f"app raised: {[e.value for e in at.exception]}"
+    body = _all_text(at)
+    assert "4時間足の高値・安値またはATRを確認できないため" in body
+    assert "📋 リピート注文（ハーフ＆ハーフ）" not in body
+    assert not any("注文幅" in str(w.label) for w in at.number_input)
+
+
+def test_auto_range_reset_also_updates_existing_widget_state(rig, monkeypatch):
+    at = rig()
+    assert not at.exception, f"app raised: {[e.value for e in at.exception]}"
+
+    lower = next(w for w in at.number_input if str(w.label) == "レンジ下限")
+    upper = next(w for w in at.number_input if str(w.label) == "レンジ上限")
+    lower.set_value(150.0)
+    upper.set_value(160.0)
+    at.run()
+
+    settings_path = rig.tmp_path / "user_settings.json"
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert saved["ranges"]["USDJPY=X"] == {"lower": 150.0, "upper": 160.0}
+
+    # A large price move makes the old saved range invalid under the existing
+    # 0.4x..1.6x guard. The auto-reset must update both persisted and widget state.
+    monkeypatch.setattr(yf, "download", _make_download(price_shift=-60.0))
+    import streamlit as st
+    st.cache_data.clear()
+    at.run()
+    assert not at.exception, f"app raised after price move: {[e.value for e in at.exception]}"
+
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    auto_range = saved["ranges"]["USDJPY=X"]
+    lower_after = next(w for w in at.number_input if str(w.label) == "レンジ下限")
+    upper_after = next(w for w in at.number_input if str(w.label) == "レンジ上限")
+    assert float(lower_after.value) == pytest.approx(auto_range["lower"])
+    assert float(upper_after.value) == pytest.approx(auto_range["upper"])
+    assert auto_range["lower"] < auto_range["upper"]
 
 
 def test_direction_hold_when_timeframes_disagree(rig):

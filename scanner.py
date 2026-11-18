@@ -13,6 +13,7 @@ import pandas as pd
 import yfinance as yf
 
 from aifx_time_validation import has_contiguous_hourly_window, split_hourly_segments
+from aifx_indicator_utils import ema_with_warmup
 
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -29,9 +30,10 @@ JST = ZoneInfo("Asia/Tokyo")
 STATE_FILE = "scan_state.json"
 _STATE_LOAD_ERROR = None
 LOOKAHEAD_BARS = 8
-# 特徴量計算に必要な最小の足本数（加工後）。最も遅い指標である EMA200 が
-# 有効になるには 200 本が必要で、残りは他の指標とラベル付けの余裕分。
-# bars() の事前チェックも、この値を基準に経路ごとに算出する。
+# 1h の EMA200 は200観測後に有効化する。
+EMA200_MIN_PERIODS = 200
+# Walk-Forwardの最低学習行数とfold数。実際の各fold成立条件は
+# simulated_pnl() が検証し、必要fold数を満たさなければfail closedにする。
 MIN_FEATURE_BARS = 220
 MIN_TRAIN_ROWS = 180
 N_WALK_FORWARD_FOLDS = 3
@@ -60,7 +62,7 @@ FORWARD_PREDICTIONS_MAX = 200
 # 猶予。記録日時（recorded_at_jst、無ければ signal_bar_time）からの暦日。
 FORWARD_UNEVALUABLE_AFTER_DAYS = 14
 
-MODEL_VERSION = 23
+MODEL_VERSION = 24
 
 # 仮想検証用の追加コスト（実際の松井証券FXの約定・スワップ値ではありません）。
 # スリッページは往復合計の保守的な仮定。スワップは保有時間・方向・日々の値で変動するため、
@@ -1167,7 +1169,7 @@ def calculate_atr(df, period=14):
     ).mean()
 
 
-def add_indicators(df):
+def add_indicators(df, require_full_ema200=False):
     df = df.copy()
 
     close = df["Close"]
@@ -1181,7 +1183,11 @@ def add_indicators(df):
 
     sma20 = close.rolling(20).mean()
     ema20 = close.ewm(span=20, adjust=False).mean()
-    ema200 = close.ewm(span=200, adjust=False).mean()
+    ema200 = (
+        ema_with_warmup(close, EMA200_MIN_PERIODS)
+        if require_full_ema200
+        else close.ewm(span=200, adjust=False).mean()
+    )
 
     df["Dev_SMA20"] = close / sma20 - 1
     df["Dev_EMA20"] = close / ema20 - 1
@@ -1442,7 +1448,9 @@ def bars(ticker, interval="1h", period="60d"):
     if interval == "4h":
         min_raw_bars = 4 * MIN_FEATURE_BARS
     elif interval == "1h":
-        min_raw_bars = MIN_FEATURE_BARS
+        # bars() は分析・ラベル診断にも使う。ここでは最低180件の学習可能行を
+        # 確保し、より多くの行が必要なWalk-Forwardは検証関数側で別途判定する。
+        min_raw_bars = EMA200_MIN_PERIODS - 1 + MIN_TRAIN_ROWS + LOOKAHEAD_BARS
     else:
         min_raw_bars = MIN_FEATURE_BARS + 1
     if len(raw) < min_raw_bars:
@@ -1517,12 +1525,12 @@ def bars(ticker, interval="1h", period="60d"):
     if interval == "1h":
         hourly_segments = split_hourly_segments(raw)
         feature_df = (
-            pd.concat([add_indicators(segment) for segment in hourly_segments]).sort_index()
+            pd.concat([add_indicators(segment, require_full_ema200=True) for segment in hourly_segments]).sort_index()
             if hourly_segments
             else raw.iloc[0:0].copy()
         )
     else:
-        feature_df = add_indicators(raw)
+        feature_df = add_indicators(raw, require_full_ema200=False)
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
     # Vol_Ratioは診断用に残すが、定数になりやすいため学習特徴量から除外する。
@@ -2111,7 +2119,6 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
     if df is None or len(df) < MIN_TRAIN_ROWS:
         return failure("学習データ不足")
-
     X = df[FEATURE_COLUMNS]
     y = df["Target"].astype(int)
 
@@ -2139,12 +2146,12 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     if y.nunique() < 2:
         return failure("目的変数の種類が不足")
 
+    purge_gap = max(0, int(LOOKAHEAD_BARS))
+    # Foldごとの学習行数は下で個別に確認し、skipしたfoldを隠さない。
     fold_size = len(df) // (N_WALK_FORWARD_FOLDS + 1)
 
     if fold_size < 30:
         return failure("時系列検証データ不足")
-
-    purge_gap = max(0, int(LOOKAHEAD_BARS))
 
     all_true = []
     all_pred = []
@@ -2554,6 +2561,10 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     elif recall_pct["sell"] < 20.0:
         model_gate_reasons.append(
             f"売り再現率不足({recall_pct['sell']:.1f}%<20.0%)"
+        )
+    if used_folds < N_WALK_FORWARD_FOLDS:
+        model_gate_reasons.append(
+            f"有効なWalk-Forward fold不足({used_folds}/{N_WALK_FORWARD_FOLDS})"
         )
     model_validation_ok = not model_gate_reasons
 

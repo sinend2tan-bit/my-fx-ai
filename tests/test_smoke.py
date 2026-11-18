@@ -1436,14 +1436,16 @@ def _stub_download(monkeypatch, frame):
     )
 
 
-def test_bars_1h_boundary_221_passes(monkeypatch):
-    # 221本 → 末尾の未確定足を除いて 220本 = 最小本数ちょうどで通る。
-    _stub_download(monkeypatch, _synthetic_ohlc(221))
-    assert scanner.bars("USDJPY=X", interval="1h", period="60d") is not None
+def test_bars_1h_boundary_388_passes(monkeypatch):
+    # 199 EMA warm-up + 180 trainable rows + 8 future-label bars + latest bar.
+    _stub_download(monkeypatch, _synthetic_ohlc(388))
+    out = scanner.bars("USDJPY=X", interval="1h", period="60d")
+    assert out is not None
+    assert out.attrs["data_quality"]["trainable_rows"] == scanner.MIN_TRAIN_ROWS
 
 
-def test_bars_1h_boundary_220_and_219_rejected(monkeypatch, capsys):
-    for n in (220, 219):
+def test_bars_1h_boundary_387_and_386_rejected(monkeypatch, capsys):
+    for n in (387, 386):
         _stub_download(monkeypatch, _synthetic_ohlc(n))
         assert scanner.bars("USDJPY=X", interval="1h", period="60d") is None
     assert "[DATA SHORT]" in capsys.readouterr().out
