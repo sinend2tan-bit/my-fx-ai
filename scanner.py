@@ -1,4 +1,5 @@
 import json
+from numbers import Integral, Real
 import os
 import re
 import tempfile
@@ -1887,6 +1888,113 @@ def _fixed_class_metrics(y_true, y_pred):
     return matrix, score, recalls
 
 
+def _fold_completeness_diagnostics(fold_details, required_folds):
+    """Fail-closed temporal validation completeness check.
+
+    Every configured test fold must be present exactly once and contain true
+    support for SELL / NEUTRAL / BUY. Predicted support is retained in the
+    fold detail for diagnosis, but does not substitute for missing true support.
+    Malformed IDs, counts, and metrics are incomplete rather than coerced.
+    """
+    if isinstance(required_folds, bool) or not isinstance(required_folds, Integral):
+        raise ValueError("required_folds must be a positive integer")
+    required = int(required_folds)
+    if required < 1:
+        raise ValueError("required_folds must be a positive integer")
+
+    details = list(fold_details or [])
+    by_fold = {}
+    duplicate_folds = []
+    invalid_fold_ids = []
+    for detail in details:
+        if not isinstance(detail, dict):
+            invalid_fold_ids.append(repr(detail))
+            continue
+        raw_fold_id = detail.get("fold")
+        if isinstance(raw_fold_id, bool) or not isinstance(raw_fold_id, Integral):
+            invalid_fold_ids.append(repr(raw_fold_id))
+            continue
+        fold_id = int(raw_fold_id)
+        if fold_id in by_fold:
+            duplicate_folds.append(fold_id)
+        else:
+            by_fold[fold_id] = detail
+
+    expected = set(range(1, required + 1))
+    present = set(by_fold)
+    missing_folds = sorted(expected - present)
+    unexpected_folds = sorted(present - expected)
+    incomplete_folds = []
+    for fold_id in sorted(expected & present):
+        detail = by_fold[fold_id]
+        raw_counts = detail.get("actual_class_counts")
+        counts = raw_counts if isinstance(raw_counts, dict) else {}
+        parsed_counts = {}
+        invalid_class_counts = []
+        for name in ("sell", "neutral", "buy"):
+            raw_count = counts.get(name, 0)
+            if (
+                isinstance(raw_count, bool)
+                or not isinstance(raw_count, Integral)
+                or int(raw_count) < 0
+            ):
+                invalid_class_counts.append(name)
+                parsed_counts[name] = 0
+            else:
+                parsed_counts[name] = int(raw_count)
+        missing_classes = [
+            name for name in ("sell", "neutral", "buy")
+            if parsed_counts[name] <= 0
+        ]
+
+        fold_score = detail.get("balanced_accuracy")
+        baseline_score = detail.get("baseline_balanced_accuracy")
+
+        def valid_metric(value):
+            return (
+                not isinstance(value, bool)
+                and isinstance(value, Real)
+                and np.isfinite(float(value))
+                and 0.0 <= float(value) <= 1.0
+            )
+
+        fold_metric_valid = valid_metric(fold_score)
+        baseline_metric_valid = valid_metric(baseline_score)
+        if (
+            missing_classes or invalid_class_counts
+            or not fold_metric_valid or not baseline_metric_valid
+        ):
+            incomplete_folds.append({
+                "fold": fold_id,
+                "missing_true_classes": missing_classes,
+                "invalid_class_counts": invalid_class_counts,
+                "actual_class_counts": parsed_counts,
+                "predicted_class_counts": detail.get("predicted_class_counts") or {},
+                "balanced_accuracy": float(fold_score) if fold_metric_valid else None,
+                "baseline_balanced_accuracy": float(baseline_score) if baseline_metric_valid else None,
+                "reason": detail.get("balanced_accuracy_reason") or (
+                    "fold or baseline balanced accuracy is non-finite, non-numeric, or outside [0, 1]"
+                    if not fold_metric_valid or not baseline_metric_valid
+                    else "invalid or missing true class support for one or more fixed classes"
+                ),
+            })
+
+    complete = not (
+        missing_folds or unexpected_folds or duplicate_folds
+        or invalid_fold_ids or incomplete_folds
+    )
+    return {
+        "complete": bool(complete),
+        "required_folds": required,
+        "reported_folds": len(details),
+        "missing_folds": missing_folds,
+        "unexpected_folds": unexpected_folds,
+        "duplicate_folds": sorted(set(duplicate_folds)),
+        "invalid_fold_ids": invalid_fold_ids,
+        "incomplete_folds": incomplete_folds,
+    }
+
+
 MIN_DIRECTIONAL_SCORE_PCT = 55.0
 
 
@@ -2510,7 +2618,19 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
 
     # 既存の精度・基準モデル・方向別再現率の合格条件は緩めない。
     # 不合格時にどの条件を満たしていないか、ログで具体的に分かるようにする。
+    fold_completeness = _fold_completeness_diagnostics(
+        fold_details,
+        N_WALK_FORWARD_FOLDS,
+    )
     model_gate_reasons = []
+    if not fold_completeness["complete"]:
+        model_gate_reasons.append(
+            "walk-forward fold completeness failed: "
+            f"missing={fold_completeness['missing_folds']}, "
+            f"incomplete={ [item['fold'] for item in fold_completeness['incomplete_folds']] }, "
+            f"duplicates={fold_completeness['duplicate_folds']}, "
+            f"unexpected={fold_completeness['unexpected_folds']}"
+        )
     if score is None:
         model_gate_reasons.append("OOF実測値に全クラスが揃わずbalanced_accuracy算出不能")
     elif score < 0.40:
@@ -2675,6 +2795,7 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
         ),
         "class_recall_pct": recall_pct,
         "folds": used_folds,
+        "fold_completeness": fold_completeness,
         "fold_details": fold_details,
         "simulated_pnl": total_pnl,
         "directional_pnl": directional_pnl,
