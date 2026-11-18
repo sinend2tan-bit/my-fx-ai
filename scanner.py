@@ -3262,6 +3262,9 @@ def analyze_pair(name, config):
         return result
 
     except Exception as exc:
+        # An exception after forward_recordable was set must never leave a
+        # failed analysis eligible for the forward dataset.
+        result["forward_recordable"] = False
         result["decision"] = "エラー・保留"
         result["reason"] = "分析中のエラー: " + str(exc)[:300]
         print(f"[PAIR ERROR] {name}: {exc}")
