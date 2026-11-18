@@ -2151,12 +2151,22 @@ def walk_forward_validation(df, pair_name="通貨ペア不明"):
     if y.nunique() < 2:
         return failure("目的変数の種類が不足")
 
+    purge_gap = max(0, int(LOOKAHEAD_BARS))
+    # 4分割の最初の学習foldでも、purge後に最低学習行数を確保できる
+    # 必要条件。データ取得/品質診断のbars()ゲートとは分離する。
+    minimum_walk_forward_rows = (
+        (N_WALK_FORWARD_FOLDS + 1) * (MIN_TRAIN_ROWS + purge_gap)
+    )
+    if len(df) < minimum_walk_forward_rows:
+        return failure(
+            f"{len(df)} rows < {minimum_walk_forward_rows} rows required "
+            f"for {N_WALK_FORWARD_FOLDS}-fold walk-forward validation"
+        )
+
     fold_size = len(df) // (N_WALK_FORWARD_FOLDS + 1)
 
     if fold_size < 30:
         return failure("時系列検証データ不足")
-
-    purge_gap = max(0, int(LOOKAHEAD_BARS))
 
     all_true = []
     all_pred = []
