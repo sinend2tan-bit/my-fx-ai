@@ -1098,9 +1098,16 @@ _WF_CACHE = {}
 
 def _wf_result():
     if "res" not in _WF_CACHE:
-        _WF_CACHE["res"] = scanner.walk_forward_validation(
-            _wf_frame(), pair_name="SYNTHETIC"
-        )
+        original_min_train_rows = scanner.MIN_TRAIN_ROWS
+        try:
+            # Small synthetic fixtures validate fold boundaries, not production
+            # sample-size sufficiency (covered by a separate boundary test).
+            scanner.MIN_TRAIN_ROWS = 80
+            _WF_CACHE["res"] = scanner.walk_forward_validation(
+                _wf_frame(), pair_name="SYNTHETIC"
+            )
+        finally:
+            scanner.MIN_TRAIN_ROWS = original_min_train_rows
     return _WF_CACHE["res"]
 
 
@@ -1153,15 +1160,19 @@ def test_syn_fx_014_walk_forward_fold_boundaries():
     frame = _wf_frame()
     res = _wf_result()
     details = sorted(res["fold_details"], key=lambda d: d["fold"])
-    # fold=1 は train_rows=92 < MIN_TRAIN_ROWS(180) のため skip される（現行仕様）。
-    assert [d["fold"] for d in details] == [2, 3]
-    assert details[0]["test_start"] == frame.index[200].isoformat()
-    assert details[0]["test_end"] == frame.index[299].isoformat()
-    assert details[1]["test_start"] == frame.index[300].isoformat()
-    assert details[1]["test_end"] == frame.index[399].isoformat()
+    # この合成テストではMIN_TRAIN_ROWS=80を一時適用し、3foldの境界を検証。
+    assert [d["fold"] for d in details] == [1, 2, 3]
+    assert details[0]["train_rows"] == 100 - 8
+    assert details[0]["test_start"] == frame.index[100].isoformat()
+    assert details[0]["test_end"] == frame.index[199].isoformat()
+    assert details[1]["test_start"] == frame.index[200].isoformat()
+    assert details[1]["test_end"] == frame.index[299].isoformat()
+    assert details[2]["test_start"] == frame.index[300].isoformat()
+    assert details[2]["test_end"] == frame.index[399].isoformat()
     assert all(d["test_rows"] == 100 for d in details)
-    # test 区間は [200,300) と [300,400) で重複せず、時系列順に隣接する。
+    # test区間は[100,200), [200,300), [300,400)で重複せず隣接する。
     assert details[0]["test_end"] < details[1]["test_start"]
+    assert details[1]["test_end"] < details[2]["test_start"]
 
 
 def test_syn_fx_015_one_class_and_zero_trades(monkeypatch, tmp_path):
