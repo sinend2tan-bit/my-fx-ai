@@ -1436,18 +1436,16 @@ def _stub_download(monkeypatch, frame):
     )
 
 
-def test_bars_1h_boundary_960_passes(monkeypatch):
-    # Latest timestamp group excluded; 959 remain = 199 EMA warm-up
-    # + 752 trainable rows + 8 future-label bars.
-    _stub_download(monkeypatch, _synthetic_ohlc(960))
+def test_bars_1h_boundary_388_passes(monkeypatch):
+    # 199 EMA warm-up + 180 trainable rows + 8 future-label bars + latest bar.
+    _stub_download(monkeypatch, _synthetic_ohlc(388))
     out = scanner.bars("USDJPY=X", interval="1h", period="60d")
     assert out is not None
-    assert out.attrs["data_quality"]["input_rows"] == 959
-    assert out.attrs["data_quality"]["trainable_rows"] == scanner.MIN_WALK_FORWARD_FEATURE_ROWS
+    assert out.attrs["data_quality"]["trainable_rows"] == scanner.MIN_TRAIN_ROWS
 
 
-def test_bars_1h_boundary_959_and_958_rejected(monkeypatch, capsys):
-    for n in (959, 958):
+def test_bars_1h_boundary_387_and_386_rejected(monkeypatch, capsys):
+    for n in (387, 386):
         _stub_download(monkeypatch, _synthetic_ohlc(n))
         assert scanner.bars("USDJPY=X", interval="1h", period="60d") is None
     assert "[DATA SHORT]" in capsys.readouterr().out
