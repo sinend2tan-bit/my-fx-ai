@@ -1,12 +1,12 @@
 """Regression tests for directional PnL hold propagation in analyze_pair."""
 
 import pandas as pd
+import pytest
 
 import scanner
 
 
-def test_directional_pnl_failure_cannot_become_a_candidate(monkeypatch):
-    """A failed BUY PnL gate must remain a hold through the final decision."""
+def _run_pair(monkeypatch, model_direction, directional_pnl):
     latest = pd.DataFrame(
         {"Close": [150.0], "ATR": [0.75]},
         index=pd.DatetimeIndex(["2026-11-18T09:00:00Z"]),
@@ -27,19 +27,16 @@ def test_directional_pnl_failure_cannot_become_a_candidate(monkeypatch):
         lambda frame, pair_name=None: {
             "passed": True,
             "reason": "synthetic validation pass",
-            "directional_pnl": {
-                "buy": {"passed": False, "trades": 4, "net_pips": -2.0},
-                "sell": {"passed": True, "trades": 12, "net_pips": 3.0},
-            },
+            "directional_pnl": directional_pnl,
         },
     )
     monkeypatch.setattr(
         scanner,
         "analyze",
         lambda frame, validation: {
-            "direction": "買い",
-            "buy_pct": 70.0,
-            "sell_pct": 10.0,
+            "direction": model_direction,
+            "buy_pct": 70.0 if model_direction == "買い" else 10.0,
+            "sell_pct": 70.0 if model_direction == "売り" else 10.0,
             "neutral_pct": 20.0,
             "feature_snapshot": {"synthetic": True},
             "reason": "synthetic model direction",
@@ -47,10 +44,25 @@ def test_directional_pnl_failure_cannot_become_a_candidate(monkeypatch):
     )
     monkeypatch.setattr(scanner, "news_allows_candidate", lambda news: (True, ""))
 
-    result = scanner.analyze_pair(
+    return scanner.analyze_pair(
         "米ドル/円 (USD/JPY)",
         {"ticker": "USDJPY=X", "spread_pips": 0.2, "pip": 0.01},
     )
+
+
+@pytest.mark.parametrize(
+    ("model_direction", "failing_key"),
+    [("買い", "buy"), ("売り", "sell")],
+)
+def test_directional_pnl_failure_cannot_become_a_candidate(
+    monkeypatch, model_direction, failing_key
+):
+    """A failed BUY or SELL PnL gate must remain a hold through final decision."""
+    directional_pnl = {
+        "buy": {"passed": failing_key != "buy", "trades": 12, "net_pips": 3.0},
+        "sell": {"passed": failing_key != "sell", "trades": 12, "net_pips": 3.0},
+    }
+    result = _run_pair(monkeypatch, model_direction, directional_pnl)
 
     assert result["direction"] == "様子見"
     assert result["directional_pnl_hold"] is True
@@ -58,3 +70,17 @@ def test_directional_pnl_failure_cannot_become_a_candidate(monkeypatch):
     assert "仮想損益" in result["reason"]
     assert result["forward_recordable"] is False
     assert result["decision"] != "候補あり（手動確認のみ）"
+
+
+@pytest.mark.parametrize("model_direction", ["買い", "売り"])
+def test_directional_pnl_pass_preserves_valid_candidate(monkeypatch, model_direction):
+    directional_pnl = {
+        "buy": {"passed": True, "trades": 12, "net_pips": 3.0},
+        "sell": {"passed": True, "trades": 12, "net_pips": 3.0},
+    }
+    result = _run_pair(monkeypatch, model_direction, directional_pnl)
+
+    assert result["direction"] == model_direction
+    assert result["directional_pnl_hold"] is False
+    assert result["decision"] == "候補あり（手動確認のみ）"
+    assert result["forward_recordable"] is True
