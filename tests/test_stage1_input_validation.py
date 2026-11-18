@@ -131,8 +131,11 @@ def assert_checksums(dq):
     assert dq["trainable_rows"] == dq["feature_rows"] - label_drops
 
 
-def stub_scanner_download(monkeypatch, frame):
+def stub_scanner_download(monkeypatch, frame, enforce_minimum=False):
     monkeypatch.setattr(yf, "download", lambda *a, **k: frame.copy())
+    if not enforce_minimum:
+        # These tests isolate timestamp/OHLC/label behavior, not minimum history.
+        monkeypatch.setattr(scanner, "MIN_RAW_BARS_1H_FOR_WALK_FORWARD", 387)
 
 
 # ---------------------------------------------------------------------------
@@ -1165,19 +1168,21 @@ def test_app_invalid_latest_bar_keeps_previous_bar():
         assert frame.index[-1] not in out.index
 
 
-def test_scanner_min_train_rows_boundary_after_ema200(monkeypatch):
-    # EMA200 の199行ウォームアップ + 未来8本 + 学習可能180行 + 未確定足1本。
-    # 388本で学習可能180行ちょうど、387本では179行となり保留する。
-    frame = make_frame(n=387)
-    stub_scanner_download(monkeypatch, frame)
+def test_scanner_min_walk_forward_rows_boundary_after_ema200(monkeypatch):
+    # 最新timestamp除外後の959本 = 199 EMA warm-up + 752 feature rows + 8 label horizon。
+    # 752 rows / 4 folds = 188 rows per fold; first train fold loses 8 purge rows,
+    # leaving exactly 180 training rows. 958 post-filter rows cannot satisfy this.
+    frame = make_frame(n=959)
+    stub_scanner_download(monkeypatch, frame, enforce_minimum=True)
     assert scanner.bars("USDJPY=X", interval="1h", period="180d") is None
-    frame = make_frame(n=388)
-    stub_scanner_download(monkeypatch, frame)
+    frame = make_frame(n=960)
+    stub_scanner_download(monkeypatch, frame, enforce_minimum=True)
     out = scanner.bars("USDJPY=X", interval="1h", period="180d")
     assert out is not None
     dq = out.attrs["data_quality"]
-    assert dq["input_rows"] == 387
-    assert dq["trainable_rows"] == scanner.MIN_TRAIN_ROWS == len(out)
+    assert dq["input_rows"] == scanner.MIN_RAW_BARS_1H_FOR_WALK_FORWARD == 959
+    assert dq["trainable_rows"] == scanner.MIN_WALK_FORWARD_FEATURE_ROWS == 752
+    assert len(out) == 752
     assert_checksums(dq)
 
 
