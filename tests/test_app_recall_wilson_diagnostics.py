@@ -32,6 +32,8 @@ def test_wilson_interval_for_large_sample_contains_observed_rate():
     interval = _wilson()
     low, high = interval(90, 100)
     assert 0.0 <= low < 0.9 < high <= 1.0
+    assert abs(low - 0.8256) < 0.0002
+    assert abs(high - 0.9448) < 0.0002
 
 
 def test_wilson_interval_returns_none_for_empty_class_support():
