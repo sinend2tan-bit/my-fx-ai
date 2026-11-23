@@ -21,6 +21,11 @@ import streamlit as st
 import yfinance as yf
 
 from aifx_time_validation import has_contiguous_hourly_window
+from aifx_ohlc_validation import (
+    add_4h_bucket_diagnostics,
+    clean_ohlc_source,
+    ohlc_valid_mask,
+)
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
@@ -1151,6 +1156,7 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             return None, None
         df = df[required + (["Volume"] if "Volume" in df.columns else [])].copy()
         data_quality = None
+        source_ohlc_diagnostics = None
         # タイムゾーン安全停止の理由（1h・1d 共通）: 本番環境の
         # yfinance の版が未確認であることを前提に、実行時に index の
         # 型とタイムゾーンを検査する。タイムゾーンを確定できない場合は
@@ -1229,14 +1235,7 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             data_quality["dropped_duplicate_timestamp"] = int(rows_before - len(df))
             # (3) OHLC 整合性を検証する。keep="last" で残った行が不正な
             # 場合は古い重複行へ戻らず、その timestamp 自体を除外する。
-            oc_max = df[["Open", "Close"]].max(axis=1)
-            oc_min = df[["Open", "Close"]].min(axis=1)
-            ohlc_ok = (
-                (df["High"] >= oc_max)
-                & (df["Low"] <= oc_min)
-                & (df["High"] >= df["Low"])
-                & (df[required] > 0).all(axis=1)
-            ).to_numpy()
+            ohlc_ok = ohlc_valid_mask(df, required).to_numpy()
             data_quality["dropped_invalid_ohlc"] = int((~ohlc_ok).sum())
             df = df.loc[ohlc_ok].copy()
         elif interval == "1d":
@@ -1272,14 +1271,9 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             if df.index.tz is None:
                 return None, tz_unavailable_reason
             df.index = df.index.tz_convert("UTC")
-            df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required)
-            # 重複 timestamp の整理は Scanner の共通整形と文字どおり
-            # 同じ式・同じ順序（dropna の後、sort_index の前、
-            # keep="last"）で行う。これにより後段の完全性判定の本数が
-            # 「異なる timestamp の本数」になり、集約値（OHLC・
-            # Volume）も Scanner と一致する（段階2再レビュー対応・
-            # 案b）。重複のないデータでは挙動は変わらない。
-            df = df[~df.index.duplicated(keep="last")].sort_index()
+            # Keep reason-specific 4h source diagnostics separate from the
+            # Stage 1 C-1 counters (which intentionally remain 1h-only).
+            df, source_ohlc_diagnostics = clean_ohlc_source(df, required)
         else:
             df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=required).sort_index()
         if interval == "4h":
@@ -1300,6 +1294,7 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=5)
             df = df.loc[(df.index + pd.Timedelta(hours=1)) <= cutoff].copy()
             hourly_counts = df["Close"].resample("4h", origin="start_day").count()
+            add_4h_bucket_diagnostics(source_ohlc_diagnostics, hourly_counts, cutoff)
             df = df.resample("4h", origin="start_day").agg(agg).dropna(subset=required)
             complete_counts = hourly_counts.reindex(df.index).fillna(0)
             df = df.loc[
@@ -1422,6 +1417,8 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
                 - data_quality["dropped_label_other"]
             )
             result.attrs["data_quality"] = data_quality
+        if source_ohlc_diagnostics is not None:
+            result.attrs["source_ohlc_diagnostics"] = dict(source_ohlc_diagnostics)
         return result, None
     except Exception:
         return None, None
@@ -1961,6 +1958,21 @@ def _render_main_area():
             f"特徴量行 {_data_quality['feature_rows']}件 / "
             f"ラベルなし（未来窓不足） {_data_quality['dropped_label_insufficient_future']}件 / "
             f"学習対象 {_data_quality['trainable_rows']}件"
+        )
+    _source_ohlc_quality = data.attrs.get("source_ohlc_diagnostics") if hasattr(data, "attrs") else None
+    if _source_ohlc_quality:
+        st.caption(
+            "4時間足の元データ品質（1時間足）: "
+            f"入力 {_source_ohlc_quality['input_rows']}本 / "
+            f"除外 時刻不正 {_source_ohlc_quality['dropped_invalid_timestamp']}本・"
+            f"時刻ずれ {_source_ohlc_quality['dropped_off_hour_grid_timestamp']}本・"
+            f"欠損/非有限 {_source_ohlc_quality['dropped_missing_or_nonfinite']}本・"
+            f"重複時刻 {_source_ohlc_quality['dropped_duplicate_timestamp']}本・"
+            f"OHLC不整合 {_source_ohlc_quality['dropped_invalid_ohlc']}本 / "
+            f"有効元足 {_source_ohlc_quality['validated_source_rows']}本 / "
+            f"完全4h区間 {_source_ohlc_quality['complete_4h_buckets']}件・"
+            f"4本未満で除外 {_source_ohlc_quality['dropped_underfull_4h_buckets']}件・"
+            f"4本超過で除外 {_source_ohlc_quality['dropped_overfull_4h_buckets']}件"
         )
     # Timeframe-aware freshness check. Yahoo timestamps can be delayed and are not Matsui live quotes.
     data_is_stale = False
