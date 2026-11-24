@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 import scanner
+from aifx_indicator_utils import ema_with_warmup
 from aifx_time_validation import (
     forward_hourly_bar_gap_allowed,
     has_contiguous_hourly_window,
@@ -209,6 +210,8 @@ def _app_load_and_process_with_frame(frame):
     namespace = {
         "pd": pd,
         "np": np,
+        "ema_with_warmup": ema_with_warmup,
+        "EMA200_MIN_PERIODS": literal("EMA200_MIN_PERIODS"),
         "yf": YFinanceStub,
         "st": st,
         "FEATURE_COLUMNS": literal("FEATURE_COLUMNS"),
@@ -313,7 +316,7 @@ def test_scanner_indicators_do_not_reset_for_allowed_friday_monday_closure():
 
 
 def test_app_indicators_reset_after_weekday_gap():
-    idx = pd.date_range("2026-01-05 00:00", periods=300, freq="h", tz="UTC")
+    idx = pd.date_range("2026-01-05 00:00", periods=400, freq="h", tz="UTC")
     gap_pos = 100
     frame = _synthetic_ohlcv(idx.delete(gap_pos))
     out, st = _app_load_and_process_with_frame(frame)
@@ -321,7 +324,8 @@ def test_app_indicators_reset_after_weekday_gap():
     assert out is not None
     assert st.warnings == []
     first_after_gap = idx[gap_pos + 1]
-    later_after_gap = idx[gap_pos + 30]
+    # 1h EMA200 は区間の先頭から200本蓄積した後に初めて有効。
+    later_after_gap = idx[gap_pos + 210]
     assert first_after_gap not in out.index
     assert later_after_gap in out.index
 
