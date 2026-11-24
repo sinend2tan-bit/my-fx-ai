@@ -344,3 +344,57 @@ def test_narrow_layout_radio_options_wrap_and_keep_touch_targets():
     assert '[data-testid="stRadio"] [role="radiogroup"]' in source
     assert 'flex-wrap: wrap !important;' in source
     assert 'min-height: 44px;' in source
+
+
+def test_invalid_repeat_range_edit_is_rejected_and_restored(rig):
+    at = rig()
+    assert not at.exception, f"app raised: {[e.value for e in at.exception]}"
+
+    lower = next(w for w in at.number_input if str(w.label) == "レンジ下限")
+    upper = next(w for w in at.number_input if str(w.label) == "レンジ上限")
+    previous_lower = float(lower.value)
+    previous_upper = float(upper.value)
+
+    settings_path = rig.tmp_path / "user_settings.json"
+    saved_before = json.loads(settings_path.read_text(encoding="utf-8"))
+    saved_range = saved_before["ranges"]["USDJPY=X"]
+
+    # Make the lower bound exceed the current upper bound. The callback must
+    # reject the edit, restore both widgets, and keep persisted state unchanged.
+    lower.set_value(previous_upper + 10.0)
+    at.run()
+
+    assert not at.exception, f"app raised after invalid range: {[e.value for e in at.exception]}"
+    assert any("直前に保存された有効なレンジへ戻しました" in w for w in _texts(at, "warning"))
+
+    lower_after = next(w for w in at.number_input if str(w.label) == "レンジ下限")
+    upper_after = next(w for w in at.number_input if str(w.label) == "レンジ上限")
+    assert float(lower_after.value) == pytest.approx(previous_lower)
+    assert float(upper_after.value) == pytest.approx(previous_upper)
+
+    saved_after = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert saved_after["ranges"]["USDJPY=X"] == saved_range
+    assert saved_range == {"lower": previous_lower, "upper": previous_upper}
+
+def test_auto_calculation_clears_previous_invalid_range_warning(rig):
+    at = rig()
+    assert not at.exception, f"app raised: {[e.value for e in at.exception]}"
+
+    lower = next(w for w in at.number_input if str(w.label) == "レンジ下限")
+    upper = next(w for w in at.number_input if str(w.label) == "レンジ上限")
+    lower.set_value(float(upper.value) + 10.0)
+    at.run()
+
+    assert not at.exception, f"app raised after invalid range: {[e.value for e in at.exception]}"
+    assert any("直前に保存された有効なレンジへ戻しました" in w for w in _texts(at, "warning"))
+
+    auto_button = next(
+        button for button in at.button
+        if str(button.label) == "✨ 4時間足高値・安値（広め）からレンジを自動計算"
+    )
+    auto_button.click()
+    at.run()
+
+    assert not at.exception, f"app raised after auto calculation: {[e.value for e in at.exception]}"
+    assert not any("直前に保存された有効なレンジへ戻しました" in w for w in _texts(at, "warning"))
+
