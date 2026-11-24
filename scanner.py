@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from aifx_time_validation import has_contiguous_hourly_window, split_hourly_segments
+
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix
@@ -59,7 +61,7 @@ FORWARD_PREDICTIONS_MAX = 200
 # 猶予。記録日時（recorded_at_jst、無ければ signal_bar_time）からの暦日。
 FORWARD_UNEVALUABLE_AFTER_DAYS = 14
 
-MODEL_VERSION = 22
+MODEL_VERSION = 23
 
 # 仮想検証用の追加コスト（実際の松井証券FXの約定・スワップ値ではありません）。
 # スリッページは往復合計の保守的な仮定。スワップは保有時間・方向・日々の値で変動するため、
@@ -1275,6 +1277,7 @@ def add_indicators(df):
     return df
 
 
+
 # =========================================================
 # 市場データ取得・ラベル作成
 # =========================================================
@@ -1513,9 +1516,19 @@ def bars(ticker, interval="1h", period="60d"):
         )
         return None
 
-     # ここで作る指標データは、最新の確定足を含む。
+     # 1時間足は指標計算前に連続区間へ分割する。平日欠損の前後で
+    # rolling/EMA/return状態を引き継がず、週末休場だけを許容する。
+    latest_confirmed_index = raw.index[-1] if interval == "1h" else None
     rows_before_features = len(raw) if data_quality is not None else None
-    feature_df = add_indicators(raw)
+    if interval == "1h":
+        hourly_segments = split_hourly_segments(raw)
+        feature_df = (
+            pd.concat([add_indicators(segment) for segment in hourly_segments]).sort_index()
+            if hourly_segments
+            else raw.iloc[0:0].copy()
+        )
+    else:
+        feature_df = add_indicators(raw)
 
     # FXのVolumeはデータ元によって全ゼロ・定数になることがある。
     # Vol_Ratioは診断用に残すが、定数になりやすいため学習特徴量から除外する。
@@ -1532,6 +1545,15 @@ def bars(ticker, interval="1h", period="60d"):
     feature_df = feature_df.dropna(
         subset=FEATURE_COLUMNS + ["ATR", "Close"]
     )
+
+    if interval == "1h" and (
+        feature_df.empty or latest_confirmed_index not in feature_df.index
+    ):
+        print(
+            f"[LATEST SEGMENT NOT READY] {ticker} {interval}: "
+            "latest confirmed bar is not feature-eligible; refusing stale fallback"
+        )
+        return None
 
     if data_quality is not None:
         # (4) 特徴量計算による除外。
