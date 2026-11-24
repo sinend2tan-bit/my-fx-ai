@@ -21,6 +21,7 @@ import streamlit as st
 import yfinance as yf
 
 from aifx_time_validation import has_contiguous_hourly_window
+from model_artifacts import model_matches_contract
 from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
@@ -1128,6 +1129,20 @@ def get_load_stop_reason(ticker, interval):
     return _LOAD_STOP_REASONS.get((ticker, interval))
 
 
+def calculate_rsi(series, period=14):
+    """App RSI: preserve warm-up fallback while handling zero-gain/loss edges."""
+    delta = series.diff()
+    gain = delta.clip(lower=0).rolling(period, min_periods=7).mean()
+    loss = (-delta.clip(upper=0)).rolling(period, min_periods=7).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - 100 / (1 + rs)
+    no_loss = loss.eq(0) & gain.gt(0)
+    no_gain = gain.eq(0) & loss.gt(0)
+    flat = gain.eq(0) & loss.eq(0)
+    rsi = rsi.mask(no_loss, 100.0).mask(no_gain, 0.0).mask(flat, 50.0)
+    return rsi.replace([np.inf, -np.inf], np.nan).fillna(50.0)
+
+
 # Price data is cached for 60 seconds. This is data freshness, not a UI auto-refresh timer.
 @st.cache_data(ttl=60, show_spinner=False)
 def _load_and_process_data_cached(ticker, period, interval, label=""):
@@ -1325,11 +1340,7 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
             prev = close.shift(1)
             tr = pd.concat([(high-low), (high-prev).abs(), (low-prev).abs()], axis=1).max(axis=1)
             segment["ATR"] = tr.rolling(14, min_periods=7).mean()
-            delta = close.diff()
-            gain = delta.clip(lower=0).rolling(14, min_periods=7).mean()
-            loss = (-delta.clip(upper=0)).rolling(14, min_periods=7).mean()
-            rs = gain / loss.replace(0, np.nan)
-            segment["RSI"] = (100 - 100/(1+rs)).fillna(50)
+            segment["RSI"] = calculate_rsi(close, period=14)
             segment["RSI_Diff"] = segment["RSI"].diff()
             ema12, ema26 = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
             segment["MACD"] = ema12 - ema26
@@ -1551,22 +1562,17 @@ def _save_trained_model(model_path, payload):
             return False
 
         candidate = verified.get("model")
-        if not isinstance(candidate, RandomForestClassifier):
-            return False
-        try:
-            classes = list(candidate.classes_)
-            if len(classes) < 2 or any(
-                float(value) not in (-1.0, 0.0, 1.0) for value in classes
-            ):
-                return False
-            if int(candidate.n_features_in_) != len(FEATURE_COLUMNS):
-                return False
-            fitted_names = getattr(candidate, "feature_names_in_", None)
-            if fitted_names is not None and list(fitted_names) != FEATURE_COLUMNS:
-                return False
-        except Exception:
+        if not model_matches_contract(
+            candidate,
+            expected_features=FEATURE_COLUMNS,
+            allowed_classes=(-1, 0, 1),
+            model_type=RandomForestClassifier,
+            require_all_classes=True,
+        ):
             return False
 
+        # 保存時も読み込み時と同じ全3クラス契約を要求する。
+        # 不完全なartifactを保存して次回起動時に必ず破棄する不整合を防ぐ。
         # 一時ファイルは最終ファイルと同じディレクトリにあるため、
         # os.replace は同一ファイルシステム内で原子的に置き換えられる。
         os.replace(temp_path, model_path)
@@ -1737,10 +1743,18 @@ def analyze_signal_with_backtest(df_current, df_htf, ticker, interval, force_ret
         if not force_retrain and os.path.exists(model_path):
             try:
                 saved = joblib.load(model_path)
-                if (isinstance(saved, dict) and saved.get("version") == MODEL_VERSION
+                if (
+                    isinstance(saved, dict)
+                    and saved.get("version") == MODEL_VERSION
                     and saved.get("features") == FEATURE_COLUMNS
-                    and isinstance(saved.get("model"), RandomForestClassifier)
-                    and set(int(c) for c in saved["model"].classes_) == set(APP_CLASS_LABELS)):
+                    and model_matches_contract(
+                        saved.get("model"),
+                        expected_features=FEATURE_COLUMNS,
+                        allowed_classes=APP_CLASS_LABELS,
+                        model_type=RandomForestClassifier,
+                        require_all_classes=True,
+                    )
+                ):
                     age_hours = (time.time() - os.path.getmtime(model_path)) / 3600
                     if age_hours <= 4:
                         model = saved["model"]

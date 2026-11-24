@@ -385,6 +385,7 @@ def _app_namespace(frame_factory):
     }
     for fname in (
         "flatten_yf_df",
+        "calculate_rsi",
         "_load_and_process_data_cached",
         "get_load_stop_reason",
         "load_and_process_data",
@@ -609,6 +610,7 @@ def _model_namespace():
     import tempfile
     import time
     from datetime import datetime
+    from model_artifacts import model_matches_contract
 
     st = _StStub()
     ns = {
@@ -619,6 +621,7 @@ def _model_namespace():
         "tempfile": tempfile,
         "time": time,
         "joblib": joblib,
+        "model_matches_contract": model_matches_contract,
         "RandomForestClassifier": RandomForestClassifier,
         "DummyClassifier": DummyClassifier,
         "accuracy_score": accuracy_score,
@@ -664,13 +667,16 @@ def _model_df(mode, n=500, seed=3):
 def _tiny_model(n_estimators=10, single_class=False, seed=3):
     rng = np.random.default_rng(seed)
     columns = _app_literal("FEATURE_COLUMNS")
-    X = rng.normal(0, 1, (60, len(columns)))
+    X = pd.DataFrame(
+        rng.normal(0, 1, (60, len(columns))), columns=columns
+    )
     if single_class:
         y = np.ones(60, dtype=int)
     else:
         y = rng.choice([-1, 0, 1], size=60)
     model = RandomForestClassifier(n_estimators=n_estimators, random_state=0)
-    model.fit(X, y)
+    # Persist the same feature-name metadata that production DataFrame inference uses.
+    model.fit(pd.DataFrame(X, columns=columns), y)
     return model
 
 
