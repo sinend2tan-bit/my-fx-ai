@@ -32,8 +32,8 @@ def test_live_score_gate_accepts_only_thresholded_dominant_direction():
             [0.10, 0.34, 0.56],  # BUY clears 55 and beats SELL
             [0.56, 0.34, 0.10],  # SELL clears 55 and beats BUY
             [0.20, 0.25, 0.55],  # exact threshold is accepted
-            [0.55, 0.10, 0.55],  # directional tie abstains
-            [0.20, 0.31, 0.54],  # below threshold abstains
+            [0.45, 0.10, 0.45],  # directional tie abstains
+            [0.20, 0.26, 0.54],  # below threshold abstains
         ],
         dtype=float,
     )
