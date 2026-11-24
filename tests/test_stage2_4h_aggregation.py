@@ -202,6 +202,7 @@ def _app_namespace(frame_factory):
     }
     for fname in (
         "flatten_yf_df",
+        "calculate_rsi",
         "_load_and_process_data_cached",
         "get_load_stop_reason",
         "load_and_process_data",

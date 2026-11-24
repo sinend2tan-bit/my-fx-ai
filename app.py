@@ -94,7 +94,7 @@ DEFAULT_SPREAD_PIPS = {
     "EURJPY=X": 0.5, "AUDJPY=X": 0.6,
 }
 LOOKAHEAD_BARS = 8
-MODEL_VERSION = 8
+MODEL_VERSION = 9
 
 st.markdown("""
 <style>
@@ -1129,6 +1129,20 @@ def get_load_stop_reason(ticker, interval):
     return _LOAD_STOP_REASONS.get((ticker, interval))
 
 
+def calculate_rsi(series, period=14):
+    """App RSI: preserve warm-up fallback while handling zero-gain/loss edges."""
+    delta = series.diff()
+    gain = delta.clip(lower=0).rolling(period, min_periods=7).mean()
+    loss = (-delta.clip(upper=0)).rolling(period, min_periods=7).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - 100 / (1 + rs)
+    no_loss = loss.eq(0) & gain.gt(0)
+    no_gain = gain.eq(0) & loss.gt(0)
+    flat = gain.eq(0) & loss.eq(0)
+    rsi = rsi.mask(no_loss, 100.0).mask(no_gain, 0.0).mask(flat, 50.0)
+    return rsi.replace([np.inf, -np.inf], np.nan).fillna(50.0)
+
+
 # Price data is cached for 60 seconds. This is data freshness, not a UI auto-refresh timer.
 @st.cache_data(ttl=60, show_spinner=False)
 def _load_and_process_data_cached(ticker, period, interval, label=""):
@@ -1322,11 +1336,7 @@ def _load_and_process_data_cached(ticker, period, interval, label=""):
         prev = close.shift(1)
         tr = pd.concat([(high-low), (high-prev).abs(), (low-prev).abs()], axis=1).max(axis=1)
         df["ATR"] = tr.rolling(14, min_periods=7).mean()
-        delta = close.diff()
-        gain = delta.clip(lower=0).rolling(14, min_periods=7).mean()
-        loss = (-delta.clip(upper=0)).rolling(14, min_periods=7).mean()
-        rs = gain / loss.replace(0, np.nan)
-        df["RSI"] = (100 - 100/(1+rs)).fillna(50)
+        df["RSI"] = calculate_rsi(close, period=14)
         df["RSI_Diff"] = df["RSI"].diff()
         ema12, ema26 = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
         df["MACD"] = ema12 - ema26
