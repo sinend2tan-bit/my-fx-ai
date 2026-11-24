@@ -27,11 +27,11 @@
   App 4h は段階1では従来どおりだったが、段階2（SYN-FX-017）で UTC
   統一・完全性判定に変更された（tests/test_stage2_4h_aggregation.py）。
   どちらの段階でも 4h に data_quality は付かない。
-- モデル版管理: App MODEL_VERSION 9（RSI edge-case correction）/
-  Scanner MODEL_VERSION 22。
-  旧版（App version 8）の保存済みモデルは再利用されない。品質ゲートを
+- モデル版管理: App MODEL_VERSION 10（段階1で 6→7、段階2で 7→8、RSI修正で 8→9、1h区間分離で 9→10）/
+  Scanner MODEL_VERSION 23（RSI修正で 21→22、1h区間分離で 22→23）。
+  旧版（App version 9）の保存済みモデルは再利用されない。品質ゲートを
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
-  評価モデルが使われ、旧ファイルは上書きされない。新版（9）の保存済み
+  評価モデルが使われ、旧ファイルは上書きされない。新版（10）の保存済み
   モデルは従来どおり再利用される。
 - C-1 修正（案A、ChatGPT 決定）: 鮮度除外を品質検証の前に置く。
   DatetimeIndex 確認 → タイムゾーン確認（tz-aware は UTC 正規化、
@@ -301,7 +301,7 @@ def test_scanner_4h_not_stopped_by_stage1_gate(monkeypatch):
 
 
 def test_scanner_version_and_status_record():
-    assert scanner.MODEL_VERSION == 22
+    assert scanner.MODEL_VERSION == 23
     source = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
     assert "v19_" not in source
     dq = {
@@ -696,9 +696,9 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
     return tmp_path / filename
 
 
-def test_app_model_version_is_9():
-    # 段階1で 6→7、段階2（SYN-FX-017）で 7→8。
-    assert _app_literal("MODEL_VERSION") == 9
+def test_app_model_version_is_10():
+    # 段階1で 6→7、段階2で 7→8、今回の1h gap契約で 8→9。
+    assert _app_literal("MODEL_VERSION") == 10
 
 
 def test_app_clears_stale_model_save_status_at_start():
@@ -713,18 +713,19 @@ def test_app_clears_stale_model_save_status_at_start():
     assert "model_save_status" not in st.session_state
 
 
-def test_app_old_version_model_not_reused(tmp_path, monkeypatch):
+@pytest.mark.parametrize("old_version", [8, 9])
+def test_app_old_version_model_not_reused(tmp_path, monkeypatch, old_version):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 8, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, old_version, _tiny_model())
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
     assert result is not None
-    # 学習可能なデータでは品質ゲートを通過し、新版（8）で保存し直される。
+    # 学習可能なデータでは品質ゲートを通過し、新版（10）で保存し直される。
     # 旧版ファイルが再利用されていれば、この保存は起きない。
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 9
+    assert saved["version"] == 10
     assert saved["model"].n_estimators == 260  # 新規学習した候補モデル
 
 
@@ -733,7 +734,7 @@ def test_app_gate_failure_no_fallback_to_old_model(tmp_path, monkeypatch):
     # 旧版モデルは単一クラスだけを返す物にする。再利用（フォールバック）
     # されれば特徴量重要度が全て 0 になるため、混入を検出できる。
     path = _save_model_file(
-        ns, tmp_path, monkeypatch, 8, _tiny_model(single_class=True)
+        ns, tmp_path, monkeypatch, 9, _tiny_model(single_class=True)
     )
     before = path.read_bytes()
     result = ns["analyze_signal_with_backtest"](
@@ -750,20 +751,20 @@ def test_app_gate_failure_no_fallback_to_old_model(tmp_path, monkeypatch):
 
 def test_app_current_version_model_reused(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 10, _tiny_model())
     before = path.read_bytes()
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
     assert result is not None
-    # 新版（8）で鮮度内の保存済みモデルは従来どおり再利用され、
+    # 新版（10）で鮮度内の保存済みモデルは従来どおり再利用され、
     # ファイルは書き換わらない（再利用の仕組み自体は壊していない）。
     assert path.read_bytes() == before
 
 
 def test_app_forced_retrain_replaces_old_model_only_after_validation(tmp_path, monkeypatch):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 10, _tiny_model())
     before = path.read_bytes()
 
     result = ns["analyze_signal_with_backtest"](
@@ -773,7 +774,7 @@ def test_app_forced_retrain_replaces_old_model_only_after_validation(tmp_path, m
     assert result is not None
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 9
+    assert saved["version"] == 10
     assert saved["model"].n_estimators == 260
     assert path.read_bytes() != before
     assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
@@ -781,7 +782,7 @@ def test_app_forced_retrain_replaces_old_model_only_after_validation(tmp_path, m
 
 def test_app_forced_retrain_gate_failure_preserves_old_model(tmp_path, monkeypatch):
     ns, st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 10, _tiny_model())
     before = path.read_bytes()
 
     result = ns["analyze_signal_with_backtest"](
@@ -796,7 +797,7 @@ def test_app_forced_retrain_gate_failure_preserves_old_model(tmp_path, monkeypat
 
 def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 10, _tiny_model())
     before = path.read_bytes()
 
     def fail_dump(*args, **kwargs):
@@ -804,7 +805,7 @@ def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch)
 
     monkeypatch.setattr(ns["joblib"], "dump", fail_dump)
     payload = {
-        "version": 9,
+        "version": 10,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -815,7 +816,7 @@ def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch)
 
 def test_app_atomic_save_reload_failure_preserves_old_model(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 10, _tiny_model())
     before = path.read_bytes()
 
     def fail_load(*args, **kwargs):
@@ -823,7 +824,7 @@ def test_app_atomic_save_reload_failure_preserves_old_model(tmp_path, monkeypatc
 
     monkeypatch.setattr(ns["joblib"], "load", fail_load)
     payload = {
-        "version": 9,
+        "version": 10,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -837,18 +838,18 @@ def test_app_atomic_save_rejects_invalid_candidate_and_preserves_old_model(
     tmp_path, monkeypatch, invalid_kind
 ):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 10, _tiny_model())
     before = path.read_bytes()
     candidate = _tiny_model(single_class=(invalid_kind == "single_class"))
     payload = {
-        "version": 8 if invalid_kind == "version" else 9,
+        "version": 9 if invalid_kind == "version" else 10,
         "features": ["wrong"] if invalid_kind == "features" else _app_literal("FEATURE_COLUMNS"),
         "model": object() if invalid_kind == "model_type" else candidate,
     }
     monkeypatch.setattr(ns["joblib"], "load", lambda _path: payload)
 
     assert ns["_save_trained_model"](str(path), {
-        "version": 9,
+        "version": 10,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": candidate,
     }) is False
@@ -858,7 +859,7 @@ def test_app_atomic_save_rejects_invalid_candidate_and_preserves_old_model(
 
 def test_app_atomic_save_replace_failure_preserves_old_model(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 9, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 10, _tiny_model())
     before = path.read_bytes()
 
     def fail_replace(*args, **kwargs):
@@ -866,7 +867,7 @@ def test_app_atomic_save_replace_failure_preserves_old_model(tmp_path, monkeypat
 
     monkeypatch.setattr(ns["os"], "replace", fail_replace)
     payload = {
-        "version": 9,
+        "version": 10,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -886,7 +887,7 @@ def test_app_atomic_save_without_old_model_leaves_no_partial_file_on_failure(
 
     monkeypatch.setattr(ns["os"], "replace", fail_replace)
     payload = {
-        "version": 9,
+        "version": 10,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
