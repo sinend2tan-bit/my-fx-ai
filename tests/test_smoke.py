@@ -1012,6 +1012,7 @@ def _extract_app_backup_functions(tmp_path):
     import tempfile
     from datetime import datetime, timedelta, timezone
     from pathlib import Path
+    from model_artifacts import model_matches_contract
     from types import SimpleNamespace
 
     # テストの実行場所（chdir 後など）に依存しないよう、このファイルの位置から app.py を引く。
@@ -1032,6 +1033,7 @@ def _extract_app_backup_functions(tmp_path):
     namespace = {
         "json": json_module,
         "joblib": None,
+        "model_matches_contract": model_matches_contract,
         "st": SimpleNamespace(
             session_state={},
             error=lambda message: errors.append(str(message)),
@@ -1071,7 +1073,17 @@ def _valid_app_model_payload(ns):
         "ATR_Ratio", "Upper_Wick_Ratio", "Lower_Wick_Ratio", "Stoch_K", "CCI", "ROC",
     ]
     model = RandomForestClassifier(n_estimators=2, random_state=0)
-    model.fit([[0.0] * len(features), [1.0] * len(features)], [-1, 1])
+    model.fit(
+        pd.DataFrame(
+            [
+                [0.0] * len(features),
+                [0.5] * len(features),
+                [1.0] * len(features),
+            ],
+            columns=features,
+        ),
+        [-1, 0, 1],
+    )
     ns.update({
         "joblib": joblib,
         "MODEL_VERSION": 8,
