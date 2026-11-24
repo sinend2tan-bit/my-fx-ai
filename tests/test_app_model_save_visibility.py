@@ -14,6 +14,7 @@
 streamlit が無い環境ではモジュールごとスキップする。
 """
 
+import re
 import socket
 from pathlib import Path
 
@@ -32,6 +33,17 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 SAVE_FAILURE_MARKER = "保存できませんでした"
 SECRET_MARKER = "simulated-save-failure-marker"
+
+
+def _app_model_version():
+    """app.py の MODEL_VERSION リテラルを読む。版数上げのたびに直書き値を直さないため。"""
+    match = re.search(
+        r"^MODEL_VERSION\s*=\s*(\d+)\s*$",
+        APP_PATH.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert match, "MODEL_VERSION literal not found in app.py"
+    return int(match.group(1))
 
 
 def _wave_frame(n, tz, freq, start):
@@ -145,7 +157,7 @@ def test_save_success_writes_file_without_warning(rig):
         "baseline_balanced_accuracy",
         "feedback_applied",
     }
-    assert saved["version"] == 8
+    assert saved["version"] == _app_model_version()
     assert _save_failure_warnings(at) == []
 
 
