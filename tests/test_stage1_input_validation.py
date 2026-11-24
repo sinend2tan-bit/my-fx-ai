@@ -27,11 +27,11 @@
   App 4h は段階1では従来どおりだったが、段階2（SYN-FX-017）で UTC
   統一・完全性判定に変更された（tests/test_stage2_4h_aggregation.py）。
   どちらの段階でも 4h に data_quality は付かない。
-- モデル版管理: App MODEL_VERSION 10（段階1で 6→7、段階2で 7→8、RSI修正で 8→9、1h区間分離で 9→10）/
-  Scanner MODEL_VERSION 23（RSI修正で 21→22、1h区間分離で 22→23）。
-  旧版（App version 9）の保存済みモデルは再利用されない。品質ゲートを
+- モデル版管理: App MODEL_VERSION 11（段階1で 6→7、段階2で 7→8、RSI修正で 8→9、1h区間分離で 9→10、EMA200 warm-up修正で 10→11）/
+  Scanner MODEL_VERSION 24（RSI修正で 21→22、1h区間分離で 22→23、EMA200 warm-up修正で 23→24）。
+  旧版（App version 11未満）の保存済みモデルは再利用されない。品質ゲートを
   通過しなかった場合は旧版モデルへフォールバックせず、その実行の
-  評価モデルが使われ、旧ファイルは上書きされない。新版（10）の保存済み
+  評価モデルが使われ、旧ファイルは上書きされない。新版（11）の保存済み
   モデルは従来どおり再利用される。
 - C-1 修正（案A、ChatGPT 決定）: 鮮度除外を品質検証の前に置く。
   DatetimeIndex 確認 → タイムゾーン確認（tz-aware は UTC 正規化、
@@ -70,6 +70,7 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score
 from sklearn.utils.class_weight import compute_sample_weight
 
 import scanner
+from aifx_indicator_utils import ema_with_warmup
 from aifx_time_validation import has_contiguous_hourly_window
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -92,7 +93,7 @@ def _no_network(monkeypatch):
 # 共通フィクスチャ
 # ---------------------------------------------------------------------------
 
-def make_frame(n=500, tz="UTC", seed=7, start="2026-01-05 00:00", freq="1h"):
+def make_frame(n=800, tz="UTC", seed=7, start="2026-01-05 00:00", freq="1h"):
     """検証を通過する通常の合成 OHLCV（毎回同じ種で同じ値）。"""
     rng = np.random.default_rng(seed)
     idx = pd.date_range(start=start, periods=n, freq=freq, tz=tz)
@@ -130,8 +131,9 @@ def assert_checksums(dq):
     assert dq["trainable_rows"] == dq["feature_rows"] - label_drops
 
 
-def stub_scanner_download(monkeypatch, frame):
+def stub_scanner_download(monkeypatch, frame, enforce_minimum=False):
     monkeypatch.setattr(yf, "download", lambda *a, **k: frame.copy())
+    # bars() owns its real minimum-history precheck; tests supply sufficient history.
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +146,8 @@ def test_scanner_clean_frame_counters(monkeypatch):
     assert out is not None
     dq = out.attrs.get("data_quality")
     assert dq is not None
-    # 末尾の未確定足1本を除いた 499 件が検証パイプラインの入力。
-    assert dq["input_rows"] == 499
+    # 末尾の未確定足1本を除いた 799 件が検証パイプラインの入力。
+    assert dq["input_rows"] == 799
     assert dq["dropped_invalid_timestamp"] == 0
     assert dq["dropped_missing_or_nonfinite"] == 0
     assert dq["dropped_duplicate_timestamp"] == 0
@@ -171,10 +173,12 @@ def test_scanner_invalid_ohlc_variants(monkeypatch):
     frame.iloc[250, cl] = 0.0
     # 等号ケース（有効でなければならない）: High == max(Open, Close) かつ
     # Low == min(Open, Close)（範囲は非ゼロにして特徴量計算は通過させる）。
-    doji_ts = frame.index[300]
-    close_v = float(frame.iloc[300]["Close"])
+    doji_ts = frame.index[500]
+    close_v = float(frame.iloc[500]["Close"])
     open_v = close_v + 0.10
-    frame.iloc[300, :] = [open_v, open_v, close_v, close_v, 1_000_000.0]
+    frame.iloc[500, :] = [open_v, open_v, close_v, close_v, 1_000_000.0]
+    # The last invalid OHLC row is at 250; position 500 is beyond the
+    # 199-row EMA200 re-warm-up of the new contiguous segment.
     stub_scanner_download(monkeypatch, frame)
     out = scanner.bars("USDJPY=X", interval="1h", period="180d")
     assert out is not None
@@ -215,7 +219,7 @@ def test_scanner_duplicate_keep_last(monkeypatch):
     out = scanner.bars("USDJPY=X", interval="1h", period="180d")
     assert out is not None
     dq = out.attrs["data_quality"]
-    assert dq["input_rows"] == 500  # 501 本ダウンロード − 未確定足 1 本
+    assert dq["input_rows"] == 800  # 801 本ダウンロード − 未確定足 1 本
     assert dq["dropped_duplicate_timestamp"] == 1
     assert_checksums(dq)
     # keep="last": 後ろの複製行の値が残る。
@@ -301,7 +305,7 @@ def test_scanner_4h_not_stopped_by_stage1_gate(monkeypatch):
 
 
 def test_scanner_version_and_status_record():
-    assert scanner.MODEL_VERSION == 23
+    assert scanner.MODEL_VERSION == 24
     source = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
     assert "v19_" not in source
     dq = {
@@ -373,9 +377,11 @@ def _app_namespace(frame_factory):
     ns = {
         "pd": pd,
         "np": np,
+        "ema_with_warmup": ema_with_warmup,
         "yf": _YF,
         "st": st,
         "FEATURE_COLUMNS": _app_literal("FEATURE_COLUMNS"),
+        "EMA200_MIN_PERIODS": _app_literal("EMA200_MIN_PERIODS"),
         "DEFAULT_SPREAD_PIPS": _app_literal("DEFAULT_SPREAD_PIPS"),
         "LOOKAHEAD_BARS": _app_literal("LOOKAHEAD_BARS"),
         "has_contiguous_hourly_window": has_contiguous_hourly_window,
@@ -407,7 +413,7 @@ def test_app_clean_frame_counters():
     assert st.warnings == []
     dq = out.attrs.get("data_quality")
     assert dq is not None
-    assert dq["input_rows"] == 499
+    assert dq["input_rows"] == 799
     assert dq["dropped_invalid_timestamp"] == 0
     assert dq["dropped_missing_or_nonfinite"] == 0
     assert dq["dropped_duplicate_timestamp"] == 0
@@ -429,12 +435,12 @@ def test_app_dirty_frame_counters():
     frame.iloc[200, cl] = np.nan  # 欠損
     frame.iloc[250, hi] = np.inf  # 非有限値
     # 重複 timestamp（後ろが有効）: keep="last" で残る。
-    ts = frame.index[350]
-    dup = frame.iloc[[350]].copy()
+    ts = frame.index[500]
+    dup = frame.iloc[[500]].copy()
     new_close = float(dup.iloc[0]["Close"] + 0.03)
     dup.iloc[0, cl] = new_close
     dup.iloc[0, hi] = max(float(dup.iloc[0]["High"]), new_close)
-    combined = pd.concat([frame.iloc[:351], dup, frame.iloc[351:]])
+    combined = pd.concat([frame.iloc[:501], dup, frame.iloc[501:]])
     # NaT 行（timestamp 不正）。
     nat_row = frame.iloc[[10]].copy()
     nat_row.index = pd.DatetimeIndex([pd.NaT])
@@ -696,9 +702,9 @@ def _save_model_file(ns, tmp_path, monkeypatch, version, model):
     return tmp_path / filename
 
 
-def test_app_model_version_is_10():
-    # 段階1で 6→7、段階2で 7→8、今回の1h gap契約で 8→9。
-    assert _app_literal("MODEL_VERSION") == 10
+def test_app_model_version_is_11():
+    # 段階1で 6→7、段階2で 7→8、RSI・1h区間分離・EMA200 warm-upの変更を反映。
+    assert _app_literal("MODEL_VERSION") == 11
 
 
 def test_app_clears_stale_model_save_status_at_start():
@@ -713,7 +719,7 @@ def test_app_clears_stale_model_save_status_at_start():
     assert "model_save_status" not in st.session_state
 
 
-@pytest.mark.parametrize("old_version", [8, 9])
+@pytest.mark.parametrize("old_version", [9, 10])
 def test_app_old_version_model_not_reused(tmp_path, monkeypatch, old_version):
     ns, st = _model_namespace()
     path = _save_model_file(ns, tmp_path, monkeypatch, old_version, _tiny_model())
@@ -725,7 +731,7 @@ def test_app_old_version_model_not_reused(tmp_path, monkeypatch, old_version):
     # 旧版ファイルが再利用されていれば、この保存は起きない。
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 10
+    assert saved["version"] == 11
     assert saved["model"].n_estimators == 260  # 新規学習した候補モデル
 
 
@@ -734,7 +740,7 @@ def test_app_gate_failure_no_fallback_to_old_model(tmp_path, monkeypatch):
     # 旧版モデルは単一クラスだけを返す物にする。再利用（フォールバック）
     # されれば特徴量重要度が全て 0 になるため、混入を検出できる。
     path = _save_model_file(
-        ns, tmp_path, monkeypatch, 9, _tiny_model(single_class=True)
+        ns, tmp_path, monkeypatch, 10, _tiny_model(single_class=True)
     )
     before = path.read_bytes()
     result = ns["analyze_signal_with_backtest"](
@@ -751,13 +757,13 @@ def test_app_gate_failure_no_fallback_to_old_model(tmp_path, monkeypatch):
 
 def test_app_current_version_model_reused(tmp_path, monkeypatch):
     ns, _st = _model_namespace()
-    path = _save_model_file(ns, tmp_path, monkeypatch, 10, _tiny_model())
+    path = _save_model_file(ns, tmp_path, monkeypatch, 11, _tiny_model())
     before = path.read_bytes()
     result = ns["analyze_signal_with_backtest"](
         _model_df("learnable"), None, "USDJPY=X", "1h"
     )
     assert result is not None
-    # 新版（10）で鮮度内の保存済みモデルは従来どおり再利用され、
+    # 新版（11）で鮮度内の保存済みモデルは従来どおり再利用され、
     # ファイルは書き換わらない（再利用の仕組み自体は壊していない）。
     assert path.read_bytes() == before
 
@@ -774,7 +780,7 @@ def test_app_forced_retrain_replaces_old_model_only_after_validation(tmp_path, m
     assert result is not None
     assert st.session_state["model_eval_metrics"]["quality_ok"] is True
     saved = joblib.load(path)
-    assert saved["version"] == 10
+    assert saved["version"] == 11
     assert saved["model"].n_estimators == 260
     assert path.read_bytes() != before
     assert list(tmp_path.glob(".aifx-model-*.tmp")) == []
@@ -805,7 +811,7 @@ def test_app_atomic_save_dump_failure_preserves_old_model(tmp_path, monkeypatch)
 
     monkeypatch.setattr(ns["joblib"], "dump", fail_dump)
     payload = {
-        "version": 10,
+        "version": 11,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -824,7 +830,7 @@ def test_app_atomic_save_reload_failure_preserves_old_model(tmp_path, monkeypatc
 
     monkeypatch.setattr(ns["joblib"], "load", fail_load)
     payload = {
-        "version": 10,
+        "version": 11,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -842,14 +848,14 @@ def test_app_atomic_save_rejects_invalid_candidate_and_preserves_old_model(
     before = path.read_bytes()
     candidate = _tiny_model(single_class=(invalid_kind == "single_class"))
     payload = {
-        "version": 9 if invalid_kind == "version" else 10,
+        "version": 10 if invalid_kind == "version" else 11,
         "features": ["wrong"] if invalid_kind == "features" else _app_literal("FEATURE_COLUMNS"),
         "model": object() if invalid_kind == "model_type" else candidate,
     }
     monkeypatch.setattr(ns["joblib"], "load", lambda _path: payload)
 
     assert ns["_save_trained_model"](str(path), {
-        "version": 10,
+        "version": 11,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": candidate,
     }) is False
@@ -867,7 +873,7 @@ def test_app_atomic_save_replace_failure_preserves_old_model(tmp_path, monkeypat
 
     monkeypatch.setattr(ns["os"], "replace", fail_replace)
     payload = {
-        "version": 10,
+        "version": 11,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -887,7 +893,7 @@ def test_app_atomic_save_without_old_model_leaves_no_partial_file_on_failure(
 
     monkeypatch.setattr(ns["os"], "replace", fail_replace)
     payload = {
-        "version": 10,
+        "version": 11,
         "features": _app_literal("FEATURE_COLUMNS"),
         "model": _tiny_model(),
     }
@@ -991,61 +997,56 @@ def _assert_counter_profile(dq, expected):
     assert_checksums(dq)
 
 
-# Scanner: 特徴量除外 19 件（指標の立ち上がり）を前提とした実測値。
+# Scanner: EMA200 の全ウォームアップ199行を前提とした実測値。
 # 案Aでは最新 timestamp 群が鮮度除外されるため、最新足の品質不正は
 # 品質カウンタに現れず、直前確定足も残る（feature_rows は正常系と同数）。
 _SCANNER_LAST_ROW_EXPECTED = {
-    "normal": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+    "normal": {"input_rows": 799, "dropped_invalid_timestamp": 0,
                "dropped_missing_or_nonfinite": 0, "dropped_duplicate_timestamp": 0,
-               "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
-               "feature_rows": 480, "trainable_rows": 472},
-    "nan": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+               "dropped_invalid_ohlc": 0, "dropped_feature_nan": 199,
+               "feature_rows": 600, "trainable_rows": 592},
+    "nan": {"input_rows": 799, "dropped_invalid_timestamp": 0,
             "dropped_missing_or_nonfinite": 0, "dropped_duplicate_timestamp": 0,
-            "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
-            "feature_rows": 480, "trainable_rows": 472},
-    "inf": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+            "dropped_invalid_ohlc": 0, "dropped_feature_nan": 199,
+            "feature_rows": 600, "trainable_rows": 592},
+    "inf": {"input_rows": 799, "dropped_invalid_timestamp": 0,
             "dropped_missing_or_nonfinite": 0, "dropped_duplicate_timestamp": 0,
-            "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
-            "feature_rows": 480, "trainable_rows": 472},
-    "neginf": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+            "dropped_invalid_ohlc": 0, "dropped_feature_nan": 199,
+            "feature_rows": 600, "trainable_rows": 592},
+    "neginf": {"input_rows": 799, "dropped_invalid_timestamp": 0,
                "dropped_missing_or_nonfinite": 0,
                "dropped_duplicate_timestamp": 0, "dropped_invalid_ohlc": 0,
-               "dropped_feature_nan": 19, "feature_rows": 480,
-               "trainable_rows": 472},
-    "ohlc_invalid": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+               "dropped_feature_nan": 199, "feature_rows": 600,
+               "trainable_rows": 592},
+    "ohlc_invalid": {"input_rows": 799, "dropped_invalid_timestamp": 0,
                      "dropped_missing_or_nonfinite": 0,
                      "dropped_duplicate_timestamp": 0, "dropped_invalid_ohlc": 0,
-                     "dropped_feature_nan": 19, "feature_rows": 480,
-                     "trainable_rows": 472},
-    "duplicate": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+                     "dropped_feature_nan": 199, "feature_rows": 600,
+                     "trainable_rows": 592},
+    "duplicate": {"input_rows": 799, "dropped_invalid_timestamp": 0,
                   "dropped_missing_or_nonfinite": 0,
                   "dropped_duplicate_timestamp": 0, "dropped_invalid_ohlc": 0,
-                  "dropped_feature_nan": 19, "feature_rows": 480,
-                  "trainable_rows": 472},
-    "latest_multi": {"input_rows": 499, "dropped_invalid_timestamp": 0,
+                  "dropped_feature_nan": 199, "feature_rows": 600,
+                  "trainable_rows": 592},
+    "latest_multi": {"input_rows": 799, "dropped_invalid_timestamp": 0,
                      "dropped_missing_or_nonfinite": 0,
                      "dropped_duplicate_timestamp": 0,
-                     "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
-                     "feature_rows": 480, "trainable_rows": 472},
-    "dup_early": {"input_rows": 500, "dropped_invalid_timestamp": 0,
+                     "dropped_invalid_ohlc": 0, "dropped_feature_nan": 199,
+                     "feature_rows": 600, "trainable_rows": 592},
+    "dup_early": {"input_rows": 800, "dropped_invalid_timestamp": 0,
                   "dropped_missing_or_nonfinite": 0,
                   "dropped_duplicate_timestamp": 1, "dropped_invalid_ohlc": 0,
-                  "dropped_feature_nan": 19, "feature_rows": 480,
-                  "trainable_rows": 472},
-    "nat": {"input_rows": 500, "dropped_invalid_timestamp": 1,
+                  "dropped_feature_nan": 199, "feature_rows": 600,
+                  "trainable_rows": 592},
+    "nat": {"input_rows": 800, "dropped_invalid_timestamp": 1,
             "dropped_missing_or_nonfinite": 0, "dropped_duplicate_timestamp": 0,
-            "dropped_invalid_ohlc": 0, "dropped_feature_nan": 19,
-            "feature_rows": 480, "trainable_rows": 472},
+            "dropped_invalid_ohlc": 0, "dropped_feature_nan": 199,
+            "feature_rows": 600, "trainable_rows": 592},
 }
 
-# App: 特徴量除外 15 件（17特徴量の立ち上がり）を前提とした実測値。
+# App: EMA200 が最も遅い特徴量のため、Scanner と同じ199行が除外される。
 _APP_LAST_ROW_EXPECTED = {
-    case: {
-        **profile,
-        "dropped_feature_nan": 15,
-        "feature_rows": profile["feature_rows"] + 4,
-        "trainable_rows": profile["trainable_rows"] + 4,
-    }
+    case: dict(profile)
     for case, profile in _SCANNER_LAST_ROW_EXPECTED.items()
 }
 
@@ -1169,34 +1170,35 @@ def test_app_invalid_latest_bar_keeps_previous_bar():
         assert frame.index[-1] not in out.index
 
 
-def test_scanner_min_bars_boundary_unchanged(monkeypatch):
-    # 行数境界は案A導入前と同一: ダウンロード MIN_FEATURE_BARS+1 本
-    # （= 221 本）で処理され、MIN_FEATURE_BARS 本（= 220 本）では停止
-    # する。鮮度除外を前倒しした分、事前チェックの +1 本は不要になる。
-    frame = make_frame(n=scanner.MIN_FEATURE_BARS)
-    stub_scanner_download(monkeypatch, frame)
+def test_scanner_min_train_rows_boundary_after_ema200(monkeypatch):
+    # EMA200の199行ウォームアップ + 未来8本 + 学習可能180行 + 最新足1本。
+    # bars()は診断用に180行を確保する。Walk-Forwardの3-fold最低752行は
+    # walk_forward_validation側で別途fail-closed判定する。
+    frame = make_frame(n=387)
+    stub_scanner_download(monkeypatch, frame, enforce_minimum=True)
     assert scanner.bars("USDJPY=X", interval="1h", period="180d") is None
-    frame = make_frame(n=scanner.MIN_FEATURE_BARS + 1)
-    stub_scanner_download(monkeypatch, frame)
+    frame = make_frame(n=388)
+    stub_scanner_download(monkeypatch, frame, enforce_minimum=True)
     out = scanner.bars("USDJPY=X", interval="1h", period="180d")
     assert out is not None
     dq = out.attrs["data_quality"]
-    assert dq["input_rows"] == scanner.MIN_FEATURE_BARS
-    assert dq["trainable_rows"] == len(out)
+    assert dq["input_rows"] == 387
+    assert dq["trainable_rows"] == scanner.MIN_TRAIN_ROWS == len(out)
     assert_checksums(dq)
 
 
-def test_app_min_bars_boundary_unchanged():
-    # App の境界も従来どおり: ダウンロード 80 本では停止し、81 本で
-    # 処理される（鮮度除外後の 80 本が下限判定にかかる）。
-    frame = make_frame(n=80)
+def test_app_1h_ema200_feature_boundary():
+    # 最新未確定足を除いた200本でEMA200が初めて有効になる。
+    frame = make_frame(n=200)
     ns, _st = _app_namespace(lambda f=frame: f.copy())
     assert ns["load_and_process_data"]("USDJPY=X", "60d", "1h") is None
-    frame = make_frame(n=81)
+    frame = make_frame(n=201)
     ns, _st = _app_namespace(lambda f=frame: f.copy())
     out = ns["load_and_process_data"]("USDJPY=X", "60d", "1h")
     assert out is not None
-    assert out.attrs["data_quality"]["input_rows"] == 80
+    assert out.attrs["data_quality"]["input_rows"] == 200
+    assert out.attrs["data_quality"]["dropped_feature_nan"] == 199
+    assert len(out) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1305,14 +1307,14 @@ def test_app_and_scanner_1h_dst_inputs_normalize_to_same_utc_instants(
     scan_index = scan.attrs["latest_features"].index
     assert scan_index.tz is not None
     assert str(scan_index.tz) == "UTC"
-    assert scan_index.equals(utc_frame.index[19:-1])
+    assert scan_index.equals(utc_frame.index[199:-1])
 
     app_ns, _st = _app_namespace(lambda: london_frame.copy())
     app = app_ns["load_and_process_data"]("USDJPY=X", "60d", "1h")
     assert app is not None
     assert app.index.tz is not None
     assert str(app.index.tz) == "UTC"
-    assert app.index.equals(utc_frame.index[15:-1])
+    assert app.index.equals(utc_frame.index[199:-1])
 
 
 def test_app_daily_keeps_exchange_calendar_timezone_without_utc_relabel():
